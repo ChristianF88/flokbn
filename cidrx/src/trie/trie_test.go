@@ -1235,6 +1235,135 @@ func TestCountInRangeIPNet(t *testing.T) {
 	}
 }
 
+// TestCountInRangeSlashZero verifies the /0 guard (CIDRX-003): a /0 CIDR spans
+// the whole IPv4 space and must return the full trie count (== CountAll), not 0.
+// It also checks the non-/0 boundary cases remain unchanged by the guard.
+func TestCountInRangeSlashZero(t *testing.T) {
+	t.Run("Slash zero returns full count for two IPs", func(t *testing.T) {
+		trie := NewTrie()
+		for _, ipStr := range []string{"192.168.1.1", "10.0.0.1"} {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				t.Fatalf("Failed to parse IP: %s", ipStr)
+			}
+			trie.Insert(ip)
+		}
+
+		got, err := trie.CountInRange("0.0.0.0/0")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if got != 2 {
+			t.Errorf("CountInRange(0.0.0.0/0) = %d, want 2", got)
+		}
+		if got != trie.CountAll() {
+			t.Errorf("CountInRange(0.0.0.0/0) = %d, want CountAll() = %d", got, trie.CountAll())
+		}
+	})
+
+	t.Run("Slash zero across multiple slash 8s equals total inserted", func(t *testing.T) {
+		trie := NewTrie()
+		insertIPs := []string{
+			"1.2.3.4",
+			"10.0.0.1",
+			"10.0.0.2",
+			"172.16.5.9",
+			"192.168.1.1",
+			"255.255.255.255",
+		}
+		for _, ipStr := range insertIPs {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				t.Fatalf("Failed to parse IP: %s", ipStr)
+			}
+			trie.Insert(ip)
+		}
+
+		got, err := trie.CountInRange("0.0.0.0/0")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if want := uint32(len(insertIPs)); got != want {
+			t.Errorf("CountInRange(0.0.0.0/0) = %d, want %d", got, want)
+		}
+		if got != trie.CountAll() {
+			t.Errorf("CountInRange(0.0.0.0/0) = %d, want CountAll() = %d", got, trie.CountAll())
+		}
+	})
+
+	t.Run("Slash zero on empty trie returns 0", func(t *testing.T) {
+		trie := NewTrie()
+		got, err := trie.CountInRange("0.0.0.0/0")
+		if err != nil {
+			t.Fatalf("Unexpected error: %v", err)
+		}
+		if got != 0 {
+			t.Errorf("CountInRange(0.0.0.0/0) = %d, want 0", got)
+		}
+	})
+
+	// Boundary regressions that must be UNCHANGED by the /0 guard.
+	t.Run("Boundary cases unchanged by guard", func(t *testing.T) {
+		boundaryTests := []struct {
+			name      string
+			insertIPs []string
+			cidr      string
+			expected  uint32
+		}{
+			{
+				name:      "/32 exact single IP",
+				insertIPs: []string{"203.0.113.42", "203.0.113.43"},
+				cidr:      "203.0.113.42/32",
+				expected:  1,
+			},
+			{
+				name:      "/31 covering two IPs",
+				insertIPs: []string{"192.168.1.0", "192.168.1.1", "192.168.1.2"},
+				cidr:      "192.168.1.0/31",
+				expected:  2,
+			},
+			{
+				name:      "/24 covering a known subset",
+				insertIPs: []string{"192.168.1.1", "192.168.1.250", "192.168.2.1"},
+				cidr:      "192.168.1.0/24",
+				expected:  2,
+			},
+			{
+				name:      "/32 top of address space",
+				insertIPs: []string{"255.255.255.255", "255.255.255.254"},
+				cidr:      "255.255.255.255/32",
+				expected:  1,
+			},
+			{
+				name:      "/31 top of address space",
+				insertIPs: []string{"255.255.255.255", "255.255.255.254", "255.255.255.253"},
+				cidr:      "255.255.255.254/31",
+				expected:  2,
+			},
+		}
+
+		for _, bt := range boundaryTests {
+			t.Run(bt.name, func(t *testing.T) {
+				trie := NewTrie()
+				for _, ipStr := range bt.insertIPs {
+					ip := net.ParseIP(ipStr)
+					if ip == nil {
+						t.Fatalf("Failed to parse IP: %s", ipStr)
+					}
+					trie.Insert(ip)
+				}
+				got, err := trie.CountInRange(bt.cidr)
+				if err != nil {
+					t.Fatalf("Unexpected error for CIDR %q: %v", bt.cidr, err)
+				}
+				if got != bt.expected {
+					t.Errorf("CountInRange(%q) = %d, want %d", bt.cidr, got, bt.expected)
+				}
+			})
+		}
+	})
+}
+
 // BenchmarkCountInRangeComparison compares string vs IPNet performance
 func BenchmarkCountInRangeComparison(b *testing.B) {
 	// Setup trie with test data

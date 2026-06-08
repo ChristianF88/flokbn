@@ -247,6 +247,41 @@ func BenchmarkCollectCIDRsStringVsNumeric(b *testing.B) {
 }
 
 // ============================================================================
+// COUNT-IN-RANGE BENCHMARKS (CIDRX-003 /0 guard)
+// ============================================================================
+
+// BenchmarkCountInRange confirms the /0 guard adds no measurable cost to the
+// non-/0 path by comparing the /0 fast path against a representative /24 query
+// on a pre-built trie of realistic size.
+func BenchmarkCountInRange(b *testing.B) {
+	trie := NewTrie()
+	ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", 100000)
+	if err != nil {
+		b.Fatalf("Failed to generate IPs: %v", err)
+	}
+	for _, ip := range ips {
+		trie.Insert(ip)
+	}
+
+	_, zeroNet, _ := net.ParseCIDR("0.0.0.0/0")
+	_, slash24Net, _ := net.ParseCIDR("10.0.0.0/24")
+
+	b.Run("SlashZero", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = trie.CountInRangeIPNet(zeroNet)
+		}
+	})
+
+	b.Run("Slash24", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = trie.CountInRangeIPNet(slash24Net)
+		}
+	})
+}
+
+// ============================================================================
 // SORTED INSERTION BENCHMARKS (from sorted_insertion_benchmark_test.go)
 // ============================================================================
 

@@ -175,8 +175,14 @@ func (t *Trie) CountInRange(cidr string) (uint32, error) {
 // CountInRangeIPNet counts all IPs of a Trie within a specific IPNet range
 // High-performance version that avoids string parsing overhead
 func (t *Trie) CountInRangeIPNet(ipNet *net.IPNet) uint32 {
-	rangeStart := iputils.IPToUint32(ipNet.IP)
 	maskBits, _ := ipNet.Mask.Size()
+	if maskBits == 0 {
+		// /0 spans the whole address space; CountAll sums the children
+		// correctly and avoids the undefined uint32(1)<<32 shift plus the
+		// Root.Count==0 trap in the full-containment branch.
+		return t.CountAll()
+	}
+	rangeStart := iputils.IPToUint32(ipNet.IP)
 
 	// Calculate the end of the range
 	rangeSize := uint32(1) << (32 - maskBits)
