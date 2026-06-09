@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ChristianF88/cidrx/config/regexprefilter"
 	"github.com/ChristianF88/cidrx/ingestor"
 )
 
@@ -52,6 +53,11 @@ type TrieConfig struct {
 	// Compiled regex patterns for fast filtering
 	userAgentRegexCompiled *regexp.Regexp
 	endpointRegexCompiled  *regexp.Regexp
+
+	// Required-literal prefilters screen inputs before the regex runs.
+	// nil means no prefilter is available (run the regex directly).
+	userAgentPrefilter *regexprefilter.Prefilter
+	endpointPrefilter  *regexprefilter.Prefilter
 }
 
 type SlidingTrieConfig struct {
@@ -66,6 +72,11 @@ type SlidingTrieConfig struct {
 	// Compiled regex patterns for fast filtering
 	userAgentRegexCompiled *regexp.Regexp
 	endpointRegexCompiled  *regexp.Regexp
+
+	// Required-literal prefilters screen inputs before the regex runs.
+	// nil means no prefilter is available (run the regex directly).
+	userAgentPrefilter *regexprefilter.Prefilter
+	endpointPrefilter  *regexprefilter.Prefilter
 }
 
 type StaticConfig struct {
@@ -377,20 +388,43 @@ func (c *Config) ValidateLive() error {
 	return nil
 }
 
+// regexGate evaluates one regex filter against value with an optional
+// required-literal prefilter. It preserves the exact semantics of the original
+// filter: an empty value never matches, and an absent (nil) compiled regex
+// imposes no constraint. The prefilter, when present, is a necessary condition
+// for a match, so:
+//   - if the prefilter rejects, the regex would too -> reject;
+//   - if the prefilter is Exact, its acceptance is equivalent to the regex ->
+//     accept without running the regex;
+//   - otherwise the authoritative regex decides.
+func regexGate(compiled *regexp.Regexp, pf *regexprefilter.Prefilter, value string) bool {
+	if compiled == nil {
+		return true
+	}
+	if value == "" {
+		return false
+	}
+	if pf != nil {
+		if !pf.MightMatch(value) {
+			return false
+		}
+		if pf.Exact() {
+			return true
+		}
+	}
+	return compiled.MatchString(value)
+}
+
 // ShouldIncludeRequest checks if a request should be included based on regex filters
 func (tc *TrieConfig) ShouldIncludeRequest(req ingestor.Request) bool {
 	// Apply useragent regex filter (short-circuit on empty UserAgent)
-	if tc.userAgentRegexCompiled != nil {
-		if req.UserAgent == "" || !tc.userAgentRegexCompiled.MatchString(req.UserAgent) {
-			return false
-		}
+	if !regexGate(tc.userAgentRegexCompiled, tc.userAgentPrefilter, req.UserAgent) {
+		return false
 	}
 
 	// Apply endpoint regex filter (short-circuit on empty URI)
-	if tc.endpointRegexCompiled != nil {
-		if req.URI == "" || !tc.endpointRegexCompiled.MatchString(req.URI) {
-			return false
-		}
+	if !regexGate(tc.endpointRegexCompiled, tc.endpointPrefilter, req.URI) {
+		return false
 	}
 
 	return true
@@ -399,17 +433,13 @@ func (tc *TrieConfig) ShouldIncludeRequest(req ingestor.Request) bool {
 // ShouldIncludeRequest checks if a request should be included based on regex filters
 func (stc *SlidingTrieConfig) ShouldIncludeRequest(req ingestor.Request) bool {
 	// Apply useragent regex filter (short-circuit on empty UserAgent)
-	if stc.userAgentRegexCompiled != nil {
-		if req.UserAgent == "" || !stc.userAgentRegexCompiled.MatchString(req.UserAgent) {
-			return false
-		}
+	if !regexGate(stc.userAgentRegexCompiled, stc.userAgentPrefilter, req.UserAgent) {
+		return false
 	}
 
 	// Apply endpoint regex filter (short-circuit on empty URI)
-	if stc.endpointRegexCompiled != nil {
-		if req.URI == "" || !stc.endpointRegexCompiled.MatchString(req.URI) {
-			return false
-		}
+	if !regexGate(stc.endpointRegexCompiled, stc.endpointPrefilter, req.URI) {
+		return false
 	}
 
 	return true
@@ -443,6 +473,7 @@ func (tc *TrieConfig) CompileRegex() error {
 			return fmt.Errorf("invalid useragentRegex pattern: %w", err)
 		}
 		tc.userAgentRegexCompiled = compiled
+		tc.userAgentPrefilter = regexprefilter.Build(tc.UserAgentRegex)
 	}
 	if tc.EndpointRegex != "" {
 		compiled, err := regexp.Compile(tc.EndpointRegex)
@@ -450,6 +481,7 @@ func (tc *TrieConfig) CompileRegex() error {
 			return fmt.Errorf("invalid endpointRegex pattern: %w", err)
 		}
 		tc.endpointRegexCompiled = compiled
+		tc.endpointPrefilter = regexprefilter.Build(tc.EndpointRegex)
 	}
 	return nil
 }
@@ -462,6 +494,7 @@ func (stc *SlidingTrieConfig) CompileRegex() error {
 			return fmt.Errorf("invalid useragentRegex pattern: %w", err)
 		}
 		stc.userAgentRegexCompiled = compiled
+		stc.userAgentPrefilter = regexprefilter.Build(stc.UserAgentRegex)
 	}
 	if stc.EndpointRegex != "" {
 		compiled, err := regexp.Compile(stc.EndpointRegex)
@@ -469,6 +502,7 @@ func (stc *SlidingTrieConfig) CompileRegex() error {
 			return fmt.Errorf("invalid endpointRegex pattern: %w", err)
 		}
 		stc.endpointRegexCompiled = compiled
+		stc.endpointPrefilter = regexprefilter.Build(stc.EndpointRegex)
 	}
 	return nil
 }
