@@ -22,6 +22,12 @@ func FuzzParallelParser(f *testing.F) {
 		"192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] \"GET /\x00path HTTP/1.1\" 200 0 \"-\" \"test\" \"192.168.1.1\"",
 		// Mismatched quotes
 		`192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] "GET /path HTTP/1.1 200 0 "-" "test" "192.168.1.1"`,
+		// Escaped quotes inside a quoted field (CIDRX-039)
+		`192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] "GET /path HTTP/1.1" 200 10 "-" "Mozilla \"Edge\" Browser" "192.168.1.1"`,
+		// Non-numeric status field (CIDRX-039)
+		`192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] "GET / HTTP/1.1" 2XX 10 "-" "test" "192.168.1.1"`,
+		// CRLF line ending (CIDRX-039)
+		"192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] \"GET / HTTP/1.1\" 200 10 \"-\" \"test\" \"192.168.1.1\"\r\n",
 	}
 
 	for _, s := range seeds {

@@ -87,6 +87,22 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 	jsonOutput.General.Parsing.RatePerSecond = int64(float64(len(requests)) / parseDuration.Seconds())
 	jsonOutput.General.Parsing.Format = logFormat
 
+	// Surface malformed status/bytes fields (lines are KEPT with the field
+	// zeroed; only the counts are reported). Structurally zero when
+	// SkipNonIPFields is true (IP-only path never scans status/bytes).
+	if ps := parser.Stats(); ps.MalformedStatus > 0 || ps.MalformedBytes > 0 {
+		if ps.MalformedStatus > 0 {
+			jsonOutput.AddWarning("malformed_field",
+				fmt.Sprintf("%d requests (%.1f%%) had a non-numeric status field (%%s) - status recorded as 0, lines kept",
+					ps.MalformedStatus, float64(ps.MalformedStatus)/float64(len(requests))*100), 1)
+		}
+		if ps.MalformedBytes > 0 {
+			jsonOutput.AddWarning("malformed_field",
+				fmt.Sprintf("%d requests (%.1f%%) had a non-numeric bytes field (%%b) - bytes recorded as 0, lines kept",
+					ps.MalformedBytes, float64(ps.MalformedBytes)/float64(len(requests))*100), 1)
+		}
+	}
+
 	if len(requests) == 0 {
 		jsonOutput.AddWarning("empty_logfile", "No requests found in logfile", 1)
 		return jsonOutput, requests, nil

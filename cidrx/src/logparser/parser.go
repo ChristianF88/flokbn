@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -26,6 +27,22 @@ type FieldExtractor struct {
 type CompiledFormat struct {
 	extractors []FieldExtractor
 	pattern    string
+	counters   *parseCounters
+}
+
+// parseCounters holds malformed-field tallies shared by all parse workers.
+// Heap-allocated separately from CompiledFormat so the write-on-failure
+// counters never share a cache line with the read-only hot fields.
+type parseCounters struct {
+	malformedStatus atomic.Uint64
+	malformedBytes  atomic.Uint64
+}
+
+// ParseStats is a snapshot of malformed-field counters, cumulative across
+// all ParseFile* calls on the same Parser.
+type ParseStats struct {
+	MalformedStatus uint64
+	MalformedBytes  uint64
 }
 
 // Parser provides high-performance log parsing with adaptive I/O strategies
@@ -63,6 +80,18 @@ func NewParser(format string) (*Parser, error) {
 	p.compiled = compiled
 
 	return p, nil
+}
+
+// Stats returns a snapshot of the malformed-field counters, cumulative across
+// all ParseFile* calls on this Parser. The snapshot is valid (complete) once a
+// ParseFile* call has returned: every parse path joins its workers via a
+// WaitGroup before returning, which provides the happens-before edge for the
+// atomic loads here.
+func (pp *Parser) Stats() ParseStats {
+	return ParseStats{
+		MalformedStatus: pp.compiled.counters.malformedStatus.Load(),
+		MalformedBytes:  pp.compiled.counters.malformedBytes.Load(),
+	}
 }
 
 // NewParallelParser creates a parser (backward compatibility - use NewParser instead)
@@ -680,6 +709,12 @@ func (pp *ParallelParser) readChunkBatched(file *os.File, job chunkJob, fileSize
 			lineData := buffer[start:i]
 			start = i + 1
 
+			// Strip a trailing '\r' (CRLF line endings) to match the streaming
+			// path's bufio.Scanner behavior.
+			if n := len(lineData); n > 0 && lineData[n-1] == '\r' {
+				lineData = lineData[:n-1]
+			}
+
 			if len(lineData) == 0 {
 				continue
 			}
@@ -699,6 +734,10 @@ func (pp *ParallelParser) readChunkBatched(file *os.File, job chunkJob, fileSize
 	// reached EOF and whose range contains the line's start (start < chunkEnd).
 	if readEnd == fileSize && start < len(buffer) && start < chunkEnd {
 		lineData := buffer[start:]
+		// Strip a trailing '\r' (file ending in "...\r" with no final '\n').
+		if n := len(lineData); n > 0 && lineData[n-1] == '\r' {
+			lineData = lineData[:n-1]
+		}
 		if len(lineData) > 0 {
 			batch = append(batch, lineData)
 		}
@@ -850,6 +889,7 @@ func compileFormat(format string) (*CompiledFormat, error) {
 	return &CompiledFormat{
 		extractors: extractors,
 		pattern:    format,
+		counters:   &parseCounters{}, // never nil: hot path may Add without a nil check
 	}, nil
 }
 
@@ -887,7 +927,11 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 			pos++ // skip opening quote
 			start = pos
 			if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
-				pos += idx
+				if idx > 0 && line[pos+idx-1] == '\\' {
+					pos = scanQuotedClose(line, pos, pos+idx) // rare slow path: escaped quote
+				} else {
+					pos += idx
+				}
 			} else {
 				pos = len(line)
 			}
@@ -922,7 +966,7 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 
 				switch extractor.FieldType {
 				case 1: // Timestamp
-					req.Timestamp = parseTimestampUltraFast(line, start)
+					req.Timestamp = parseTimestampUltraFast(line, start, pos)
 				case 2: // Method (standalone)
 					req.Method = parseMethodUltraFast(line, start, pos)
 				case 3: // Request line (%r) - extracts METHOD and URI, ignores HTTP version
@@ -963,13 +1007,29 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 						req.URI = bytesToString(fieldData)
 					}
 				case 4: // Status
-					if pos-start >= 3 {
+					if pos-start == 3 {
 						_ = line[start+2] // BCE hint: eliminate 3 individual bounds checks below
-						req.Status = uint16(line[start]&0x0F)*100 + uint16(line[start+1]&0x0F)*10 + uint16(line[start+2]&0x0F)
+						d0 := line[start] - '0'
+						d1 := line[start+1] - '0'
+						d2 := line[start+2] - '0'
+						// Do NOT or-fold these checks: (d0|d1|d2)<=9 is wrong (2|9==11).
+						// Each d<=9 byte compare exploits unsigned wraparound for non-digits.
+						if d0 <= 9 && d1 <= 9 && d2 <= 9 {
+							req.Status = uint16(d0)*100 + uint16(d1)*10 + uint16(d2)
+						} else {
+							cf.counters.malformedStatus.Add(1)
+						}
+					} else if !(pos-start == 1 && line[start] == '-') {
+						// "-" = absent (Apache convention): silent zero. Anything else: malformed.
+						cf.counters.malformedStatus.Add(1)
 					}
 				case 5: // Bytes
 					if len(fieldData) > 0 && fieldData[0] != '-' {
-						req.Bytes = parseBytesUltraFast(line, start, pos)
+						b, ok := parseBytesUltraFast(line, start, pos)
+						req.Bytes = b
+						if !ok {
+							cf.counters.malformedBytes.Add(1)
+						}
 					}
 				case 6: // User agent
 					if !skipStrings {
@@ -1006,6 +1066,10 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 //
 // This is the dominant fast path for clustering / static analysis where only
 // the IP is needed.
+//
+// Malformed-field counters (cf.counters) are structurally zero on this path:
+// status/bytes fields are never scanned here, so IP-only parses contribute no
+// malformedStatus/malformedBytes counts by design.
 func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 	pos := 0
 
@@ -1028,7 +1092,11 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 			pos++ // skip opening quote
 			start = pos
 			if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
-				pos += idx
+				if idx > 0 && line[pos+idx-1] == '\\' {
+					pos = scanQuotedClose(line, pos, pos+idx) // rare slow path: escaped quote
+				} else {
+					pos += idx
+				}
 			} else {
 				pos = len(line)
 			}
@@ -1073,6 +1141,31 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 	}
 
 	return 0
+}
+
+// scanQuotedClose resumes a quoted-field scan when the quote found at
+// firstQuote is preceded by a backslash. A quote is escaped iff preceded by
+// an ODD number of consecutive backslashes (Apache escapes `"` -> `\"` and
+// `\` -> `\\`). Returns the index of the first unescaped quote at/after
+// firstQuote, or len(line). Only called when an escape candidate was seen,
+// so the no-escape common case never pays for this loop. The field content
+// keeps its raw escape bytes — this fixes field ALIGNMENT, not unescaping.
+func scanQuotedClose(line []byte, contentStart, firstQuote int) int {
+	i := firstQuote
+	for {
+		bs := 0
+		for j := i - 1; j >= contentStart && line[j] == '\\'; j-- {
+			bs++
+		}
+		if bs%2 == 0 {
+			return i
+		}
+		next := bytes.IndexByte(line[i+1:], '"')
+		if next < 0 {
+			return len(line)
+		}
+		i += 1 + next
+	}
 }
 
 // bytesToString converts byte slice to string without copying.
@@ -1161,7 +1254,10 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 
 // parseTimestampUltraFast extracts timestamp from Apache Common Log format with maximum performance
 //
-// Expected format: "[06/Jul/2025:19:57:26 +0000]" (26 characters)
+// Expected format: "06/Jul/2025:19:57:26 +0000" within line[start:end], where
+// end is the field's exclusive end (e.g. the position of the closing ']').
+// Only the first 20 bytes (date and time) are read; a trailing timezone offset
+// is ignored and the wall-clock time is returned as UTC.
 //
 // Performance optimizations:
 //   - Direct byte-to-int conversion using bit masking: (b & 0x0F)
@@ -1171,8 +1267,8 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 //
 // Month encoding: ASCII bytes packed into uint32 for fast switch lookup
 // Example: "Jul" = 0x4A756C = uint32('J')<<16 | uint32('u')<<8 | uint32('l')
-func parseTimestampUltraFast(line []byte, start int) time.Time {
-	if start+25 >= len(line) {
+func parseTimestampUltraFast(line []byte, start, end int) time.Time {
+	if end-start < 20 || end > len(line) { // fast path reads line[start..start+19]
 		return time.Time{}
 	}
 
@@ -1265,19 +1361,18 @@ func parseMethodUltraFast(line []byte, start, end int) ingestor.HTTPMethod {
 	}
 }
 
-// parseBytesUltraFast extracts numeric byte count from log field with loop unrolling
+// parseBytesUltraFast extracts numeric byte count from line[start:end].
 //
-// Performance optimizations:
-//   - Unrolled loop for numbers ≤8 digits (99.9% of cases)
-//   - Bit masking for digit conversion: (digit & 0x0F) faster than (digit - '0')
-//   - Early termination on non-digit characters
-//   - Handles both small and large numbers efficiently
+// Returns (value, true) when every byte in the field is an ASCII digit, or
+// (0, false) when any non-digit appears — the field is then malformed and the
+// caller counts it. The single d<=9 unsigned-wraparound compare per byte keeps
+// the all-digit fast path branch-predictable and inlineable.
 //
-// Typical log byte counts: 0-999999 (6 digits), so unrolled loop is optimal
-// Returns: parsed uint32 or 0 for invalid input
-func parseBytesUltraFast(line []byte, start, end int) uint32 {
+// Known pre-existing limitation (intentionally unchanged): values with >=10
+// digits silently wrap around uint32.
+func parseBytesUltraFast(line []byte, start, end int) (uint32, bool) {
 	if start >= end {
-		return 0
+		return 0, false
 	}
 	// BCE hint: prove line[end-1] is in bounds, eliminating per-iteration bounds check
 	if end > len(line) {
@@ -1286,12 +1381,11 @@ func parseBytesUltraFast(line []byte, start, end int) uint32 {
 
 	result := uint32(0)
 	for i := start; i < end; i++ {
-		digit := line[i]
-		if digit >= '0' && digit <= '9' {
-			result = result*10 + uint32(digit&0x0F)
-		} else {
-			break
+		d := line[i] - '0'
+		if d > 9 {
+			return 0, false // any non-digit invalidates the field
 		}
+		result = result*10 + uint32(d)
 	}
-	return result
+	return result, true
 }

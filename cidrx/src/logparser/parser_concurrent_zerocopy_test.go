@@ -21,9 +21,10 @@ const concurrentZeroCopyFormat = `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
 //     in IP mode — both paths agree),
 //   - quoted UA/URI fields containing spaces.
 //
-// No '\r' is emitted: the production code does not strip carriage returns, while
-// the streaming path (bufio.Scanner) would, so including them would make the two
-// paths legitimately differ. We keep inputs to what both paths treat identically.
+// Line endings: the chunked reader now strips a trailing '\r' exactly like the
+// streaming path's bufio.Scanner, so CRLF inputs parse identically on both
+// paths (see TestConcurrentCRLF_ParityWithStreaming). The lineEnding parameter
+// of genConcurrentTestLogLE selects "\n" or "\r\n".
 //
 // No blank lines are emitted either: the concurrent reader skips empty lines
 // (continue), whereas the streaming reader hands them to the parser which treats
@@ -36,6 +37,12 @@ const concurrentZeroCopyFormat = `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
 // withTrailingNewline controls whether the file ends in '\n'. The no-trailing
 // case specifically exercises readChunkBatched's EOF trailing-line handling.
 func genConcurrentTestLog(n int, withTrailingNewline bool) string {
+	return genConcurrentTestLogLE(n, withTrailingNewline, "\n")
+}
+
+// genConcurrentTestLogLE is genConcurrentTestLog with a selectable line ending
+// ("\n" or "\r\n"). withTrailingNewline=false strips the final lineEnding.
+func genConcurrentTestLogLE(n int, withTrailingNewline bool, lineEnding string) string {
 	var b strings.Builder
 	uas := []string{
 		"Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/123.0",
@@ -57,7 +64,7 @@ func genConcurrentTestLog(n int, withTrailingNewline bool) string {
 			b.WriteString(fmt.Sprintf(
 				`- - - [10/Oct/2024:13:55:%02d +0000] "%s" 200 1234 "x" "%s" "not-an-ip"`,
 				i%60, uris[i%len(uris)], uas[i%len(uas)]))
-			b.WriteByte('\n')
+			b.WriteString(lineEnding)
 		default:
 			// Valid line. Vary IP octet widths and byte counts so line lengths
 			// differ widely, forcing many lines to straddle small-chunk boundaries.
@@ -67,12 +74,12 @@ func genConcurrentTestLog(n int, withTrailingNewline bool) string {
 			b.WriteString(fmt.Sprintf(
 				`- - - [10/Oct/2024:13:55:%02d +0000] "%s" %d %d "x" "%s" "%s"`,
 				i%60, uris[i%len(uris)], status, bytesN, uas[i%len(uas)], ip))
-			b.WriteByte('\n')
+			b.WriteString(lineEnding)
 		}
 	}
 	s := b.String()
 	if !withTrailingNewline {
-		s = strings.TrimRight(s, "\n")
+		s = strings.TrimSuffix(s, lineEnding)
 	}
 	return s
 }
@@ -245,6 +252,129 @@ func TestConcurrentZeroCopy_DiffIPMode(t *testing.T) {
 
 	for _, trailing := range []bool{true, false} {
 		content := genConcurrentTestLog(nLines, trailing)
+		path := writeTempLog(t, content)
+
+		pp, err := NewParallelParser(concurrentZeroCopyFormat)
+		if err != nil {
+			t.Fatalf("NewParallelParser: %v", err)
+		}
+		pp.SkipNonIPFields = true
+
+		streamIPs, streamInvalid, err := pp.parseFileIPsStreamingIO(path)
+		if err != nil {
+			t.Fatalf("parseFileIPsStreamingIO: %v", err)
+		}
+		sortedStream := append([]uint32(nil), streamIPs...)
+		sort.Slice(sortedStream, func(i, j int) bool { return sortedStream[i] < sortedStream[j] })
+
+		for _, cs := range chunkSizes {
+			concIPs, concInvalid := parseConcurrentIPs(t, pp, path, cs)
+
+			if len(concIPs) != len(streamIPs) {
+				t.Fatalf("trailing=%v chunk=%d: IP count mismatch: concurrent=%d streaming=%d",
+					trailing, cs, len(concIPs), len(streamIPs))
+			}
+			if concInvalid != streamInvalid {
+				t.Fatalf("trailing=%v chunk=%d: invalid count mismatch: concurrent=%d streaming=%d",
+					trailing, cs, concInvalid, streamInvalid)
+			}
+
+			sortedConc := append([]uint32(nil), concIPs...)
+			sort.Slice(sortedConc, func(i, j int) bool { return sortedConc[i] < sortedConc[j] })
+			for i := range sortedStream {
+				if sortedConc[i] != sortedStream[i] {
+					t.Fatalf("trailing=%v chunk=%d: IP multiset mismatch at index %d: concurrent=%d streaming=%d",
+						trailing, cs, i, sortedConc[i], sortedStream[i])
+				}
+			}
+		}
+	}
+}
+
+// TestConcurrentCRLF_ParityWithStreaming asserts that CRLF-terminated logs
+// parse identically on the streaming path (bufio.Scanner strips '\r') and the
+// chunked path (readChunkBatched now strips '\r' too), across chunk sizes and
+// trailing-newline variants, including a file whose last byte is '\r' with no
+// final '\n' (exercises the EOF emission site).
+func TestConcurrentCRLF_ParityWithStreaming(t *testing.T) {
+	const nLines = 3000
+	chunkSizes := []int64{256, 1023, 4096, 64 * 1024}
+
+	variants := []struct {
+		name    string
+		content string
+	}{
+		{"crlf_trailing_newline", genConcurrentTestLogLE(nLines, true, "\r\n")},
+		{"crlf_no_trailing_newline", genConcurrentTestLogLE(nLines, false, "\r\n")},
+		// File ends in "...\r" with NO final '\n': the trailing-line EOF path in
+		// readChunkBatched must strip that '\r'.
+		{"crlf_final_cr_no_lf", strings.TrimSuffix(genConcurrentTestLogLE(nLines, true, "\r\n"), "\n")},
+	}
+
+	for _, v := range variants {
+		t.Run(v.name, func(t *testing.T) {
+			path := writeTempLog(t, v.content)
+
+			pp, err := NewParallelParser(concurrentZeroCopyFormat)
+			if err != nil {
+				t.Fatalf("NewParallelParser: %v", err)
+			}
+
+			streamReqs, err := pp.parseFileWithStreamingIO(path)
+			if err != nil {
+				t.Fatalf("parseFileWithStreamingIO: %v", err)
+			}
+			for _, r := range streamReqs {
+				if strings.ContainsRune(r.URI, '\r') || strings.ContainsRune(r.UserAgent, '\r') {
+					t.Fatalf("streaming: parsed string field contains '\\r': URI=%q UA=%q", r.URI, r.UserAgent)
+				}
+			}
+			streamKeys := make([]reqKey, len(streamReqs))
+			for i, r := range streamReqs {
+				streamKeys[i] = toReqKey(r)
+			}
+			sortReqKeys(streamKeys)
+
+			for _, cs := range chunkSizes {
+				concReqs := parseConcurrentFull(t, pp, path, cs)
+
+				if len(concReqs) != len(streamReqs) {
+					t.Fatalf("chunk=%d: count mismatch: concurrent=%d streaming=%d",
+						cs, len(concReqs), len(streamReqs))
+				}
+				for _, r := range concReqs {
+					if strings.ContainsRune(r.URI, '\r') || strings.ContainsRune(r.UserAgent, '\r') {
+						t.Fatalf("chunk=%d: parsed string field contains '\\r': URI=%q UA=%q", cs, r.URI, r.UserAgent)
+					}
+				}
+
+				concKeys := make([]reqKey, len(concReqs))
+				for i, r := range concReqs {
+					concKeys[i] = toReqKey(r)
+				}
+				sortReqKeys(concKeys)
+
+				for i := range streamKeys {
+					if concKeys[i] != streamKeys[i] {
+						t.Fatalf("chunk=%d: field mismatch at sorted index %d:\n concurrent=%+v\n streaming=%+v",
+							cs, i, concKeys[i], streamKeys[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestConcurrentCRLF_IPModeParity is the IP-only variant: with CRLF endings the
+// trailing quoted "%h" field must not absorb the '\r', and the chunked IP path
+// must agree with the streaming IP path on both the IP multiset and the
+// invalid count.
+func TestConcurrentCRLF_IPModeParity(t *testing.T) {
+	const nLines = 3000
+	chunkSizes := []int64{256, 1023, 4096, 64 * 1024}
+
+	for _, trailing := range []bool{true, false} {
+		content := genConcurrentTestLogLE(nLines, trailing, "\r\n")
 		path := writeTempLog(t, content)
 
 		pp, err := NewParallelParser(concurrentZeroCopyFormat)
