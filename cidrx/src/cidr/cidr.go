@@ -490,6 +490,11 @@ func SubtractMultiple(blacklistCidr string, whitelistCidrs []string) ([]string, 
 			cidrs := GenerateOptimal(pos, excludeRange[0]-1)
 			result = append(result, cidrs...)
 		}
+		if excludeRange[1] == 0xFFFFFFFF {
+			// Exclusion reaches the top of the address space; pos would wrap to 0.
+			// Ranges are sorted and merged, so the remaining tail is fully covered.
+			return result, nil
+		}
 		pos = excludeRange[1] + 1
 	}
 
@@ -508,6 +513,11 @@ func SubtractMultiple(blacklistCidr string, whitelistCidrs []string) ([]string, 
 func GenerateOptimalNumeric(start, end uint32) []NumericCIDR {
 	if start > end {
 		return nil
+	}
+
+	// Full address space: end-start+1 would overflow uint32; emit the single optimal /0.
+	if start == 0 && end == 0xFFFFFFFF {
+		return []NumericCIDR{{IP: 0, PrefixLen: 0}}
 	}
 
 	// Estimate result size to reduce allocations
