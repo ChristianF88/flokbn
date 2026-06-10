@@ -79,7 +79,7 @@ func newOverlayView(reqs []ingestor.Request, cidrs ...string) *VisualizationView
 		app:                 app,
 		totalClusterSets:    1,
 		currentClusterSet:   0,
-		cachedClusteredData: make(map[int][256][256]uint32),
+		cachedClusteredData: make(map[clusterKey][256][256]uint32),
 	}
 	v.ProcessTrafficData(reqs)
 	return v
@@ -122,7 +122,7 @@ func TestClusteredTrafficGrid(t *testing.T) {
 	}
 
 	v := &VisualizationView{
-		cachedClusteredData: make(map[int][256][256]uint32),
+		cachedClusteredData: make(map[clusterKey][256][256]uint32),
 	}
 	v.requests = reqs
 	v.maxTraffic = 0
@@ -188,7 +188,7 @@ func TestProcessTrafficDataLegacyMode(t *testing.T) {
 		app:                 app,
 		totalClusterSets:    1,
 		currentClusterSet:   0,
-		cachedClusteredData: make(map[int][256][256]uint32),
+		cachedClusteredData: make(map[clusterKey][256][256]uint32),
 	}
 
 	v.ProcessTrafficData(reqs)
@@ -435,7 +435,7 @@ func newBenchRenderView() *VisualizationView {
 		app:                 app,
 		totalClusterSets:    1,
 		currentClusterSet:   0,
-		cachedClusteredData: make(map[int][256][256]uint32),
+		cachedClusteredData: make(map[clusterKey][256][256]uint32),
 	}
 
 	rng := rand.New(rand.NewSource(7))
@@ -545,7 +545,7 @@ func BenchmarkProcessTrafficData(b *testing.B) {
 		app:                 app,
 		totalClusterSets:    1,
 		currentClusterSet:   0,
-		cachedClusteredData: make(map[int][256][256]uint32),
+		cachedClusteredData: make(map[clusterKey][256][256]uint32),
 	}
 
 	b.ReportAllocs()
@@ -569,7 +569,7 @@ func BenchmarkProcessTrafficDataNoClusters(b *testing.B) {
 		app:                 app,
 		totalClusterSets:    1,
 		currentClusterSet:   0,
-		cachedClusteredData: make(map[int][256][256]uint32),
+		cachedClusteredData: make(map[clusterKey][256][256]uint32),
 	}
 
 	b.ReportAllocs()
@@ -688,7 +688,33 @@ func TestLogScaleRenderAndCacheKeys(t *testing.T) {
 	}
 	logKey := v.renderCacheKey(0, 0)
 	if linKey == sqrtKey || linKey == logKey || sqrtKey == logKey {
-		t.Errorf("scale-mode cache keys collide: %d %d %d", linKey, sqrtKey, logKey)
+		t.Errorf("scale-mode cache keys collide: %v %v %v", linKey, sqrtKey, logKey)
+	}
+}
+
+// TestCacheKeysNoCompositeCollision guards against the old trie*1000+set int
+// scheme, where (trie=1, set=1000) and (trie=2, set=0) both mapped to 2000.
+func TestCacheKeysNoCompositeCollision(t *testing.T) {
+	v := &VisualizationView{app: &App{}}
+
+	if k1, k2 := v.renderCacheKey(1, 1000), v.renderCacheKey(2, 0); k1 == k2 {
+		t.Errorf("render cache keys collide: %v == %v", k1, k2)
+	}
+	// Old mode offset also collided: (trie=1000,set=0,mode=0) vs (trie=0,set=0,mode=1).
+	v.scaleMode = scaleLinear
+	a := v.renderCacheKey(1000, 0)
+	v.scaleMode = scaleSqrt
+	if b := v.renderCacheKey(0, 0); a == b {
+		t.Errorf("mode/trie cache keys collide: %v == %v", a, b)
+	}
+
+	cache := make(map[clusterKey][256][256]uint32)
+	v.app.currentTrie, v.currentClusterSet = 1, 1000
+	cache[v.clusteredCacheKey()] = [256][256]uint32{}
+	v.app.currentTrie, v.currentClusterSet = 2, 0
+	cache[v.clusteredCacheKey()] = [256][256]uint32{}
+	if len(cache) != 2 {
+		t.Errorf("clustered cache keys collide: (1,1000) and (2,0) share an entry")
 	}
 }
 

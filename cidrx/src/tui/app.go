@@ -1175,7 +1175,7 @@ func (a *App) updateVisualizationFast(trieIndex int) {
 	if grid, ok := a.fastCache.GetClusteredData(trieIndex, a.visualizationView.currentClusterSet); ok {
 		a.visualizationView.clusteredData = grid
 		if a.visualizationView.cachedClusteredData != nil {
-			a.visualizationView.cachedClusteredData[trieIndex*1000+a.visualizationView.currentClusterSet] = grid
+			a.visualizationView.cachedClusteredData[clusterKey{trie: trieIndex, set: a.visualizationView.currentClusterSet}] = grid
 		}
 	}
 

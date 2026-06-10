@@ -10,6 +10,12 @@ import (
 	"github.com/rivo/tview"
 )
 
+// renderKey identifies a cached render text: (trie, cluster set, scale mode).
+type renderKey struct{ trie, set, mode int }
+
+// clusterKey identifies a cached clustered grid: (trie, cluster set).
+type clusterKey struct{ trie, set int }
+
 // VisualizationView represents the 2D heatmap visualization
 type VisualizationView struct {
 	app               *App
@@ -26,12 +32,12 @@ type VisualizationView struct {
 	// Legacy caching for performance (kept for compatibility)
 	cachedTrafficData map[int][256][256]uint32 // Cache traffic data per trie
 	cachedMaxTraffic  map[int]uint32           // Cache max traffic per trie
-	cachedRenderText  map[int]string           // Cache rendered visualization text per trie
+	cachedRenderText  map[renderKey]string     // Cache rendered visualization text per (trie, set, scale mode)
 
-	// Cache of clustered-traffic grids keyed by trieIndex*1000+clusterSet.
+	// Cache of clustered-traffic grids keyed by (trie, cluster set).
 	// trafficData is per-trie (same across cluster sets); clusteredData differs
 	// per cluster set because it depends on that set's detected ranges.
-	cachedClusteredData map[int][256][256]uint32
+	cachedClusteredData map[clusterKey][256][256]uint32
 }
 
 // NewVisualizationView creates a new visualization view
@@ -52,8 +58,8 @@ func (a *App) NewVisualizationView() *VisualizationView {
 		// Initialize legacy cache maps
 		cachedTrafficData:   make(map[int][256][256]uint32),
 		cachedMaxTraffic:    make(map[int]uint32),
-		cachedRenderText:    make(map[int]string),
-		cachedClusteredData: make(map[int][256][256]uint32),
+		cachedRenderText:    make(map[renderKey]string),
+		cachedClusteredData: make(map[clusterKey][256][256]uint32),
 	}
 
 	v.view = tview.NewTextView().
@@ -243,21 +249,20 @@ func (v *VisualizationView) ProcessTrafficData(requests []ingestor.Request) {
 }
 
 // renderCacheKey returns the render-text cache key for a (trie, cluster set)
-// pair under the current brightness mode. Renders differ per mode, so each
-// scale mode is offset into its own key space.
-func (v *VisualizationView) renderCacheKey(trie, set int) int {
-	return trie*1000 + set + v.scaleMode*1_000_000
+// pair under the current brightness mode. Renders differ per mode, so the
+// scale mode is part of the key.
+func (v *VisualizationView) renderCacheKey(trie, set int) renderKey {
+	return renderKey{trie: trie, set: set, mode: v.scaleMode}
 }
 
 // clusteredCacheKey returns the composite cache key for the clustered grid of
-// the current (trie, cluster set) pair. Matches the trie*1000+set scheme used
-// for render-text caching.
-func (v *VisualizationView) clusteredCacheKey() int {
+// the current (trie, cluster set) pair.
+func (v *VisualizationView) clusteredCacheKey() clusterKey {
 	trie := 0
 	if v.app != nil {
 		trie = v.app.currentTrie
 	}
-	return trie*1000 + v.currentClusterSet
+	return clusterKey{trie: trie, set: v.currentClusterSet}
 }
 
 // ensureClusteredData makes v.clusteredData reflect the current (trie, cluster
