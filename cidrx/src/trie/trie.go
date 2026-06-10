@@ -435,7 +435,13 @@ func prefixToNumericCIDR(prefix uint32, depth uint32) cidr.NumericCIDR {
 // CollectCIDRsNumeric - Numeric sequential clustering algorithm returning numeric CIDRs
 // Avoids string allocations in hot paths for maximum performance
 func (t *Trie) CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth uint32, meanSubnetDifference float64) []cidr.NumericCIDR {
-	// Convert threshold once
+	// Convert threshold once. Clamp negative inputs first: converting an
+	// out-of-range (negative) float64 to uint32 is implementation-defined in Go
+	// (huge value on amd64, 0 on arm64), so a negative meanSubnetDifference must
+	// deterministically behave like 0.
+	if meanSubnetDifference < 0 {
+		meanSubnetDifference = 0
+	}
 	threshold := uint32(meanSubnetDifference * 1000)
 
 	// Handle edge cases

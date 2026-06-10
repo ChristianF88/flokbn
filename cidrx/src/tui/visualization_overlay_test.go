@@ -244,33 +244,60 @@ func TestOverlayRatioSemantics(t *testing.T) {
 
 // TestMembershipEquivalence is a property test: over a large random corpus of
 // IPs and random cluster CIDRs, the fast interval membership must agree with
-// net.Contains exactly.
+// net.Contains exactly. Split into prefix bands so wide (low-prefix) CIDRs —
+// including /0../7, which the original /8../32 band never generated — get
+// dedicated coverage. 70000 random IPs per band (3 bands, 210000 total,
+// roughly the original 200000).
 func TestMembershipEquivalence(t *testing.T) {
-	rng := rand.New(rand.NewSource(0xC1D8))
-
-	// Generate random non-overlapping-ish CIDRs of varied prefix lengths.
-	var cidrStrs []string
-	for i := 0; i < 40; i++ {
-		prefix := 8 + rng.Intn(25) // /8 .. /32
-		base := rng.Uint32()
-		// Zero the host bits so ParseCIDR keeps the network address.
-		mask := ^uint32(0) << (32 - prefix)
-		net0 := base & mask
-		ip := iputils.Uint32ToIP(net0)
-		cidrStrs = append(cidrStrs, ipNetString(ip, prefix))
+	bands := []struct {
+		name     string
+		min, max int
+	}{
+		{"full_0_32", 0, 32},
+		{"low_0_7", 0, 7},
+		{"orig_8_32", 8, 32},
+	}
+	boundaryIPs := []uint32{
+		0x00000000, 0x00000001, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFE, 0xFFFFFFFF,
 	}
 
-	cs := newClusterSet(cidrStrs...)
-	intervals := buildClusterIntervals(cs)
-	refNets := mustCIDRs(t, cidrStrs...)
+	for _, band := range bands {
+		t.Run(band.name, func(t *testing.T) {
+			rng := rand.New(rand.NewSource(0xC1D8))
 
-	for i := 0; i < 200000; i++ {
-		ip := rng.Uint32()
-		got := intervals.Contains(ip)
-		want := bruteContains(refNets, ip)
-		if got != want {
-			t.Fatalf("ip %s: interval=%v net.Contains=%v", iputils.Uint32ToIP(ip), got, want)
-		}
+			// Generate random non-overlapping-ish CIDRs within the band's
+			// prefix range. Note ipNetString handles prefix 0: the variable
+			// shift `^uint32(0) << 32` yields 0 in Go, so net0 becomes 0 and
+			// ParseCIDR("0.0.0.0/0") round-trips correctly.
+			var cidrStrs []string
+			for i := 0; i < 40; i++ {
+				prefix := band.min + rng.Intn(band.max-band.min+1)
+				base := rng.Uint32()
+				// Zero the host bits so ParseCIDR keeps the network address.
+				mask := ^uint32(0) << (32 - prefix)
+				net0 := base & mask
+				ip := iputils.Uint32ToIP(net0)
+				cidrStrs = append(cidrStrs, ipNetString(ip, prefix))
+			}
+
+			cs := newClusterSet(cidrStrs...)
+			intervals := buildClusterIntervals(cs)
+			refNets := mustCIDRs(t, cidrStrs...)
+
+			check := func(ip uint32) {
+				got := intervals.Contains(ip)
+				want := bruteContains(refNets, ip)
+				if got != want {
+					t.Fatalf("ip %s: interval=%v net.Contains=%v", iputils.Uint32ToIP(ip), got, want)
+				}
+			}
+			for i := 0; i < 70000; i++ {
+				check(rng.Uint32())
+			}
+			for _, ip := range boundaryIPs {
+				check(ip)
+			}
+		})
 	}
 }
 

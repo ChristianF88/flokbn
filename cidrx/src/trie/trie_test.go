@@ -605,6 +605,133 @@ func TestCollectCIDRs(t *testing.T) {
 	}
 }
 
+// TestCollectCIDRsThresholdBoundaries pins the exact semantics of the
+// meanSubnetDifference -> uint32 threshold conversion and the integer
+// cross-multiplication test in CollectCIDRsCoreSequentialNumeric:
+// appendCluster = (2000*diff) < (threshold*count), strict less-than.
+func TestCollectCIDRsThresholdBoundaries(t *testing.T) {
+	// insertIPs maps dotted IP -> insert count.
+	tests := []struct {
+		name           string
+		insertIPs      map[string]int
+		minClusterSize uint32
+		minDepth       uint32
+		maxDepth       uint32
+		threshold      float64
+		expectedCIDRs  []string
+	}{
+		{
+			// threshold=0: unequal child counts never cluster (2000*diff < 0 is
+			// false); only the dominant /32 leaf is emitted at maxDepth.
+			name:           "threshold_zero_unequal",
+			insertIPs:      map[string]int{"192.168.1.0": 2, "192.168.1.1": 1},
+			minClusterSize: 2,
+			minDepth:       24,
+			maxDepth:       32,
+			threshold:      0.0,
+			expectedCIDRs:  []string{"192.168.1.0/32"},
+		},
+		{
+			// Equal-count fast path (trie.go:366) bypasses the threshold
+			// comparison entirely, so even threshold=0 clusters the /31.
+			// Pinned intentionally.
+			name:           "threshold_zero_equal_counts",
+			insertIPs:      map[string]int{"192.168.1.0": 2, "192.168.1.1": 2},
+			minClusterSize: 4,
+			minDepth:       24,
+			maxDepth:       32,
+			threshold:      0.0,
+			expectedCIDRs:  []string{"192.168.1.0/31"},
+		},
+		{
+			// Exact boundary is excluded: diff=2, count=4, msd=1.0 ->
+			// 2000*2=4000 < 1000*4=4000 is false (strict <), so no /31; the
+			// count-3 leaf is emitted at maxDepth instead.
+			name:           "threshold_exact_boundary_excluded",
+			insertIPs:      map[string]int{"192.168.1.0": 3, "192.168.1.1": 1},
+			minClusterSize: 3,
+			minDepth:       24,
+			maxDepth:       32,
+			threshold:      1.0,
+			expectedCIDRs:  []string{"192.168.1.0/32"},
+		},
+		{
+			// Just below the boundary clusters: diff=1, count=5, msd=1.0 ->
+			// 2000*1=2000 < 1000*5=5000 -> /31 emitted.
+			name:           "threshold_just_below_clusters",
+			insertIPs:      map[string]int{"192.168.1.0": 3, "192.168.1.1": 2},
+			minClusterSize: 5,
+			minDepth:       24,
+			maxDepth:       32,
+			threshold:      1.0,
+			expectedCIDRs:  []string{"192.168.1.0/31"},
+		},
+		{
+			// Huge threshold makes any imbalance cluster at the shallowest
+			// allowed depth: the depth-1 node (0.0.0.0/1, count 3) with
+			// children 2 vs 1 passes 2000*1 < 1e9*3 and is emitted as
+			// 0.0.0.0/1. Note 0.0.0.0/0 itself is unreachable here: Insert
+			// never increments Root.Count (left at 0 by design, see
+			// BuildSortedUint32 docs), so the depth-0 emission check
+			// node.Count >= minClusterSize can never pass for mcs > 0.
+			name:           "threshold_huge",
+			insertIPs:      map[string]int{"0.0.0.1": 2, "64.0.0.1": 1},
+			minClusterSize: 3,
+			minDepth:       0,
+			maxDepth:       32,
+			threshold:      1e6,
+			expectedCIDRs:  []string{"0.0.0.0/1"},
+		},
+		{
+			// Negative meanSubnetDifference is clamped to 0 before the
+			// float->uint32 conversion (implementation-defined for negative
+			// inputs), so this must behave exactly like threshold_zero_unequal.
+			name:           "threshold_negative_clamped",
+			insertIPs:      map[string]int{"192.168.1.0": 2, "192.168.1.1": 1},
+			minClusterSize: 2,
+			minDepth:       24,
+			maxDepth:       32,
+			threshold:      -1.0,
+			expectedCIDRs:  []string{"192.168.1.0/32"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trie := NewTrie()
+
+			for ipStr, n := range tt.insertIPs {
+				ip := net.ParseIP(ipStr)
+				if ip == nil {
+					t.Fatalf("Failed to parse IP: %s", ipStr)
+				}
+				for i := 0; i < n; i++ {
+					trie.Insert(ip)
+				}
+			}
+
+			results := trie.CollectCIDRs(tt.minClusterSize, tt.minDepth, tt.maxDepth, tt.threshold)
+
+			if len(results) != len(tt.expectedCIDRs) {
+				t.Errorf("Expected CIDRs %v, got %v", tt.expectedCIDRs, results)
+			}
+
+			for _, expectedCIDR := range tt.expectedCIDRs {
+				found := false
+				for _, cidr := range results {
+					if cidr == expectedCIDR {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected CIDR %s not found in result %v", expectedCIDR, results)
+				}
+			}
+		})
+	}
+}
+
 func TestTrieCountInRangeCIDR(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1299,6 +1426,40 @@ func TestCountInRangeSlashZero(t *testing.T) {
 		}
 		if got != 0 {
 			t.Errorf("CountInRange(0.0.0.0/0) = %d, want 0", got)
+		}
+	})
+
+	t.Run("exactly one IP", func(t *testing.T) {
+		// A trie holding exactly one IP — including the very first and very
+		// last address of the space — must report 1 for the full range.
+		for _, ipStr := range []string{"0.0.0.0", "203.0.113.7", "255.255.255.255"} {
+			trie := NewTrie()
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				t.Fatalf("Failed to parse IP: %s", ipStr)
+			}
+			trie.Insert(ip)
+
+			got, err := trie.CountInRange("0.0.0.0/0")
+			if err != nil {
+				t.Fatalf("%s: unexpected error: %v", ipStr, err)
+			}
+			if got != 1 {
+				t.Errorf("%s: CountInRange(0.0.0.0/0) = %d, want 1", ipStr, got)
+			}
+			if got != trie.CountAll() {
+				t.Errorf("%s: CountInRange(0.0.0.0/0) = %d, want CountAll() = %d", ipStr, got, trie.CountAll())
+			}
+
+			// The same IP inserted twice counts as 2 requests.
+			trie.Insert(ip)
+			got, err = trie.CountInRange("0.0.0.0/0")
+			if err != nil {
+				t.Fatalf("%s twice: unexpected error: %v", ipStr, err)
+			}
+			if got != 2 {
+				t.Errorf("%s twice: CountInRange(0.0.0.0/0) = %d, want 2", ipStr, got)
+			}
 		}
 	})
 
