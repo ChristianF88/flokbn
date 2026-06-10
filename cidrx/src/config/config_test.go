@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1171,5 +1172,81 @@ func TestConfig_LoadWhitelistNonexistentFile(t *testing.T) {
 	_, err := cfg.LoadWhitelistCIDRs()
 	if err == nil {
 		t.Error("Expected error for nonexistent file, got nil")
+	}
+}
+
+func writeTestConfig(t *testing.T, content string) string {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "test_config.toml")
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write test config file: %v", err)
+	}
+	return configPath
+}
+
+func TestLoadConfig_LiveReadTimeout(t *testing.T) {
+	configPath := writeTestConfig(t, `
+[live]
+port = "8080"
+readTimeout = "250ms"
+
+[live.window_1]
+slidingWindowMaxTime = "1h"
+slidingWindowMaxSize = 100
+sleepBetweenIterations = 1
+clusterArgSets = [[100, 24, 32, 0.5]]
+useForJail = [true]
+`)
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+	if cfg.Live.ReadTimeout != 250*time.Millisecond {
+		t.Errorf("Expected Live.ReadTimeout 250ms, got %v", cfg.Live.ReadTimeout)
+	}
+	if got := cfg.GetReadTimeout(); got != 250*time.Millisecond {
+		t.Errorf("Expected GetReadTimeout() 250ms, got %v", got)
+	}
+	// readTimeout must be treated as a live config key, not a trie section.
+	if len(cfg.LiveTries) != 1 {
+		t.Errorf("Expected 1 live trie, got %d", len(cfg.LiveTries))
+	}
+}
+
+func TestGetReadTimeout_DefaultWhenUnset(t *testing.T) {
+	configPath := writeTestConfig(t, `
+[live]
+port = "8080"
+`)
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+	if got := cfg.GetReadTimeout(); got != DefaultLiveReadTimeout {
+		t.Errorf("Expected default read timeout %v, got %v", DefaultLiveReadTimeout, got)
+	}
+
+	// Nil Live section also falls back to the default.
+	empty := &Config{}
+	if got := empty.GetReadTimeout(); got != DefaultLiveReadTimeout {
+		t.Errorf("Expected default read timeout %v for nil Live, got %v", DefaultLiveReadTimeout, got)
+	}
+}
+
+func TestLoadConfig_InvalidReadTimeout(t *testing.T) {
+	configPath := writeTestConfig(t, `
+[live]
+port = "8080"
+readTimeout = "bogus"
+`)
+
+	_, err := LoadConfig(configPath)
+	if err == nil {
+		t.Fatal("Expected error for invalid readTimeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "readTimeout") {
+		t.Errorf("Expected error mentioning readTimeout, got: %v", err)
 	}
 }

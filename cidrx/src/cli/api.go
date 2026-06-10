@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -150,6 +151,57 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		return fmt.Errorf("no LiveTries configurations found")
 	}
 
+	ing, err := ingestor.NewTCPIngestor(
+		":"+cfg.Live.Port,
+		cfg.GetReadTimeout(), // read timeout: avoid client disconnects
+	)
+
+	if err != nil {
+		return fmt.Errorf("creating ingestor: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(stop)
+	go func() {
+		select {
+		case <-stop:
+			shutdownOutput := output.NewJSONOutput("live", time.Now())
+			shutdownOutput.AddWarning("info", "Received shutdown signal...", 0)
+			outputJSON(shutdownOutput)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	return runLiveLoop(ctx, ing, cfg, outputJSON)
+}
+
+// sleepOrDone sleeps for d, returning early when ctx is cancelled.
+func sleepOrDone(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// runLiveLoop is the context-cancellable core of live mode. emit receives
+// every JSON output the loop produces (production: outputJSON to stdout).
+// Cancelling ctx closes the ingestor, which makes the loop exit cleanly.
+func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config, emit func(*output.JSONOutput)) error {
+	if len(cfg.LiveTries) == 0 {
+		return fmt.Errorf("no LiveTries configurations found")
+	}
+
 	// Create sliding window instances - one per LiveTries entry
 	var windows []slidingWindowInstance
 	for name, slidingConfig := range cfg.LiveTries {
@@ -164,15 +216,6 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		})
 	}
 
-	ingestor, err := ingestor.NewTCPIngestor(
-		":"+cfg.Live.Port,
-		5*time.Second, // read timeout: avoid client disconnects
-	)
-
-	if err != nil {
-		return fmt.Errorf("creating ingestor: %w", err)
-	}
-
 	jailInstance, err := jail.FileToJail(cfg.GetJailFile())
 	if err != nil {
 		return fmt.Errorf("reading jail file: %w", err)
@@ -181,26 +224,28 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	// Output initial connection status as JSON
 	initOutput := output.NewJSONOutput("live", time.Now())
 	initOutput.AddWarning("info", "Waiting for Filebeat to connect...", 0)
-	outputJSON(initOutput)
+	emit(initOutput)
 
-	if err := ingestor.Accept(); err != nil {
+	if err := ing.Accept(); err != nil {
 		return fmt.Errorf("accepting connection: %w", err)
 	}
 
 	// Connection established
 	connectedOutput := output.NewJSONOutput("live", time.Now())
 	connectedOutput.AddWarning("info", "Filebeat connected", 0)
-	outputJSON(connectedOutput)
+	emit(connectedOutput)
 
-	// Graceful shutdown
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	// Cancellation watcher: closing the ingestor unblocks the loop below.
+	// Started only after Accept so ing's internal state is never written
+	// concurrently with Close.
+	loopDone := make(chan struct{})
+	defer close(loopDone)
 	go func() {
-		<-stop
-		shutdownOutput := output.NewJSONOutput("live", time.Now())
-		shutdownOutput.AddWarning("info", "Received shutdown signal...", 0)
-		outputJSON(shutdownOutput)
-		ingestor.Close()
+		select {
+		case <-ctx.Done():
+			ing.Close()
+		case <-loopDone:
+		}
 	}()
 
 	// Calculate maximum sleep time across all windows
@@ -215,20 +260,20 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		loopStart := time.Now()
 		jsonOutput := output.NewJSONOutput("live", loopStart)
 
-		batch, err := ingestor.ReadBatch()
+		batch, err := ing.ReadBatch()
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				continue
 			}
 			jsonOutput.AddError("read_batch", fmt.Sprintf("read error: %v", err), 1)
-			outputJSON(jsonOutput)
+			emit(jsonOutput)
 			break
 		}
 
 		if len(batch) == 0 {
-			if ingestor.IsClosed() {
+			if ing.IsClosed() {
 				jsonOutput.AddWarning("info", "Ingestor closed. Exiting loop.", 0)
-				outputJSON(jsonOutput)
+				emit(jsonOutput)
 				break
 			}
 			continue
@@ -342,10 +387,10 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		}
 
 		jsonOutput.UpdateDuration(loopStart)
-		outputJSON(jsonOutput)
+		emit(jsonOutput)
 
 		// Sleep using maximum sleep time across all windows
-		time.Sleep(time.Duration(maxSleepTime) * time.Second)
+		sleepOrDone(ctx, time.Duration(maxSleepTime)*time.Second)
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -77,12 +78,25 @@ func (r *Request) GetIPNet() net.IP {
 
 // --- TCP Ingestor using go-lumber v2 ---
 
+// Ingestor is the contract the live loop consumes. TCPIngestor is the
+// lumberjack/TCP implementation; CIDRX-037 will add a file-tailing one.
+type Ingestor interface {
+	Accept() error
+	ReadBatch() ([]Request, error)
+	IsClosed() bool
+	Close() error
+}
+
+var _ Ingestor = (*TCPIngestor)(nil)
+
 type TCPIngestor struct {
 	listener    net.Listener
 	readTimeout time.Duration // for server
 	events      chan *lj.Batch
 	server      *srv2.Server
 	closed      atomic.Bool
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 func NewTCPIngestor(addr string, readTimeout time.Duration) (*TCPIngestor, error) {
@@ -95,6 +109,12 @@ func NewTCPIngestor(addr string, readTimeout time.Duration) (*TCPIngestor, error
 		readTimeout: readTimeout,
 		events:      make(chan *lj.Batch, 1000),
 	}, nil
+}
+
+// Addr returns the listener address. Useful when listening on an ephemeral
+// port (e.g. "127.0.0.1:0" in tests).
+func (ing *TCPIngestor) Addr() net.Addr {
+	return ing.listener.Addr()
 }
 
 // Accept starts the lumberjack v2 Server.
@@ -231,10 +251,15 @@ func (ing *TCPIngestor) IsClosed() bool {
 	return ing.closed.Load()
 }
 
-// Close shuts down the server and listener.
+// Close shuts down the server and listener. It is idempotent: the underlying
+// lumberjack server panics on a second Close, so repeated calls (e.g. a
+// cancellation watcher plus a deferred cleanup) are collapsed into one.
 func (ing *TCPIngestor) Close() error {
-	if ing.server != nil {
-		ing.server.Close()
-	}
-	return ing.listener.Close()
+	ing.closeOnce.Do(func() {
+		if ing.server != nil {
+			ing.server.Close()
+		}
+		ing.closeErr = ing.listener.Close()
+	})
+	return ing.closeErr
 }

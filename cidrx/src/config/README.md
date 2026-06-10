@@ -317,7 +317,8 @@ useForJail = [true, false]
 
 ```toml
 [live]
-port = "8080"  # Required: Port to listen on
+port = "8080"        # Required: Port to listen on
+readTimeout = "5s"   # Optional: TCP read timeout (duration string, default "5s")
 ```
 
 #### Live Sliding Windows
