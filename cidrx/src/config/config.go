@@ -86,8 +86,13 @@ type StaticConfig struct {
 }
 
 type LiveConfig struct {
-	Port string `toml:"port"`
+	Port        string        `toml:"port"`
+	ReadTimeout time.Duration `toml:"readTimeout"`
 }
+
+// DefaultLiveReadTimeout is the TCP ingestor read timeout used when the
+// [live] section does not specify a readTimeout.
+const DefaultLiveReadTimeout = 5 * time.Second
 
 type Config struct {
 	Global      *GlobalConfig                 `toml:"global"`
@@ -140,11 +145,15 @@ func LoadConfig(configPath string) (*Config, error) {
 			}
 		case "live":
 			if liveMap, ok := value.(map[string]any); ok {
-				config.Live = parseLiveConfig(liveMap)
+				liveConfig, err := parseLiveConfig(liveMap)
+				if err != nil {
+					return nil, fmt.Errorf("parsing live config: %w", err)
+				}
+				config.Live = liveConfig
 				// Parse live tries from nested config
 				for subKey, subValue := range liveMap {
 					// Skip live configuration fields and only process trie configurations
-					if subKey != "port" && subKey != "slidingWindowMaxTime" && subKey != "slidingWindowMaxSize" && subKey != "sleepBetweenIterations" {
+					if subKey != "port" && subKey != "readTimeout" && subKey != "slidingWindowMaxTime" && subKey != "slidingWindowMaxSize" && subKey != "sleepBetweenIterations" {
 						if trieMap, ok := subValue.(map[string]any); ok {
 							trieConfig, err := parseSlidingTrieConfig(trieMap)
 							if err != nil {
@@ -210,12 +219,19 @@ func parseStaticConfig(m map[string]any) *StaticConfig {
 	return config
 }
 
-func parseLiveConfig(m map[string]any) *LiveConfig {
+func parseLiveConfig(m map[string]any) (*LiveConfig, error) {
 	config := &LiveConfig{}
 	if v, ok := m["port"].(string); ok {
 		config.Port = v
 	}
-	return config
+	if v, ok := m["readTimeout"].(string); ok {
+		duration, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid readTimeout %q: %w", v, err)
+		}
+		config.ReadTimeout = duration
+	}
+	return config, nil
 }
 
 // parseRegexFields extracts and sets regex strings from a TOML map.
@@ -356,6 +372,15 @@ func (c *Config) GetBanFile() string {
 		return c.Global.BanFile
 	}
 	return BanFile
+}
+
+// GetReadTimeout returns the configured live TCP read timeout, falling back
+// to DefaultLiveReadTimeout when unset.
+func (c *Config) GetReadTimeout() time.Duration {
+	if c.Live != nil && c.Live.ReadTimeout > 0 {
+		return c.Live.ReadTimeout
+	}
+	return DefaultLiveReadTimeout
 }
 
 func (c *Config) ValidateLive() error {
