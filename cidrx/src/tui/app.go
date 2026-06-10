@@ -55,8 +55,7 @@ type App struct {
 	configPath string
 
 	// Performance optimization components
-	visualizationCache *VisualizationCache // Pre-computed visualization data
-	fastCache          *FastTrieCache      // RAM-based cache for instant trie switching
+	fastCache *FastTrieCache // RAM-based cache for instant trie switching
 
 	// UI caching for performance
 	cachedSummaryTexts    map[int]string // Cache summary text per trie
@@ -147,7 +146,6 @@ func NewAppFromConfig(cfg *config.Config, configPath string) *App {
 	}
 
 	// Initialize performance optimization components
-	app.visualizationCache = NewVisualizationCache()
 	app.fastCache = NewFastTrieCache()
 
 	app.setupUI()
@@ -378,6 +376,13 @@ func (a *App) setupUI() {
 
 		// Handle navigation in visualization view
 		if a.analysisComplete.Load() && frontPageName == "visualization" {
+			switch event.Rune() {
+			case 'l', 'L':
+				if a.visualizationView != nil {
+					a.visualizationView.ToggleIntensityScale()
+				}
+				return nil
+			}
 			switch event.Key() {
 			case tcell.KeyLeft:
 				if a.visualizationView != nil {
@@ -1164,6 +1169,15 @@ func (a *App) updateVisualizationFast(trieIndex int) {
 	// Update visualization with cached data instantly
 	a.visualizationView.trafficData = trafficMatrix
 	a.visualizationView.maxTraffic = maxTraffic
+
+	// Seed the clustered-overlay grid from the fast cache so the heatmap render
+	// does not have to re-scan requests. Keyed by (trie, current cluster set).
+	if grid, ok := a.fastCache.GetClusteredData(trieIndex, a.visualizationView.currentClusterSet); ok {
+		a.visualizationView.clusteredData = grid
+		if a.visualizationView.cachedClusteredData != nil {
+			a.visualizationView.cachedClusteredData[trieIndex*1000+a.visualizationView.currentClusterSet] = grid
+		}
+	}
 
 	// Get current cluster set and render with cached visualization if available
 	if cachedRender, cacheHit := a.fastCache.GetVisualizationRender(trieIndex, a.visualizationView.currentClusterSet); cacheHit {
