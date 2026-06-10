@@ -24,7 +24,17 @@ type FastTrieCache struct {
 	// Visualization data for instant switching
 	trafficMatrixes map[int][256][256]uint32 // Traffic data per trie
 	maxTraffics     map[int]uint32           // Max traffic per trie
-	vizRenderCache  map[int]map[int]string   // Visualization render cache per trie per cluster set
+	// Clustered-traffic grids per trie per cluster set. clusteredMatrixes[trie][set][a][b]
+	// counts requests in /16 a.b whose full IP is inside a detected cluster
+	// range of that (trie, set). Used for the traffic-capture overlay.
+	clusteredMatrixes map[int]map[int][256][256]uint32
+	vizRenderCache    map[int]map[int]string // Visualization render cache per trie per cluster set
+
+	// Ground-truth traffic over ALL parsed requests, identical for every trie.
+	// Computed once on the first preProcessTrafficData call.
+	globalTraffic      [256][256]uint32
+	globalMaxTraffic   uint32
+	globalTrafficReady bool
 
 	// Metadata
 	totalTries    int
@@ -39,14 +49,15 @@ type FastTrieCache struct {
 // NewFastTrieCache creates a new fast trie cache
 func NewFastTrieCache() *FastTrieCache {
 	return &FastTrieCache{
-		legacyData:      make(map[int]*output.JSONOutput),
-		summaryTexts:    make(map[int]string),
-		clusterTexts:    make(map[int]string),
-		cidrTexts:       make(map[int]string),
-		diagnosticTexts: make(map[int]string),
-		trafficMatrixes: make(map[int][256][256]uint32),
-		maxTraffics:     make(map[int]uint32),
-		vizRenderCache:  make(map[int]map[int]string),
+		legacyData:        make(map[int]*output.JSONOutput),
+		summaryTexts:      make(map[int]string),
+		clusterTexts:      make(map[int]string),
+		cidrTexts:         make(map[int]string),
+		diagnosticTexts:   make(map[int]string),
+		trafficMatrixes:   make(map[int][256][256]uint32),
+		maxTraffics:       make(map[int]uint32),
+		clusteredMatrixes: make(map[int]map[int][256][256]uint32),
+		vizRenderCache:    make(map[int]map[int]string),
 	}
 }
 
@@ -73,7 +84,7 @@ func (ftc *FastTrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOut
 			ftc.preRenderTrieTexts(trieIndex, legacyData, app)
 
 			// 3. Pre-process traffic data for visualization
-			ftc.preProcessTrafficData(trieIndex, requests, multiResult.Tries[trieIndex], app)
+			ftc.preProcessTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
 
 			// 4. Pre-render visualization for all cluster sets (disabled for now to avoid nil pointer issues)
 			// ftc.preRenderVisualization(trieIndex, legacyData, app)
@@ -102,7 +113,7 @@ func (ftc *FastTrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResul
 		ftc.preRenderTrieTexts(trieIndex, legacyData, app)
 
 		// Pre-process traffic data for visualization
-		ftc.preProcessTrafficData(trieIndex, requests, multiResult.Tries[trieIndex], app)
+		ftc.preProcessTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
 
 		return true
 	}
@@ -131,64 +142,76 @@ func (ftc *FastTrieCache) preRenderTrieTexts(trieIndex int, legacyData *output.J
 	app.mu.Unlock()
 }
 
-// preProcessTrafficData pre-processes traffic data for visualization
-func (ftc *FastTrieCache) preProcessTrafficData(trieIndex int, requests []ingestor.Request, trieResult output.TrieResult, app *App) {
-	var trafficMatrix [256][256]uint32
-	var maxTraffic uint32
-
-	// Apply trie-specific filters
-	filteredRequests := ftc.getTrieSpecificRequests(requests, trieResult, app)
-
-	// Build traffic matrix
-	for _, req := range filteredRequests {
-		ip := req.GetIPNet().To4()
-		if ip == nil {
-			continue
+// preProcessTrafficData pre-processes traffic data for visualization.
+// The traffic matrix is ground truth over ALL parsed requests — identical for
+// every trie — so it is computed once and reused. Only the clustered grids are
+// trie-specific (they depend on the trie's detected cluster ranges).
+func (ftc *FastTrieCache) preProcessTrafficData(trieIndex int, requests []ingestor.Request, trieResult output.TrieResult) {
+	if !ftc.globalTrafficReady {
+		var m [256][256]uint32
+		var maxTraffic uint32
+		for i := range requests {
+			ip := requests[i].IPUint32
+			if ip == 0 {
+				continue
+			}
+			a := byte(ip >> 24)
+			b := byte(ip >> 16)
+			m[a][b]++
+			if m[a][b] > maxTraffic {
+				maxTraffic = m[a][b]
+			}
 		}
-		a, b := ip[0], ip[1]
-		trafficMatrix[a][b]++
-		if trafficMatrix[a][b] > maxTraffic {
-			maxTraffic = trafficMatrix[a][b]
+		ftc.globalTraffic = m
+		ftc.globalMaxTraffic = maxTraffic
+		ftc.globalTrafficReady = true
+	}
+	ftc.trafficMatrixes[trieIndex] = ftc.globalTraffic
+	ftc.maxTraffics[trieIndex] = ftc.globalMaxTraffic
+
+	// Pre-parse each cluster set's detected ranges once into sorted intervals so
+	// membership is an allocation-free binary search in the hot loop. One
+	// clustered grid is accumulated per cluster set in a single pass.
+	intervalsPerSet := make([]*clusterIntervals, len(trieResult.Data))
+	clusteredPerSet := make([]*[256][256]uint32, len(trieResult.Data))
+	for s := range trieResult.Data {
+		intervalsPerSet[s] = buildClusterIntervals(&trieResult.Data[s])
+		clusteredPerSet[s] = &[256][256]uint32{}
+	}
+
+	if len(intervalsPerSet) > 0 {
+		for i := range requests {
+			ip := requests[i].IPUint32
+			if ip == 0 {
+				continue
+			}
+			a := byte(ip >> 24)
+			b := byte(ip >> 16)
+			for s := range intervalsPerSet {
+				if intervalsPerSet[s].Contains(ip) {
+					clusteredPerSet[s][a][b]++
+				}
+			}
 		}
 	}
 
-	ftc.trafficMatrixes[trieIndex] = trafficMatrix
-	ftc.maxTraffics[trieIndex] = maxTraffic
+	setGrids := make(map[int][256][256]uint32, len(clusteredPerSet))
+	for s := range clusteredPerSet {
+		setGrids[s] = *clusteredPerSet[s]
+	}
+	ftc.clusteredMatrixes[trieIndex] = setGrids
 }
 
-// getTrieSpecificRequests filters requests for a specific trie
-func (ftc *FastTrieCache) getTrieSpecificRequests(requests []ingestor.Request, trieResult output.TrieResult, app *App) []ingestor.Request {
-	// If no config or filters, return all requests
-	if app.cfg == nil {
-		return requests
+// GetClusteredData returns the cached clustered-traffic grid for a (trie,
+// cluster set) pair, if present.
+func (ftc *FastTrieCache) GetClusteredData(trieIndex, clusterSetIndex int) (grid [256][256]uint32, exists bool) {
+	ftc.mu.RLock()
+	defer ftc.mu.RUnlock()
+
+	if setGrids, ok := ftc.clusteredMatrixes[trieIndex]; ok {
+		grid, exists = setGrids[clusterSetIndex]
 	}
-
-	// Find the trie config
-	trieConfig := app.cfg.StaticTries[trieResult.Name]
-	if trieConfig == nil {
-		return requests
-	}
-
-	// Apply filters
-	var filteredRequests []ingestor.Request
-	for _, r := range requests {
-		// Apply time filtering
-		if trieConfig.StartTime != nil && r.Timestamp.Before(*trieConfig.StartTime) {
-			continue
-		}
-		if trieConfig.EndTime != nil && r.Timestamp.After(*trieConfig.EndTime) {
-			continue
-		}
-
-		// Apply regex filtering (if ShouldIncludeRequest method exists)
-		if !trieConfig.ShouldIncludeRequest(r) {
-			continue
-		}
-
-		filteredRequests = append(filteredRequests, r)
-	}
-
-	return filteredRequests
+	return grid, exists
 }
 
 // GetLegacyData returns cached legacy data for instant access
@@ -295,7 +318,11 @@ func (ftc *FastTrieCache) Clear() {
 	ftc.diagnosticTexts = make(map[int]string)
 	ftc.trafficMatrixes = make(map[int][256][256]uint32)
 	ftc.maxTraffics = make(map[int]uint32)
+	ftc.clusteredMatrixes = make(map[int]map[int][256][256]uint32)
 	ftc.vizRenderCache = make(map[int]map[int]string)
+	ftc.globalTraffic = [256][256]uint32{}
+	ftc.globalMaxTraffic = 0
+	ftc.globalTrafficReady = false
 
 	ftc.totalTries = 0
 	ftc.cacheComplete = false

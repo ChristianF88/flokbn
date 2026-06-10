@@ -3,9 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
-	"net"
 	"strings"
-	"time"
 
 	"github.com/ChristianF88/cidrx/ingestor"
 	"github.com/ChristianF88/cidrx/output"
@@ -14,22 +12,26 @@ import (
 
 // VisualizationView represents the 2D heatmap visualization
 type VisualizationView struct {
-	app                 *App
-	view                *tview.TextView
-	trafficData         [256][256]uint32
-	maxTraffic          uint32
-	requests            []ingestor.Request
-	currentClusterSet   int
-	totalClusterSets    int
-	needsTrafficRefresh bool // Flag to track if traffic data needs re-processing
+	app               *App
+	view              *tview.TextView
+	trafficData       [256][256]uint32
+	clusteredData     [256][256]uint32 // Per-/16 count of requests inside detected cluster ranges (current set)
+	maxTraffic        uint32
+	requests          []ingestor.Request
+	currentClusterSet int
+	totalClusterSets  int
+	blockScale        int  // /16 bins per display-cell side (0 → default 8)
+	logScale          bool // brightness mapping: false = linear, true = log
 
 	// Legacy caching for performance (kept for compatibility)
 	cachedTrafficData map[int][256][256]uint32 // Cache traffic data per trie
 	cachedMaxTraffic  map[int]uint32           // Cache max traffic per trie
 	cachedRenderText  map[int]string           // Cache rendered visualization text per trie
 
-	// New optimized caching
-	cache *VisualizationCache // Pre-computed visualization data
+	// Cache of clustered-traffic grids keyed by trieIndex*1000+clusterSet.
+	// trafficData is per-trie (same across cluster sets); clusteredData differs
+	// per cluster set because it depends on that set's detected ranges.
+	cachedClusteredData map[int][256][256]uint32
 }
 
 // NewVisualizationView creates a new visualization view
@@ -48,18 +50,17 @@ func (a *App) NewVisualizationView() *VisualizationView {
 		currentClusterSet: 0,
 		totalClusterSets:  totalClusterSets,
 		// Initialize legacy cache maps
-		cachedTrafficData: make(map[int][256][256]uint32),
-		cachedMaxTraffic:  make(map[int]uint32),
-		cachedRenderText:  make(map[int]string),
-		// Initialize optimized cache
-		cache: NewVisualizationCache(),
+		cachedTrafficData:   make(map[int][256][256]uint32),
+		cachedMaxTraffic:    make(map[int]uint32),
+		cachedRenderText:    make(map[int]string),
+		cachedClusteredData: make(map[int][256][256]uint32),
 	}
 
 	v.view = tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
 		SetWrap(false)
-	v.view.SetBorder(true).SetTitle(" 2D Traffic Visualization (/16 Heatmap) ").SetTitleAlign(tview.AlignCenter)
+	v.view.SetBorder(true).SetTitle(" 2D Traffic Visualization (/16 bins, 32×32 grid) ").SetTitleAlign(tview.AlignCenter)
 
 	return v
 }
@@ -76,7 +77,7 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 		for i := 0; i < v.totalClusterSets; i++ {
 			v.currentClusterSet = i
 			renderText := v.generateRenderText()
-			v.cachedRenderText[i] = renderText
+			v.cachedRenderText[v.renderCacheKey(0, i)] = renderText
 		}
 		v.currentClusterSet = 0 // Reset to first
 		return
@@ -105,7 +106,7 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 		// Pre-cache render text for all cluster sets in this trie
 		for clusterSet := 0; clusterSet < v.totalClusterSets; clusterSet++ {
 			v.currentClusterSet = clusterSet
-			cacheKey := trieIndex*1000 + clusterSet // Composite key: trie + cluster set
+			cacheKey := v.renderCacheKey(trieIndex, clusterSet)
 			renderText := v.generateRenderText()
 			v.cachedRenderText[cacheKey] = renderText
 		}
@@ -176,8 +177,7 @@ func (v *VisualizationView) updateMetadataOnly() {
 	// Only update cluster set count, don't re-process traffic data
 	if v.app.jsonResult != nil {
 		v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
-		v.currentClusterSet = 0      // Reset to first cluster set
-		v.needsTrafficRefresh = true // Mark that traffic data needs refreshing
+		v.currentClusterSet = 0 // Reset to first cluster set
 		// Don't call ProcessTrafficData or Render - too expensive
 	}
 }
@@ -201,83 +201,104 @@ func (v *VisualizationView) updateTrafficDataCached() {
 	}
 }
 
-// ProcessTrafficData processes the requests and builds the traffic heatmap
+// ProcessTrafficData processes the requests and builds the traffic heatmap and
+// the clustered-traffic overlay grid for the current cluster set in a single
+// pass. trafficData[a][b] counts all requests in /16 a.b; clusteredData[a][b]
+// counts only those whose full IP falls inside a detected cluster range of the
+// current set. The overlay dot then encodes clustered/total per cell.
 func (v *VisualizationView) ProcessTrafficData(requests []ingestor.Request) {
 	v.requests = requests
 	v.maxTraffic = 0
 
-	// Reset traffic data
+	// Reset both grids.
 	for i := range v.trafficData {
-		for j := range v.trafficData[i] {
-			v.trafficData[i][j] = 0
-		}
+		v.trafficData[i] = [256]uint32{}
+		v.clusteredData[i] = [256]uint32{}
 	}
 
-	// For multi-trie mode, filter requests by current trie's detection ranges
-	filteredRequests := v.getTrieSpecificRequests(requests)
+	// Pre-parse the current cluster set's ranges once into sorted intervals so
+	// membership is an allocation-free binary search in the hot loop.
+	intervals := buildClusterIntervals(v.getCurrentClusterSet())
 
-	// Count traffic by /16 ranges (first.second octets)
-	for _, req := range filteredRequests {
-		ip := req.GetIPNet().To4()
-		if ip == nil {
+	// Count traffic by /16 ranges (first.second octets) over ALL parsed
+	// requests — the matrix is ground truth and identical across tries; only
+	// the clustered overlay differs per (trie, cluster set). Clustered traffic
+	// uses the full 32-bit IP membership test.
+	for i := range requests {
+		req := &requests[i]
+		ip := req.IPUint32
+		if ip == 0 {
 			continue
 		}
-		a, b := ip[0], ip[1]
+		a := byte(ip >> 24)
+		b := byte(ip >> 16)
 		v.trafficData[a][b]++
 		if v.trafficData[a][b] > v.maxTraffic {
 			v.maxTraffic = v.trafficData[a][b]
 		}
+		if intervals.Contains(ip) {
+			v.clusteredData[a][b]++
+		}
 	}
 }
 
-// getTrieSpecificRequests filters requests to show only those relevant to current trie
-func (v *VisualizationView) getTrieSpecificRequests(requests []ingestor.Request) []ingestor.Request {
-	// In legacy mode, show all traffic
-	if v.app.cfg == nil || v.app.multiTrieResult == nil {
-		return requests
+// renderCacheKey returns the render-text cache key for a (trie, cluster set)
+// pair under the current brightness mode. Linear and log renders differ, so
+// log mode is offset into its own key space.
+func (v *VisualizationView) renderCacheKey(trie, set int) int {
+	key := trie*1000 + set
+	if v.logScale {
+		key += 1_000_000
 	}
+	return key
+}
 
-	// In multi-trie mode, we need to apply the same filters as the current trie
-	// to show only the traffic that would be included in this trie's analysis
-	if v.app.currentTrie >= len(v.app.multiTrieResult.Tries) {
-		return requests
+// clusteredCacheKey returns the composite cache key for the clustered grid of
+// the current (trie, cluster set) pair. Matches the trie*1000+set scheme used
+// for render-text caching.
+func (v *VisualizationView) clusteredCacheKey() int {
+	trie := 0
+	if v.app != nil {
+		trie = v.app.currentTrie
 	}
+	return trie*1000 + v.currentClusterSet
+}
 
-	currentTrieData := v.app.multiTrieResult.Tries[v.app.currentTrie]
-	trieConfig := v.app.cfg.StaticTries[currentTrieData.Name]
-	if trieConfig == nil {
-		return requests
-	}
-
-	// Apply the same filters as the trie analysis
-	var filteredRequests []ingestor.Request
-	var startTime, endTime time.Time
-
-	if trieConfig.StartTime != nil {
-		startTime = *trieConfig.StartTime
-	}
-	if trieConfig.EndTime != nil {
-		endTime = *trieConfig.EndTime
-	}
-
-	for _, r := range requests {
-		// Apply time filtering
-		if !startTime.IsZero() && r.Timestamp.Before(startTime) {
-			continue
+// ensureClusteredData makes v.clusteredData reflect the current (trie, cluster
+// set). It reuses the cached per-(trie,set) clustered grid when available;
+// otherwise it does a single clustered-only pass over the (already filtered)
+// requests and caches the result. trafficData is NOT recomputed here — it is
+// the same for a trie across all cluster sets.
+func (v *VisualizationView) ensureClusteredData() {
+	key := v.clusteredCacheKey()
+	if v.cachedClusteredData != nil {
+		if cached, ok := v.cachedClusteredData[key]; ok {
+			v.clusteredData = cached
+			return
 		}
-		if !endTime.IsZero() && r.Timestamp.After(endTime) {
-			continue
-		}
-
-		// Apply regex filtering
-		if !trieConfig.ShouldIncludeRequest(r) {
-			continue
-		}
-
-		filteredRequests = append(filteredRequests, r)
 	}
 
-	return filteredRequests
+	// Reset and rebuild clustered grid for the current cluster set.
+	for i := range v.clusteredData {
+		v.clusteredData[i] = [256]uint32{}
+	}
+
+	intervals := buildClusterIntervals(v.getCurrentClusterSet())
+	if !intervals.empty() {
+		for i := range v.requests {
+			ip := v.requests[i].IPUint32
+			if ip == 0 {
+				continue
+			}
+			if intervals.Contains(ip) {
+				v.clusteredData[byte(ip>>24)][byte(ip>>16)]++
+			}
+		}
+	}
+
+	if v.cachedClusteredData != nil {
+		v.cachedClusteredData[key] = v.clusteredData
+	}
 }
 
 // RenderCached generates the 2D visualization using optimized cache when possible
@@ -285,7 +306,7 @@ func (v *VisualizationView) RenderCached() {
 	// Use legacy caching
 	if v.app.cfg != nil {
 		currentTrie := v.app.currentTrie
-		cacheKey := currentTrie*1000 + v.currentClusterSet // Composite key: trie + cluster set
+		cacheKey := v.renderCacheKey(currentTrie, v.currentClusterSet)
 
 		if cachedText, exists := v.cachedRenderText[cacheKey]; exists {
 			// Use cached render text
@@ -294,7 +315,7 @@ func (v *VisualizationView) RenderCached() {
 		}
 
 		// Generate and cache the render text
-		renderText := v.generateRenderTextOptimized()
+		renderText := v.generateRenderText()
 		v.cachedRenderText[cacheKey] = renderText
 		v.view.SetText(renderText)
 	} else {
@@ -309,21 +330,13 @@ func (v *VisualizationView) Render() {
 	v.view.SetText(renderText)
 }
 
-// generateRenderTextOptimized creates optimized render text using cache
-func (v *VisualizationView) generateRenderTextOptimized() string {
-	// Use the new optimized cache when possible
-	return v.generateRenderText()
-}
-
 // generateRenderText creates the render text (for caching)
 func (v *VisualizationView) generateRenderText() string {
 	var content strings.Builder
 
-	// Always show header with cluster set info and traffic scope
+	// The matrix always shows ALL parsed traffic (ground truth, identical
+	// across tries); only the cluster overlay is trie/set-specific.
 	trafficScope := "All Traffic"
-	if v.app.cfg != nil {
-		trafficScope = "Trie-Specific Traffic"
-	}
 
 	if v.totalClusterSets > 0 && v.currentClusterSet < v.totalClusterSets {
 		cluster := v.getCurrentClusterSet()
@@ -343,37 +356,40 @@ func (v *VisualizationView) generateRenderText() string {
 		content.WriteString(fmt.Sprintf("[white::b]Traffic Heatmap (/16 ranges) - No cluster sets - %s[white::-]\n", trafficScope))
 	}
 
-	content.WriteString("[dim]Legend: Traffic intensity - 10% resolution, black → white | [red]Red markers[white] = detected ranges[white]\n")
-	content.WriteString("[dim]Navigate: ←→ change cluster set, ↑↓ scroll, 'r' results, 'q' quit[white]\n\n")
+	scale := v.effectiveScale()
+	grid := 256 / scale
+	content.WriteString(fmt.Sprintf("[dim]Grid: %d×%d cells - 1 cell = %d×%d /16 bins[white]\n", grid, grid, scale, scale))
+	content.WriteString(fmt.Sprintf("[dim]Legend: cell brightness = requests in cell (%s, 100%% = busiest cell) | [red]Red dot[white] = share of cell's requests inside detected cluster ranges[white]\n", v.scaleName()))
+	content.WriteString("[dim]Navigate: ←→ change cluster set, 'l' linear/log scale, ↑↓ scroll, 'r' results, 'q' quit[white]\n\n")
 
 	if v.maxTraffic == 0 {
 		content.WriteString("[yellow]Loading traffic data...[white]\n")
 		content.WriteString("[dim]Traffic data will appear once analysis is complete.[white]\n")
 	} else {
-		// Build the heatmap visualization
+		// Ensure the clustered-traffic overlay grid matches the current
+		// (trie, cluster set) before rendering the heatmap.
+		v.ensureClusteredData()
 		v.renderHeatmap(&content)
 	}
 
 	return content.String()
 }
 
-// renderHeatmap creates the ASCII-based heatmap
+// renderHeatmap creates the ASCII-based heatmap. Cell brightness encodes the
+// cell's TOTAL requests (sum of its scale×scale /16 bins), normalized against
+// the busiest cell on the map (= 100% = white); the red dot encodes the share
+// of the cell's requests inside detected cluster ranges.
 func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
-	// Create a compact visualization - show every 8th value for overview
-	scale := 8 // More compact view to avoid scrolling
+	// Each display cell aggregates a scale×scale block of /16 bins. scale=8
+	// keeps the 32×32 grid compact enough to avoid scrolling.
+	scale := v.effectiveScale()
 
-	// First pass: calculate all block traffic to find max block value
-	var maxBlockTraffic uint32
+	// First pass: the busiest cell total is the 100% brightness reference.
+	var maxCellTraffic uint32
 	for a := 0; a < 256; a += scale {
 		for b := 0; b < 256; b += scale {
-			var blockTraffic uint32
-			for aa := a; aa < a+scale && aa < 256; aa++ {
-				for bb := b; bb < b+scale && bb < 256; bb++ {
-					blockTraffic += v.trafficData[aa][bb]
-				}
-			}
-			if blockTraffic > maxBlockTraffic {
-				maxBlockTraffic = blockTraffic
+			if cellTraffic, _ := blockStats(&v.trafficData, &v.clusteredData, a, b, scale); cellTraffic > maxCellTraffic {
+				maxCellTraffic = cellTraffic
 			}
 		}
 	}
@@ -403,34 +419,26 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 		}
 
 		for a := 0; a < 256; a += scale {
-			// Sum traffic in this 8x8 block for better representation
-			var blockTraffic uint32
-			for aa := a; aa < a+scale && aa < 256; aa++ {
-				for bb := b; bb < b+scale && bb < 256; bb++ {
-					blockTraffic += v.trafficData[aa][bb]
-				}
-			}
+			// Sum the cell's traffic and clustered requests.
+			cellTraffic, cellClustered := blockStats(&v.trafficData, &v.clusteredData, a, b, scale)
 
-			// Check if this block contains or is part of a clustered range (optimized)
-			rangeMarker := v.getRangeMarkerOptimized(a, b, scale)
+			// Overlay dot encodes the share of THIS cell's requests that fall
+			// inside detected cluster ranges (traffic-capture ratio), not
+			// address-space geometry. Bright cell + strong dot = traffic is
+			// flagged; bright cell + no dot = traffic NOT captured.
+			dotChar := getRatioMarker(ratioOf(cellClustered, cellTraffic))
 
-			if blockTraffic == 0 {
-				if rangeMarker != "" {
-					// Red dot on black background for no traffic, size based on coverage
-					dotChar := strings.TrimSpace(rangeMarker) // Extract just the dot character
-					content.WriteString(fmt.Sprintf("[black]█[red]%s[black]█[white]", dotChar))
-				} else {
-					// Black for no traffic - use triple width (3 characters)
-					content.WriteString("[black]███[white]")
-				}
+			if cellTraffic == 0 {
+				// Black for no traffic - use triple width (3 characters)
+				content.WriteString("[black]███[white]")
 			} else {
-				// Calculate intensity based on block traffic relative to max block
-				intensity := float64(blockTraffic) / float64(maxBlockTraffic)
+				// Intensity of the cell total relative to the busiest cell,
+				// mapped linearly or logarithmically per the current mode.
+				intensity := v.intensityOf(cellTraffic, maxCellTraffic)
 				color, char := v.getTrafficColorAndChar(intensity)
 
-				if rangeMarker != "" {
+				if dotChar != "" {
 					// Red dot overlaid on traffic color, preserving background
-					dotChar := strings.TrimSpace(rangeMarker) // Extract just the dot character
 					content.WriteString(fmt.Sprintf("[%s]%s[red]%s[%s]%s[white]", color, char, dotChar, color, char))
 				} else {
 					// Normal traffic color
@@ -452,21 +460,39 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 	// Add axis label
 	content.WriteString("B\n")
 
-	// Footer with color legend showing 10% intervals
-	content.WriteString("\n[dim]Traffic Intensity (10% steps):[white]\n")
-	content.WriteString("[black]███[white]=0% ")
-	content.WriteString("[#202020]███[white]=0-10% ")
-	content.WriteString("[#303030]███[white]=10-20% ")
-	content.WriteString("[#404040]███[white]=20-30% ")
-	content.WriteString("[#505050]███[white]=30-40%\n")
-	content.WriteString("[#606060]███[white]=40-50% ")
-	content.WriteString("[#808080]███[white]=50-60% ")
-	content.WriteString("[#A0A0A0]███[white]=60-70% ")
-	content.WriteString("[#C0C0C0]███[white]=70-80% ")
-	content.WriteString("[#E0E0E0]███[white]=80-90% ")
-	content.WriteString("[white]███[white]=90-100%\n")
+	// Footer with color legend. In linear mode the 10% steps speak for
+	// themselves; in log mode percentages would mislead, so each grey step is
+	// labelled with the request count it starts at (inverse of the log map).
+	rampColors := [...]string{"black", "#202020", "#303030", "#404040", "#505050", "#606060", "#808080", "#A0A0A0", "#C0C0C0", "#E0E0E0", "white"}
+	if v.logScale {
+		content.WriteString("\n[dim]Traffic Intensity (log scale, step label = requests per cell at lower bound):[white]\n")
+		for i, color := range rampColors {
+			if i == 0 {
+				content.WriteString("[black]███[white]=0 ")
+			} else {
+				content.WriteString(fmt.Sprintf("[%s]███[white]≥%s ", color, output.FormatNumber(int(intensityThresholdCount(float64(i-1)/10, maxCellTraffic)))))
+			}
+			if i == 4 {
+				content.WriteString("\n")
+			}
+		}
+		content.WriteString(fmt.Sprintf("(max %s)\n", output.FormatNumber(int(maxCellTraffic))))
+	} else {
+		content.WriteString("\n[dim]Traffic Intensity (linear, 100% = busiest cell):[white]\n")
+		for i, color := range rampColors {
+			if i == 0 {
+				content.WriteString("[black]███[white]=0% ")
+			} else {
+				content.WriteString(fmt.Sprintf("[%s]███[white]=%d-%d%% ", color, (i-1)*10, i*10))
+			}
+			if i == 4 {
+				content.WriteString("\n")
+			}
+		}
+		content.WriteString("\n")
+	}
 	content.WriteString("\n[dim]Axes: A=First octet (horizontal), B=Second octet (vertical)[white]\n")
-	content.WriteString("[dim]Range Markers: [red]●[white]=full coverage, [red]•[white]=partial, [red]·[white]=minimal[white]\n")
+	content.WriteString("[dim]Overlay dot = share of cell's requests captured by clusters: [red]●[white]≥80%, [red]•[white]≥20%, [red]·[white]>0%, none=0%[white]\n")
 
 	// Show current cluster set ranges
 	if v.totalClusterSets > 0 && v.currentClusterSet < v.totalClusterSets {
@@ -507,143 +533,84 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 	}
 }
 
-// getRangeMarkerOptimized uses cache for fast marker lookup
-func (v *VisualizationView) getRangeMarkerOptimized(a, b, scale int) string {
-	if v.totalClusterSets == 0 || v.currentClusterSet >= v.totalClusterSets {
-		return ""
-	}
-
-	// Get current cluster set
-	clusterSet := v.getCurrentClusterSet()
-	if clusterSet == nil {
-		return ""
-	}
-
-	// Try to use cached visual block if cache is available
-	if v.cache != nil {
-		blockKey := BlockKey{A: a, B: b, Scale: scale}
-		if visualBlock := v.cache.GetVisualBlock(clusterSet, blockKey); visualBlock != nil {
-			return visualBlock.Marker
+// blockStats sums traffic and clustered requests over the scale x scale block
+// of /16 bins starting at (aStart, bStart) — the totals of one display cell.
+// Pointer params avoid copying the 256x256 arrays.
+func blockStats(traffic, clustered *[256][256]uint32, aStart, bStart, scale int) (cellTraffic, cellClustered uint32) {
+	for aa := aStart; aa < aStart+scale && aa < 256; aa++ {
+		for bb := bStart; bb < bStart+scale && bb < 256; bb++ {
+			cellTraffic += traffic[aa][bb]
+			cellClustered += clustered[aa][bb]
 		}
 	}
-
-	// Fallback to computation
-	return v.getRangeMarker(a, b, scale)
+	return cellTraffic, cellClustered
 }
 
-// getRangeMarker determines what marker to show for clustered ranges (legacy)
-func (v *VisualizationView) getRangeMarker(a, b, scale int) string {
-	if v.totalClusterSets == 0 || v.currentClusterSet >= v.totalClusterSets {
-		return ""
+// effectiveScale returns the /16-bins-per-cell-side used for rendering.
+func (v *VisualizationView) effectiveScale() int {
+	if v.blockScale > 0 {
+		return v.blockScale
 	}
-
-	// Get current cluster set
-	clusterSet := v.getCurrentClusterSet()
-	if clusterSet == nil {
-		return ""
-	}
-
-	for _, cidrRange := range clusterSet.MergedRanges {
-		_, ipNet, err := net.ParseCIDR(cidrRange.CIDR)
-		if err != nil {
-			continue
-		}
-
-		// Check if this block overlaps with the CIDR range
-		marker := v.getBlockMarker(a, b, scale, ipNet)
-		if marker != "" {
-			return marker
-		}
-	}
-
-	return ""
+	return 8
 }
 
-// getBlockMarker determines the marker for a block based on CIDR coverage
-func (v *VisualizationView) getBlockMarker(blockA, blockB, scale int, ipNet *net.IPNet) string {
-	// Check if the CIDR range has any overlap with this block's IP space
-	blockOverlaps := v.cidrOverlapsBlock(blockA, blockB, scale, ipNet)
-
-	if !blockOverlaps {
-		return ""
+// scaleName names the current brightness mapping for legend text.
+func (v *VisualizationView) scaleName() string {
+	if v.logScale {
+		return "log scale"
 	}
-
-	// Calculate coverage percentage of this block by the CIDR range
-	coverage := v.calculateBlockCoverage(blockA, blockB, scale, ipNet)
-
-	// Return different dot sizes based on coverage
-	return v.getDotSize(coverage)
+	return "linear"
 }
 
-// calculateBlockCoverage returns the max of the A-axis and B-axis overlap fraction
-func (v *VisualizationView) calculateBlockCoverage(blockA, blockB, scale int, ipNet *net.IPNet) float64 {
-	// 1) compute network start & broadcast IPs
-	netIP := ipNet.IP.To4()
-	mask := ipNet.Mask
-	broadcast := make(net.IP, 4)
-	for i := 0; i < 4; i++ {
-		broadcast[i] = netIP[i] | ^mask[i]
+// intensityOf maps a display cell's request total to [0,1] relative to the
+// busiest cell on the map. Linear by default; in log mode log1p(x)/log1p(max),
+// which keeps the endpoints (0 → 0, max → 1) and redistributes the middle.
+func (v *VisualizationView) intensityOf(traffic, maxCellTraffic uint32) float64 {
+	if maxCellTraffic == 0 {
+		return 0
 	}
-
-	// 2) extract the 1st & 2nd-octet intervals of the CIDR
-	netStartA, netStartB := int(netIP[0]), int(netIP[1])
-	netEndA, netEndB := int(broadcast[0]), int(broadcast[1])
-
-	// 3) block’s octet interval
-	blockEndA := blockA + scale - 1
-	blockEndB := blockB + scale - 1
-
-	// 4) compute 1-D overlap lengths
-	overlapALen := max(0, min(blockEndA, netEndA)-max(blockA, netStartA)+1)
-	overlapBLen := max(0, min(blockEndB, netEndB)-max(blockB, netStartB)+1)
-
-	// 5) fractional coverage on each axis
-	covA := float64(overlapALen) / float64(scale)
-	covB := float64(overlapBLen) / float64(scale)
-
-	// 6) use the bigger one for your dot size
-	return math.Max(covA, covB)
+	if v.logScale {
+		return math.Log1p(float64(traffic)) / math.Log1p(float64(maxCellTraffic))
+	}
+	return float64(traffic) / float64(maxCellTraffic)
 }
 
-// cidrOverlapsBlock checks if a CIDR range overlaps with a visualization block
-func (v *VisualizationView) cidrOverlapsBlock(blockA, blockB, scale int, ipNet *net.IPNet) bool {
-	// blockA/B are actual octet starts
-	octetStartA := blockA
-	octetEndA := blockA + scale - 1
-	octetStartB := blockB
-	octetEndB := blockB + scale - 1
-
-	// Check if any of the block's /16 positions lie within the CIDR
-	for a := octetStartA; a <= octetEndA; a++ {
-		for b := octetStartB; b <= octetEndB; b++ {
-			if ipNet.Contains(net.IPv4(byte(a), byte(b), 0, 0)) {
-				return true
-			}
-		}
-	}
-
-	// Also check if the CIDR's own base IP falls inside the block
-	if cidrIP := ipNet.IP.To4(); cidrIP != nil {
-		ca, cb := int(cidrIP[0]), int(cidrIP[1])
-		if ca >= octetStartA && ca <= octetEndA && cb >= octetStartB && cb <= octetEndB {
-			return true
-		}
-	}
-
-	return false
+// intensityThresholdCount inverts the log intensity map: the request count at
+// which a cell reaches intensity t. Used for the log-mode legend labels.
+func intensityThresholdCount(t float64, maxCellTraffic uint32) uint32 {
+	return uint32(math.Ceil(math.Expm1(t * math.Log1p(float64(maxCellTraffic)))))
 }
 
-// getDotSize returns appropriate dot based on coverage percentage
-func (v *VisualizationView) getDotSize(coverage float64) string {
+// ToggleIntensityScale flips the brightness mapping between linear and log and
+// re-renders. Both modes keep separate render-text cache entries, so toggling
+// back and forth is served from cache after the first render of each mode.
+func (v *VisualizationView) ToggleIntensityScale() {
+	v.logScale = !v.logScale
+	v.RenderCached()
+	v.app.updateStatusBar()
+}
+
+// ratioOf returns clustered/total in [0,1], guarding divide-by-zero.
+func ratioOf(clustered, total uint32) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(clustered) / float64(total)
+}
+
+// getRatioMarker maps a traffic-capture ratio (share of a cell's requests that
+// fall inside detected cluster ranges) to an overlay dot character. Returns the
+// bare dot rune (no surrounding spaces) or "" for ratio == 0.
+func getRatioMarker(ratio float64) string {
 	switch {
-	case coverage >= 0.8: // 80%+ coverage (51+ out of 64 /16 networks)
-		return " ● " // Full coverage: large dot
-	case coverage >= 0.2: // 20%+ coverage (13+ out of 64 /16 networks)
-		return " • " // Partial coverage: medium dot
-	case coverage > 0.0: // Any coverage (1+ out of 64 /16 networks)
-		return " · " // Minimal coverage: small dot
+	case ratio >= 0.8:
+		return "●" // most of the cell's traffic is flagged
+	case ratio >= 0.2:
+		return "•" // a meaningful share is flagged
+	case ratio > 0.0:
+		return "·" // a small share is flagged
 	default:
-		return "" // No coverage: no dot
+		return "" // none of the cell's traffic is flagged
 	}
 }
 
@@ -699,15 +666,4 @@ func (v *VisualizationView) PrevClusterSet() {
 // GetView returns the tview component
 func (v *VisualizationView) GetView() *tview.TextView {
 	return v.view
-}
-
-// IsTrieCached returns true if the given trie index has cached traffic data
-func (v *VisualizationView) IsTrieCached(trieIndex int) bool {
-	_, exists := v.cachedTrafficData[trieIndex]
-	return exists
-}
-
-// GetCachedTrieCount returns the number of tries that have been cached
-func (v *VisualizationView) GetCachedTrieCount() int {
-	return len(v.cachedTrafficData)
 }
