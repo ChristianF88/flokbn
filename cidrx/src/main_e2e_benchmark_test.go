@@ -43,7 +43,9 @@ func BenchmarkEndToEndOptimization(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				// New path: uint32 -> Trie -> numeric CIDRs -> strings only at end
 				tr := trie.NewTrie()
-				tr.BatchInsertUint32(uint32IPs)                        // Direct uint32 insertion
+				for _, v := range uint32IPs { // Direct uint32 insertion
+					tr.InsertUint32(v)
+				}
 				numericCIDRs := tr.CollectCIDRsNumeric(10, 8, 24, 0.5) // No string allocations
 
 				// Convert to strings only at the very end
@@ -113,13 +115,17 @@ func BenchmarkIPConversionElimination(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			tr := trie.NewTrie()
-			tr.BatchInsertUint32(uint32IPs) // Direct uint32 insertion
+			for _, v := range uint32IPs { // Direct uint32 insertion
+				tr.InsertUint32(v)
+			}
 		}
 	})
 
 	b.Run("OldCIDRCollection", func(b *testing.B) {
 		tr := trie.NewTrie()
-		tr.BatchInsertUint32(uint32IPs)
+		for _, v := range uint32IPs {
+			tr.InsertUint32(v)
+		}
 
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -130,7 +136,9 @@ func BenchmarkIPConversionElimination(b *testing.B) {
 
 	b.Run("NewCIDRCollection", func(b *testing.B) {
 		tr := trie.NewTrie()
-		tr.BatchInsertUint32(uint32IPs)
+		for _, v := range uint32IPs {
+			tr.InsertUint32(v)
+		}
 
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -180,7 +188,9 @@ func BenchmarkSliceTrieComparison(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			tr := trie.NewTrie()
-			tr.BatchInsertUint32(uint32IPs)
+			for _, v := range uint32IPs {
+				tr.InsertUint32(v)
+			}
 		}
 	})
 

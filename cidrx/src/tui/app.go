@@ -2,8 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,69 +60,6 @@ type App struct {
 	cachedClusteringTexts map[int]string // Cache clustering text per trie
 	cachedCidrTexts       map[int]string // Cache CIDR analysis text per trie
 	cachedDiagnosticTexts map[int]string // Cache diagnostics text per trie
-}
-
-// NewApp creates a new TUI application (legacy function - use NewAppFromConfig)
-// This function is kept for backward compatibility but delegates to the unified approach
-func NewApp(logFile string, clusterArgSets []string, rangesCidr []string, plotPath string) *App {
-	// Convert legacy parameters to config format
-	cfg := &config.Config{
-		Static: &config.StaticConfig{
-			LogFile:   logFile,
-			LogFormat: "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\"",
-			PlotPath:  plotPath,
-		},
-		StaticTries: make(map[string]*config.TrieConfig),
-	}
-
-	// Create a single trie config from legacy arguments
-	trieConfig := &config.TrieConfig{
-		CIDRRanges: rangesCidr,
-	}
-
-	// Parse cluster arg sets if provided
-	if len(clusterArgSets) > 0 {
-		for i := 0; i < len(clusterArgSets); i += 4 {
-			if i+3 >= len(clusterArgSets) {
-				// Invalid cluster arg set - skip
-				continue
-			}
-
-			minClusterSize, err := strconv.ParseFloat(clusterArgSets[i], 64)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "invalid minClusterSize %q: %v\n", clusterArgSets[i], err)
-				continue
-			}
-			minDepth, err := strconv.ParseFloat(clusterArgSets[i+1], 64)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "invalid minDepth %q: %v\n", clusterArgSets[i+1], err)
-				continue
-			}
-			maxDepth, err := strconv.ParseFloat(clusterArgSets[i+2], 64)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "invalid maxDepth %q: %v\n", clusterArgSets[i+2], err)
-				continue
-			}
-			meanSubnetDifference, err := strconv.ParseFloat(clusterArgSets[i+3], 64)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "invalid meanSubnetDifference %q: %v\n", clusterArgSets[i+3], err)
-				continue
-			}
-
-			argSet := config.ClusterArgSet{
-				MinClusterSize:       uint32(minClusterSize),
-				MinDepth:             uint32(minDepth),
-				MaxDepth:             uint32(maxDepth),
-				MeanSubnetDifference: meanSubnetDifference,
-			}
-			trieConfig.ClusterArgSets = append(trieConfig.ClusterArgSets, argSet)
-		}
-	}
-
-	cfg.StaticTries["legacy_trie"] = trieConfig
-
-	// Use the unified constructor
-	return NewAppFromConfig(cfg, "")
 }
 
 // NewAppFromConfig creates a new TUI application from config file

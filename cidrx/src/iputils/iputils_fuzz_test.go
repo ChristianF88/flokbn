@@ -65,22 +65,3 @@ func FuzzIsValidCidrOrIP(f *testing.F) {
 		_ = IsValidCidrOrIP(s)
 	})
 }
-
-func FuzzRandomIPsFromRange(f *testing.F) {
-	seeds := []string{
-		"192.168.1.0/24",
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"0.0.0.0/0",
-		"invalid",
-		"",
-	}
-	for _, s := range seeds {
-		f.Add(s)
-	}
-
-	f.Fuzz(func(t *testing.T, cidr string) {
-		// Should not panic — invalid CIDRs return error
-		RandomIPsFromRange(cidr, 1)
-	})
-}

@@ -53,7 +53,7 @@ func TestInvalidTimeFormatGeneratesWarning(t *testing.T) {
 	}
 
 	// Run analysis
-	result, err := ParallelStaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -124,7 +124,7 @@ endTime = "2025-01-01T00:00:00Z"
 	}
 
 	// Run analysis
-	result, err := ParallelStaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -196,7 +196,7 @@ endTime = "2025-11-13T06:00:00Z"
 	}
 
 	// Run analysis
-	result, err := ParallelStaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -266,7 +266,7 @@ startTime = "2025-01-01T00:00:00Z"
 	}
 
 	// Run analysis
-	result, err := ParallelStaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}

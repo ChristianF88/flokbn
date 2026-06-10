@@ -19,24 +19,6 @@ import (
 	"github.com/ChristianF88/cidrx/trie"
 )
 
-// StaticFromConfig runs static analysis and returns the result.
-// This delegates to ParallelStaticFromConfig.
-func StaticFromConfig(cfg *config.Config) (*output.JSONOutput, error) {
-	return ParallelStaticFromConfig(cfg)
-}
-
-// StaticFromConfigWithRequests runs static analysis and returns both the result and parsed requests.
-// This delegates to ParallelStaticFromConfigWithRequests.
-func StaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
-	return ParallelStaticFromConfigWithRequests(cfg)
-}
-
-// ParallelStaticFromConfig runs static analysis with parallel trie building
-func ParallelStaticFromConfig(cfg *config.Config) (*output.JSONOutput, error) {
-	result, _, err := ParallelStaticFromConfigWithRequests(cfg)
-	return result, err
-}
-
 // ParallelStaticFromConfigWithRequests runs parallel static analysis
 func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
 	analysisStart := time.Now()
@@ -596,10 +578,24 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 		return trieResult
 	}
 
-	// In the unfiltered case there are no time/regex filters, so the time-parse
-	// and time-range warnings in processTrieParallel never fire; we mirror that by
-	// only carrying the CIDRRanges parameter (and UseForJail, which is filter
-	// independent).
+	// Warn if time parsing failed (mirrors processTrieParallel). A trie whose
+	// StartTimeRaw/EndTimeRaw failed to parse has nil StartTime/EndTime and thus
+	// reaches this unfiltered fast path — the warning must still fire.
+	if trieConfig.StartTimeRaw != "" && trieConfig.StartTime == nil {
+		jsonOutput.AddWarning("invalid_time_format",
+			fmt.Sprintf("Trie '%s': Failed to parse startTime '%s' - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
+				trieName, trieConfig.StartTimeRaw), 1)
+	}
+	if trieConfig.EndTimeRaw != "" && trieConfig.EndTime == nil {
+		jsonOutput.AddWarning("invalid_time_format",
+			fmt.Sprintf("Trie '%s': Failed to parse endTime '%s' - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
+				trieName, trieConfig.EndTimeRaw), 1)
+	}
+
+	// The time-range warning in processTrieParallel needs both StartTime and
+	// EndTime non-nil, which forces the full (filtered) path, so it can never
+	// fire here; we mirror that by only carrying the CIDRRanges parameter (and
+	// UseForJail, which is filter independent).
 	trieResult.Parameters.CIDRRanges = trieConfig.CIDRRanges
 	if len(trieConfig.UseForJail) > 0 {
 		trieResult.Parameters.UseForJail = trieConfig.UseForJail

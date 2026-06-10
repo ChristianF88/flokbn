@@ -47,7 +47,7 @@ func TestStaticPipeline_ClusterDetection(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestStaticPipeline_CIDRRangeAnalysis(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestStaticPipeline_MalformedLines(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestStaticPipeline_MalformedLines(t *testing.T) {
 
 // TestStaticPipeline_NilConfig verifies nil config returns error without panic.
 func TestStaticPipeline_NilConfig(t *testing.T) {
-	result, err := StaticFromConfig(nil)
+	result, err := ParallelStaticFromConfigNoRequests(nil)
 	if err == nil {
 		t.Error("Expected error for nil config")
 	}
@@ -245,7 +245,7 @@ func TestStaticPipeline_NilStaticSection(t *testing.T) {
 	cfg := &config.Config{
 		Global: &config.GlobalConfig{},
 	}
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err == nil {
 		t.Error("Expected error for nil static section")
 	}

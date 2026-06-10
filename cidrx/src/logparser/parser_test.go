@@ -21,6 +21,17 @@ func ipStringToUint32(s string) uint32 {
 	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
 }
 
+// parseLineForTest parses a single line into a fresh Request via the same
+// compiled-format path the production file workers use (parseLineReuseOpt).
+// It replaces the removed public ParseLine API for test purposes.
+func parseLineForTest(p *ParallelParser, line []byte) (*ingestor.Request, error) {
+	req := &ingestor.Request{}
+	if err := p.compiled.parseLineReuseOpt(line, req, p.SkipStringFields, p.SkipNonIPFields); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
 // Test data
 var (
 	apacheCombinedFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
@@ -46,7 +57,7 @@ func TestParallelParser_BasicParsing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req, err := parser.ParseLine(testLogLine)
+	req, err := parseLineForTest(parser, testLogLine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +105,7 @@ func TestParallelParser_CustomFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req, err := parser.ParseLine(customFormatLine)
+	req, err := parseLineForTest(parser, customFormatLine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +137,7 @@ func TestParallelParser_DelimiterParsing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req, err := parser.ParseLine(drupalLogLine)
+	req, err := parseLineForTest(parser, drupalLogLine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +182,7 @@ func TestParallelParser_StandaloneURI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req, err := parser.ParseLine(testLogLine)
+	req, err := parseLineForTest(parser, testLogLine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +374,7 @@ func TestParallelParser_ComprehensiveFormats(t *testing.T) {
 				t.Fatalf("Failed to create parser with format %q: %v", tt.format, err)
 			}
 
-			req, err := parser.ParseLine(tt.logLine)
+			req, err := parseLineForTest(parser, tt.logLine)
 			if err != nil {
 				t.Fatalf("Failed to parse log line %q with format %q: %v", string(tt.logLine), tt.format, err)
 			}
@@ -489,7 +500,7 @@ func TestParallelParser_QuotedVsUnquotedParsing(t *testing.T) {
 				t.Fatalf("Failed to create parser with format %q: %v", tt.format, err)
 			}
 
-			req, err := parser.ParseLine(tt.logLine)
+			req, err := parseLineForTest(parser, tt.logLine)
 
 			if tt.shouldWork {
 				// This test should work correctly
@@ -586,7 +597,7 @@ func TestParallelParser_InvalidFormats(t *testing.T) {
 			}
 
 			// Should not crash, just return empty/partial results
-			req, _ := parser.ParseLine(testLogLine)
+			req, _ := parseLineForTest(parser, testLogLine)
 			if req == nil {
 				t.Error("Parser should return a request struct even for invalid formats")
 			}
@@ -697,7 +708,7 @@ func TestParallelParser_VariousLogFormats(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req, err := parser.ParseLine(tt.logLine)
+			req, err := parseLineForTest(parser, tt.logLine)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -782,7 +793,7 @@ func TestParallelParser_EdgeCases(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			req, err := parser.ParseLine(tt.logLine)
+			req, err := parseLineForTest(parser, tt.logLine)
 			if err != nil && tt.shouldPass {
 				t.Fatal(err)
 			}
@@ -807,7 +818,7 @@ func TestParallelParser_FileProcessing(t *testing.T) {
 	}
 
 	start := time.Now()
-	requests, err := parser.ParseFileParallel(testFile)
+	requests, err := parser.ParseFile(testFile)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -840,7 +851,7 @@ func BenchmarkParallelParser_SingleLine(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		req, err := parser.ParseLine(testLogLine)
+		req, err := parseLineForTest(parser, testLogLine)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -855,7 +866,7 @@ func BenchmarkParallelParser_CustomFormat(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		req, err := parser.ParseLine(testLogLine)
+		req, err := parseLineForTest(parser, testLogLine)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -871,7 +882,7 @@ func BenchmarkParallelParser_ZeroAlloc(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		err := parser.ParseLineReuse(testLogLine, req)
+		err := parser.compiled.parseLineReuseOpt(testLogLine, req, parser.SkipStringFields, parser.SkipNonIPFields)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -903,7 +914,7 @@ func BenchmarkParallelParser_SkippedFields(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		req, err := parser.ParseLine(testLogLine)
+		req, err := parseLineForTest(parser, testLogLine)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -919,7 +930,7 @@ func BenchmarkParallelParser_MinimalFields(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		req, err := parser.ParseLine(testLogLine)
+		req, err := parseLineForTest(parser, testLogLine)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -947,7 +958,7 @@ func BenchmarkParallelParser_VariousFormats(b *testing.B) {
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				req, err := parser.ParseLine(f.line)
+				req, err := parseLineForTest(parser, f.line)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -967,7 +978,7 @@ func BenchmarkParallelParser_FileProcessing(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		requests, err := parser.ParseFileParallel(testFile)
+		requests, err := parser.ParseFile(testFile)
 		if err != nil {
 			b.Fatal(err)
 		}

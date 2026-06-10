@@ -140,18 +140,14 @@ func (t *Trie) InsertUint32(val uint32) {
 	}
 }
 
-// BatchInsertUint32 efficiently inserts multiple uint32 IPs
-func (t *Trie) BatchInsertUint32(ips []uint32) {
-	for _, ip := range ips {
-		t.InsertUint32(ip)
-	}
-}
-
 // BatchInsertSortedUint32 efficiently inserts sorted uint32 IPs with optimized traversal
 // This method takes advantage of:
 // 1. Batching identical IPs (only one traversal, but increment count by batch size)
 // 2. Reusing common prefixes between consecutive IPs
 // 3. Caching traversal state to avoid re-traversing from root
+//
+// Kept as the structural test oracle for the production BuildSortedUint32:
+// build_sorted_test.go asserts both produce bit-identical tries.
 func (t *Trie) BatchInsertSortedUint32(ips []uint32) {
 	if len(ips) == 0 {
 		return
@@ -221,7 +217,8 @@ func (t *Trie) Delete(ip net.IP) {
 	}
 }
 
-// Count returns the count of a specific IP address in the Trie
+// Count returns the count of a specific IP address in the Trie.
+// Kept as a test verification primitive (per-IP count assertions).
 func (t *Trie) Count(ip net.IP) uint32 {
 	node := t.Root
 	val := iputils.IPToUint32(ip)

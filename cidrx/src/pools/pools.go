@@ -1,10 +1,7 @@
 package pools
 
 import (
-	"net"
 	"sync"
-
-	"github.com/ChristianF88/cidrx/ingestor"
 )
 
 // TrieNode structure (defined here to avoid import cycles)
@@ -63,17 +60,6 @@ func (na *NodeAllocator) GetNode() *TrieNode {
 	return node
 }
 
-// Reset clears all allocated chunks and resets counters
-// Should be called to free memory when allocator is no longer needed
-func (na *NodeAllocator) Reset() {
-	na.mu.Lock()
-	defer na.mu.Unlock()
-
-	na.chunks = na.chunks[:0] // Clear slice but keep capacity
-	na.currentChunk = 0
-	na.currentIndex = 0
-}
-
 // SeqNodeAllocator is a lock-free bump allocator for single-threaded trie
 // builds. It hands out zeroed TrieNodes from chunk-sized backing arrays and
 // retains every chunk so the returned pointers stay valid for the lifetime of
@@ -106,52 +92,17 @@ func (a *SeqNodeAllocator) GetNode() *TrieNode {
 
 // GlobalPools provides centralized memory pooling for performance optimization
 type GlobalPools struct {
-	RequestSlices sync.Pool
-	StringSlices  sync.Pool
-	StringMaps    sync.Pool
-	IPNetSlices   sync.Pool
+	StringSlices sync.Pool
 }
 
 // Pools is the global instance of memory pools
 var Pools = &GlobalPools{
-	RequestSlices: sync.Pool{
-		New: func() interface{} {
-			slice := make([]ingestor.Request, 0, 1024)
-			return &slice
-		},
-	},
 	StringSlices: sync.Pool{
 		New: func() interface{} {
 			slice := make([]string, 0, 256)
 			return &slice
 		},
 	},
-	StringMaps: sync.Pool{
-		New: func() interface{} {
-			return make(map[string]bool, 1024)
-		},
-	},
-	IPNetSlices: sync.Pool{
-		New: func() interface{} {
-			slice := make([]*net.IPNet, 0, 256)
-			return &slice
-		},
-	},
-}
-
-// GetRequestSlice gets a request slice from the pool and resets it
-func (gp *GlobalPools) GetRequestSlice() []ingestor.Request {
-	slicePtr := gp.RequestSlices.Get().(*[]ingestor.Request)
-	*slicePtr = (*slicePtr)[:0] // Reset length while keeping capacity
-	return *slicePtr
-}
-
-// ReturnRequestSlice returns a request slice to the pool
-func (gp *GlobalPools) ReturnRequestSlice(slice []ingestor.Request) {
-	if cap(slice) < 8192 { // Prevent memory bloat
-		emptySlice := slice[:0]
-		gp.RequestSlices.Put(&emptySlice)
-	}
 }
 
 // GetStringSlice gets a string slice from the pool and resets it
@@ -167,44 +118,4 @@ func (gp *GlobalPools) ReturnStringSlice(slice []string) {
 		emptySlice := slice[:0]
 		gp.StringSlices.Put(&emptySlice)
 	}
-}
-
-// GetStringMap gets a string map from the pool and clears it
-func (gp *GlobalPools) GetStringMap() map[string]bool {
-	m := gp.StringMaps.Get().(map[string]bool)
-	// Clear the map
-	for k := range m {
-		delete(m, k)
-	}
-	return m
-}
-
-// ReturnStringMap returns a string map to the pool
-func (gp *GlobalPools) ReturnStringMap(m map[string]bool) {
-	if len(m) < 4096 { // Prevent memory bloat
-		gp.StringMaps.Put(m)
-	}
-}
-
-// GetIPNetSlice gets an IPNet slice from the pool and resets it
-func (gp *GlobalPools) GetIPNetSlice() []*net.IPNet {
-	slicePtr := gp.IPNetSlices.Get().(*[]*net.IPNet)
-	*slicePtr = (*slicePtr)[:0]
-	return *slicePtr
-}
-
-// ReturnIPNetSlice returns an IPNet slice to the pool
-func (gp *GlobalPools) ReturnIPNetSlice(slice []*net.IPNet) {
-	if cap(slice) < 1024 {
-		emptySlice := slice[:0]
-		gp.IPNetSlices.Put(&emptySlice)
-	}
-}
-
-// Reset clears all pools (useful for testing)
-func (gp *GlobalPools) Reset() {
-	gp.RequestSlices = sync.Pool{New: gp.RequestSlices.New}
-	gp.StringSlices = sync.Pool{New: gp.StringSlices.New}
-	gp.StringMaps = sync.Pool{New: gp.StringMaps.New}
-	gp.IPNetSlices = sync.Pool{New: gp.IPNetSlices.New}
 }

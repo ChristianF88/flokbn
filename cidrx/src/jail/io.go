@@ -1,14 +1,10 @@
 package jail
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"time"
-
-	"github.com/ChristianF88/cidrx/iputils"
 )
 
 // Convert Jail to json with the json package
@@ -83,38 +79,6 @@ func FileToJail(filename string) (Jail, error) {
 		return Jail{}, err
 	}
 	return jail, nil
-}
-
-func ReadBanFile(filename string) ([]string, error) {
-	// Read the file line by line and return array of cidrs
-	// ignore lines that start with '# '
-
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, fmt.Errorf("opening ban file %s: %w", filename, err)
-	}
-	defer file.Close()
-	var cidrs []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "# ") {
-			continue
-		}
-
-		line = strings.TrimSpace(line)
-
-		if !iputils.IsValidCidrOrIP(line) {
-			fmt.Fprintf(os.Stderr, "invalid CIDR or IP: %s\n", line)
-			continue
-		}
-
-		cidrs = append(cidrs, line)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading ban file %s: %w", filename, err)
-	}
-	return cidrs, nil
 }
 
 func WriteBanFile(filename string, cidrs []string) error {

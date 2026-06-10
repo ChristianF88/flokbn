@@ -32,7 +32,7 @@ func TestStaticFromConfigBasic(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestStaticFromConfigMultipleTries(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestStaticFromConfigWithTimeRange(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestStaticFromConfigInvalidLogFile(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err == nil {
 		t.Error("Expected error for nonexistent log file, got nil")
 	}
@@ -232,7 +232,7 @@ func TestStaticFromConfigInvalidClusterParams(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	// Should not fail completely, but should have warnings
 	if err != nil && result == nil {
 		t.Fatalf("Unexpected complete failure: %v", err)
@@ -268,7 +268,7 @@ func TestStaticFromConfigTiming(t *testing.T) {
 		},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestStaticFromConfigEmptyTries(t *testing.T) {
 		StaticTries: map[string]*config.TrieConfig{},
 	}
 
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -381,7 +381,7 @@ Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 	}
 
 	// Run static analysis
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -462,7 +462,7 @@ EvilScraper/2.0
 	}
 
 	// Run static analysis
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -541,7 +541,7 @@ Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
 	}
 
 	// Run static analysis
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -635,7 +635,7 @@ EvilScraper/2.0
 
 	// Measure performance
 	start := time.Now()
-	result, err := StaticFromConfig(cfg)
+	result, err := ParallelStaticFromConfigNoRequests(cfg)
 	duration := time.Since(start)
 
 	if err != nil {

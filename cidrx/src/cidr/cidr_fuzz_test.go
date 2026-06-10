@@ -1,6 +1,7 @@
 package cidr
 
 import (
+	"net"
 	"testing"
 )
 
@@ -44,26 +45,11 @@ func FuzzMergeCIDRs(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, cidr string) {
-		// Single CIDR merge should not panic
-		Merge([]string{cidr})
-	})
-}
-
-func FuzzStringsToIPNets(f *testing.F) {
-	seeds := []string{
-		"10.0.0.0/8",
-		"192.168.1.0/24",
-		"0.0.0.0/0",
-		"invalid",
-		"",
-		"255.255.255.255/32",
-	}
-	for _, s := range seeds {
-		f.Add(s)
-	}
-
-	f.Fuzz(func(t *testing.T, cidr string) {
-		// Should not panic — invalid CIDRs return error
-		StringsToIPNets([]string{cidr})
+		// Skip unparseable inputs; single CIDR merge should not panic
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Skip()
+		}
+		MergeIPNets([]*net.IPNet{ipNet})
 	})
 }

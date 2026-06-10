@@ -2,7 +2,6 @@ package cidr
 
 import (
 	"encoding/binary"
-	"fmt"
 	"net"
 	"sort"
 	"strings"
@@ -58,35 +57,6 @@ func appendOctet(buf []byte, pos int, v byte) int {
 		pos++
 	}
 	return pos
-}
-
-// StringsToIPNets converts CIDR strings to IPNet objects
-func StringsToIPNets(cidrs []string) ([]*net.IPNet, error) {
-	var ipNets []*net.IPNet
-	for _, cidr := range cidrs {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid CIDR %s: %w", cidr, err)
-		}
-		ipNets = append(ipNets, ipNet)
-	}
-	return ipNets, nil
-}
-
-// Merge consolidates overlapping and adjacent CIDR ranges
-func Merge(cidrs []string) ([]string, error) {
-	ipNets, err := StringsToIPNets(cidrs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse CIDRs: %w", err)
-	}
-
-	merged := MergeIPNets(ipNets)
-
-	var result []string
-	for _, net := range merged {
-		result = append(result, net.String())
-	}
-	return result, nil
 }
 
 // MergeIPNets consolidates overlapping and adjacent IPNet ranges
@@ -669,48 +639,10 @@ func (m *UserAgentMatcher) CheckUserAgent(userAgent string) UserAgentMatchResult
 	return result
 }
 
-// IsWhitelisted checks if User-Agent is exactly whitelisted
-func (m *UserAgentMatcher) IsWhitelisted(userAgent string) bool {
-	return m.CheckUserAgent(userAgent) == UserAgentWhitelist
-}
-
-// IsBlacklisted checks if User-Agent is exactly blacklisted
-func (m *UserAgentMatcher) IsBlacklisted(userAgent string) bool {
-	return m.CheckUserAgent(userAgent) == UserAgentBlacklist
-}
-
 // Count returns the total number of User-Agent patterns loaded
 func (m *UserAgentMatcher) Count() int {
 	if m == nil {
 		return 0
 	}
 	return len(m.userAgents)
-}
-
-// CountWhitelist returns the number of whitelisted User-Agent patterns
-func (m *UserAgentMatcher) CountWhitelist() int {
-	if m == nil {
-		return 0
-	}
-	count := 0
-	for _, result := range m.userAgents {
-		if result == UserAgentWhitelist {
-			count++
-		}
-	}
-	return count
-}
-
-// CountBlacklist returns the number of blacklisted User-Agent patterns
-func (m *UserAgentMatcher) CountBlacklist() int {
-	if m == nil {
-		return 0
-	}
-	count := 0
-	for _, result := range m.userAgents {
-		if result == UserAgentBlacklist {
-			count++
-		}
-	}
-	return count
 }

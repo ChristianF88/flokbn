@@ -72,6 +72,6 @@ func FuzzLogFormatParsing(f *testing.F) {
 			return // Invalid format is fine
 		}
 		// Parsing with valid parser should not panic
-		parser.ParseLine(testLine)
+		parseLineForTest(parser, testLine)
 	})
 }

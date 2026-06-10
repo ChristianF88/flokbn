@@ -146,53 +146,10 @@ func BenchmarkTrieInsertionOnly(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				tr := trie.NewTrie()
-				tr.BatchInsertUint32(unsorted)
+				for _, v := range unsorted {
+					tr.InsertUint32(v)
+				}
 			}
 		})
 	}
-}
-
-// BenchmarkParseLineIsolated benchmarks single-line parsing to isolate allocation costs
-func BenchmarkParseLineIsolated(b *testing.B) {
-	parser, err := logparser.NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	line := []byte(`192.168.1.100 - - [01/Jan/2025:10:15:30 +0000] "GET /api/users HTTP/1.1" 200 1024 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"`)
-
-	b.Run("ParseLine", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			req, err := parser.ParseLine(line)
-			if err != nil {
-				b.Fatal(err)
-			}
-			_ = req
-		}
-	})
-
-	b.Run("ParseLineReuse", func(b *testing.B) {
-		b.ReportAllocs()
-		req := &ingestor.Request{}
-		for i := 0; i < b.N; i++ {
-			err := parser.ParseLineReuse(line, req)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-
-	b.Run("ParseLineReuse_SkipStrings", func(b *testing.B) {
-		parserSkip, _ := logparser.NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
-		parserSkip.SkipStringFields = true
-		b.ReportAllocs()
-		req := &ingestor.Request{}
-		for i := 0; i < b.N; i++ {
-			err := parserSkip.ParseLineReuse(line, req)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
 }

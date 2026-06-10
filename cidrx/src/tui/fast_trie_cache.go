@@ -2,7 +2,6 @@ package tui
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ChristianF88/cidrx/ingestor"
@@ -37,13 +36,7 @@ type FastTrieCache struct {
 	globalTrafficReady bool
 
 	// Metadata
-	totalTries    int
-	cacheComplete bool
-	lastUpdated   time.Time
-
-	// Performance metrics (atomic for concurrent access under RLock)
-	cacheHits   atomic.Int64
-	cacheMisses atomic.Int64
+	lastUpdated time.Time
 }
 
 // NewFastTrieCache creates a new fast trie cache
@@ -70,9 +63,6 @@ func (ftc *FastTrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOut
 	ftc.mu.Lock()
 	defer ftc.mu.Unlock()
 
-	ftc.totalTries = len(multiResult.Tries)
-	ftc.cacheComplete = false
-
 	// Process each trie and cache everything
 	for trieIndex := 0; trieIndex < len(multiResult.Tries); trieIndex++ {
 		// 1. Convert to legacy format and cache
@@ -91,7 +81,6 @@ func (ftc *FastTrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOut
 		}
 	}
 
-	ftc.cacheComplete = true
 	ftc.lastUpdated = time.Now()
 }
 
@@ -220,11 +209,6 @@ func (ftc *FastTrieCache) GetLegacyData(trieIndex int) (*output.JSONOutput, bool
 	defer ftc.mu.RUnlock()
 
 	data, exists := ftc.legacyData[trieIndex]
-	if exists {
-		ftc.cacheHits.Add(1)
-	} else {
-		ftc.cacheMisses.Add(1)
-	}
 	return data, exists
 }
 
@@ -239,12 +223,6 @@ func (ftc *FastTrieCache) GetPreRenderedTexts(trieIndex int) (summary, clusterin
 	diagnostics, diagnosticsExists := ftc.diagnosticTexts[trieIndex]
 
 	exists = summaryExists && clusteringExists && cidrExists && diagnosticsExists
-	if exists {
-		ftc.cacheHits.Add(1)
-	} else {
-		ftc.cacheMisses.Add(1)
-	}
-
 	return summary, clustering, cidr, diagnostics, exists
 }
 
@@ -257,12 +235,6 @@ func (ftc *FastTrieCache) GetTrafficData(trieIndex int) (trafficMatrix [256][256
 	maxTraffic, maxExists := ftc.maxTraffics[trieIndex]
 
 	exists = matrixExists && maxExists
-	if exists {
-		ftc.cacheHits.Add(1)
-	} else {
-		ftc.cacheMisses.Add(1)
-	}
-
 	return trafficMatrix, maxTraffic, exists
 }
 
@@ -273,59 +245,9 @@ func (ftc *FastTrieCache) GetVisualizationRender(trieIndex, clusterSetIndex int)
 
 	if trieCache, trieExists := ftc.vizRenderCache[trieIndex]; trieExists {
 		if renderText, renderExists := trieCache[clusterSetIndex]; renderExists {
-			ftc.cacheHits.Add(1)
 			return renderText, true
 		}
 	}
 
-	ftc.cacheMisses.Add(1)
 	return "", false
-}
-
-// IsCacheComplete returns true if all tries have been cached
-func (ftc *FastTrieCache) IsCacheComplete() bool {
-	ftc.mu.RLock()
-	defer ftc.mu.RUnlock()
-	return ftc.cacheComplete
-}
-
-// GetCacheStats returns cache performance statistics
-func (ftc *FastTrieCache) GetCacheStats() (totalTries int, cacheComplete bool, hits, misses int64, hitRatio float64) {
-	ftc.mu.RLock()
-	defer ftc.mu.RUnlock()
-
-	totalTries = ftc.totalTries
-	cacheComplete = ftc.cacheComplete
-	hits = ftc.cacheHits.Load()
-	misses = ftc.cacheMisses.Load()
-
-	if hits+misses > 0 {
-		hitRatio = float64(hits) / float64(hits+misses) * 100
-	}
-
-	return
-}
-
-// Clear clears all cached data
-func (ftc *FastTrieCache) Clear() {
-	ftc.mu.Lock()
-	defer ftc.mu.Unlock()
-
-	ftc.legacyData = make(map[int]*output.JSONOutput)
-	ftc.summaryTexts = make(map[int]string)
-	ftc.clusterTexts = make(map[int]string)
-	ftc.cidrTexts = make(map[int]string)
-	ftc.diagnosticTexts = make(map[int]string)
-	ftc.trafficMatrixes = make(map[int][256][256]uint32)
-	ftc.maxTraffics = make(map[int]uint32)
-	ftc.clusteredMatrixes = make(map[int]map[int][256][256]uint32)
-	ftc.vizRenderCache = make(map[int]map[int]string)
-	ftc.globalTraffic = [256][256]uint32{}
-	ftc.globalMaxTraffic = 0
-	ftc.globalTrafficReady = false
-
-	ftc.totalTries = 0
-	ftc.cacheComplete = false
-	ftc.cacheHits.Store(0)
-	ftc.cacheMisses.Store(0)
 }

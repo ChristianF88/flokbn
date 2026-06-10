@@ -17,12 +17,13 @@ func BenchmarkCIDRMerging(b *testing.B) {
 
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("Merge_%d_CIDRs", size), func(b *testing.B) {
-			// Generate overlapping and adjacent CIDRs for worst-case merging
-			cidrs := generateOverlappingCIDRs(size)
+			// Generate overlapping and adjacent CIDRs for worst-case merging,
+			// pre-parsed outside the timer so only MergeIPNets is measured.
+			ipNets := mustParseCIDRs(b, generateOverlappingCIDRs(size))
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _ = Merge(cidrs)
+				_ = MergeIPNets(ipNets)
 			}
 		})
 	}
@@ -112,24 +113,6 @@ func BenchmarkUserAgentMatcher_Lookup(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			userAgent := testCases[i%len(testCases)]
 			result := matcher.CheckUserAgent(userAgent)
-			_ = result
-		}
-	})
-
-	b.Run("ExactMatcher_IsWhitelisted", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			userAgent := testCases[i%len(testCases)]
-			result := matcher.IsWhitelisted(userAgent)
-			_ = result
-		}
-	})
-
-	b.Run("ExactMatcher_IsBlacklisted", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			userAgent := testCases[i%len(testCases)]
-			result := matcher.IsBlacklisted(userAgent)
 			_ = result
 		}
 	})

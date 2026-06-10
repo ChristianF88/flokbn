@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/ChristianF88/cidrx/ingestor"
 	"github.com/ChristianF88/cidrx/testutil"
 )
 
@@ -80,6 +81,49 @@ func BenchmarkChunkProcessing(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			_, _ = parser.ParseFileParallelChunked(tempFile)
+		}
+	})
+}
+
+// BenchmarkParseLineReuseOpt benchmarks single-line parsing through the
+// compiled-format path used by the production file workers
+// (parseLineReuseOpt), isolating per-line allocation costs. It replaces the
+// removed root-package BenchmarkParseLineIsolated with the same corpus/format.
+func BenchmarkParseLineReuseOpt(b *testing.B) {
+	parser, err := NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	line := []byte(`192.168.1.100 - - [01/Jan/2025:10:15:30 +0000] "GET /api/users HTTP/1.1" 200 1024 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"`)
+
+	b.Run("FreshRequest", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			req := &ingestor.Request{}
+			if err := parser.compiled.parseLineReuseOpt(line, req, false, false); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("ReusedRequest", func(b *testing.B) {
+		b.ReportAllocs()
+		req := &ingestor.Request{}
+		for i := 0; i < b.N; i++ {
+			if err := parser.compiled.parseLineReuseOpt(line, req, false, false); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("ReusedRequest_SkipStrings", func(b *testing.B) {
+		b.ReportAllocs()
+		req := &ingestor.Request{}
+		for i := 0; i < b.N; i++ {
+			if err := parser.compiled.parseLineReuseOpt(line, req, true, false); err != nil {
+				b.Fatal(err)
+			}
 		}
 	})
 }

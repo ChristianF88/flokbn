@@ -59,54 +59,6 @@ func TestJailToFile(t *testing.T) {
 	// No manual cleanup needed - t.TempDir() handles it automatically
 }
 
-func TestReadBanFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	filename := tmpDir + string(os.PathSeparator) + "test_ban_file.txt"
-
-	// Create a test file with sample data
-	content := `# This is a comment
-192.168.1.0/24
-# Another comment
-10.0.0.0/8
-172.16.0.0/12
-`
-	err := os.WriteFile(filename, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("Error creating test file: %v", err)
-	}
-
-	// Read the file using ReadBanFile
-	cidrs, err := ReadBanFile(filename)
-	if err != nil {
-		t.Fatalf("ReadBanFile failed: %v", err)
-	}
-
-	// Expected CIDRs
-	expected := []string{"192.168.1.0/24", "10.0.0.0/8", "172.16.0.0/12"}
-
-	// Compare the result with the expected output
-	if len(cidrs) != len(expected) {
-		t.Errorf("Expected %d CIDRs, got %d", len(expected), len(cidrs))
-	}
-	for i, cidr := range cidrs {
-		if cidr != expected[i] {
-			t.Errorf("Expected CIDR %s at index %d, got %s", expected[i], i, cidr)
-		}
-	}
-
-	// No manual cleanup needed - t.TempDir() handles it automatically
-}
-
-func TestReadBanFile_NonExistentFile(t *testing.T) {
-	cidrs, err := ReadBanFile("/nonexistent/path/to/banfile.txt")
-	if err == nil {
-		t.Errorf("Expected error for non-existent file, got nil")
-	}
-	if cidrs != nil {
-		t.Errorf("Expected nil cidrs for non-existent file, got %v", cidrs)
-	}
-}
-
 func TestWriteBanFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := tmpDir + string(os.PathSeparator) + "test_write_ban_file.txt"

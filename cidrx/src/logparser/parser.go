@@ -34,9 +34,8 @@ type Parser struct {
 	format           string
 	compiled         *CompiledFormat
 	workers          int
-	pool             *sync.Pool // Object pool for Request structs
-	SkipStringFields bool       // When true, skip URI and UserAgent string allocations
-	SkipNonIPFields  bool       // When true, skip all non-IP field extraction (timestamp, method, status, bytes, strings)
+	SkipStringFields bool // When true, skip URI and UserAgent string allocations
+	SkipNonIPFields  bool // When true, skip all non-IP field extraction (timestamp, method, status, bytes, strings)
 }
 
 // ParallelParser is an alias for Parser (backward compatibility)
@@ -54,11 +53,6 @@ func NewParser(format string) (*Parser, error) {
 	p := &Parser{
 		format:  format,
 		workers: workerCount,
-		pool: &sync.Pool{
-			New: func() interface{} {
-				return &ingestor.Request{}
-			},
-		},
 	}
 
 	// Compile format string into optimized extractors
@@ -460,22 +454,10 @@ func (pp *ParallelParser) parseFileWithStreamingIO(filename string) ([]ingestor.
 	return results, nil
 }
 
-// ParseFileChunked (deprecated: use ParseFile instead)
-// Backward compatibility alias - delegates to ParseFile for consistent behavior
-func (pp *ParallelParser) ParseFileChunked(filename string) ([]ingestor.Request, error) {
-	return pp.ParseFile(filename)
-}
-
 // ParseFileParallelChunked (deprecated: use ParseFile instead)
 // Backward compatibility alias - delegates to ParseFile for consistent behavior
 func (pp *ParallelParser) ParseFileParallelChunked(filename string) ([]ingestor.Request, error) {
 	return pp.ParseFile(filename)
-}
-
-// ParseFileParallel (deprecated: use ParseFile instead)
-// Backward compatibility alias - delegates to parseFileWithStreamingIO
-func (pp *ParallelParser) ParseFileParallel(filename string) ([]ingestor.Request, error) {
-	return pp.parseFileWithStreamingIO(filename)
 }
 
 // parseFileWithConcurrentIO implements concurrent chunked file reading.
@@ -728,16 +710,6 @@ func (pp *ParallelParser) readChunkBatched(file *os.File, job chunkJob, fileSize
 	}
 }
 
-// ParseLine for single line parsing
-func (pp *ParallelParser) ParseLine(line []byte) (*ingestor.Request, error) {
-	return pp.compiled.parseLineWithPool(line, pp.pool)
-}
-
-// ParseLineReuse for zero-allocation parsing with request reuse
-func (pp *ParallelParser) ParseLineReuse(line []byte, req *ingestor.Request) error {
-	return pp.compiled.parseLineReuseOpt(line, req, pp.SkipStringFields, pp.SkipNonIPFields)
-}
-
 // validateFormat ensures format string doesn't have duplicate non-skippable fields
 func validateFormat(format string) error {
 	fieldCounts := make(map[byte]int)
@@ -879,25 +851,6 @@ func compileFormat(format string) (*CompiledFormat, error) {
 		extractors: extractors,
 		pattern:    format,
 	}, nil
-}
-
-// parseLineWithPool uses object pool to reduce allocations
-func (cf *CompiledFormat) parseLineWithPool(line []byte, pool *sync.Pool) (*ingestor.Request, error) {
-	return cf.parseLineWithPoolOpt(line, pool, false, false)
-}
-
-// parseLineWithPoolOpt uses object pool with optional string field skipping
-func (cf *CompiledFormat) parseLineWithPoolOpt(line []byte, pool *sync.Pool, skipStrings, skipNonIP bool) (*ingestor.Request, error) {
-	req := pool.Get().(*ingestor.Request)
-	// Reset the request to zero state
-	*req = ingestor.Request{}
-	err := cf.parseLineReuseOpt(line, req, skipStrings, skipNonIP)
-	if err != nil {
-		// Return request to pool on parse error to prevent memory leak
-		pool.Put(req)
-		return nil, err
-	}
-	return req, nil
 }
 
 // parseLineReuseOpt parses a log line with optional string field skipping

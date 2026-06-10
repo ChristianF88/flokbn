@@ -499,24 +499,44 @@ func TestRemoveWhitelisted(t *testing.T) {
 	}
 }
 
+// mustParseCIDRs parses CIDR strings into IPNets, failing the test on error.
+func mustParseCIDRs(tb testing.TB, cidrs []string) []*net.IPNet {
+	tb.Helper()
+	var ipNets []*net.IPNet
+	for _, c := range cidrs {
+		_, ipNet, err := net.ParseCIDR(c)
+		if err != nil {
+			tb.Fatalf("invalid CIDR %s: %v", c, err)
+		}
+		ipNets = append(ipNets, ipNet)
+	}
+	return ipNets
+}
+
+// ipNetsToStrings stringifies merged IPNets for comparison against expected tables.
+func ipNetsToStrings(ipNets []*net.IPNet) []string {
+	var result []string
+	for _, n := range ipNets {
+		result = append(result, n.String())
+	}
+	return result
+}
+
 func TestMergeCidrs(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
 		expected []string
-		wantErr  bool
 	}{
 		{
 			name:     "Empty input",
 			input:    []string{},
 			expected: []string{},
-			wantErr:  false,
 		},
 		{
 			name:     "Single CIDR",
 			input:    []string{"192.168.1.0/24"},
 			expected: []string{"192.168.1.0/24"},
-			wantErr:  false,
 		},
 		{
 			name: "Non-overlapping CIDRs",
@@ -527,7 +547,6 @@ func TestMergeCidrs(t *testing.T) {
 			expected: []string{
 				"192.168.1.2/31",
 			},
-			wantErr: false,
 		},
 		{
 			name: "Overlapping CIDRs",
@@ -538,7 +557,6 @@ func TestMergeCidrs(t *testing.T) {
 			expected: []string{
 				"10.0.0.0/24",
 			},
-			wantErr: false,
 		},
 		{
 			name: "Adjacent CIDRs",
@@ -549,7 +567,6 @@ func TestMergeCidrs(t *testing.T) {
 			expected: []string{
 				"172.16.0.0/23",
 			},
-			wantErr: false,
 		},
 		{
 			name: "Multiple mergeable CIDRs",
@@ -562,7 +579,6 @@ func TestMergeCidrs(t *testing.T) {
 			expected: []string{
 				"192.168.0.0/22",
 			},
-			wantErr: false,
 		},
 		{
 			name: "Mixed mergeable and non-mergeable",
@@ -575,15 +591,6 @@ func TestMergeCidrs(t *testing.T) {
 				"10.0.0.0/23",
 				"10.0.2.0/24",
 			},
-			wantErr: false,
-		},
-		{
-			name: "Invalid CIDR",
-			input: []string{
-				"not-a-cidr",
-			},
-			expected: nil,
-			wantErr:  true,
 		},
 		{
 			name: "Overlapping and adjacent",
@@ -596,7 +603,6 @@ func TestMergeCidrs(t *testing.T) {
 				"192.168.1.0/24",
 				"192.168.2.0/24",
 			},
-			wantErr: false,
 		},
 		{
 			name: "Already merged",
@@ -607,7 +613,6 @@ func TestMergeCidrs(t *testing.T) {
 			expected: []string{
 				"10.0.0.0/8",
 			},
-			wantErr: false,
 		},
 	}
 
@@ -621,17 +626,7 @@ func TestMergeCidrs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Merge(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("expected error but got none")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-				return
-			}
+			got := ipNetsToStrings(MergeIPNets(mustParseCIDRs(t, tt.input)))
 			gotMap := normalize(got)
 			expMap := normalize(tt.expected)
 			if len(gotMap) != len(expMap) {
@@ -672,28 +667,9 @@ func TestMergeIPNets(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Parse input CIDRs to IPNets
-			ipNets, err := StringsToIPNets(tt.cidrs)
-			if err != nil {
-				t.Fatalf("Failed to parse CIDRs: %v", err)
-			}
+			// Test IPNet version against the expected table
+			gotStrings := ipNetsToStrings(MergeIPNets(mustParseCIDRs(t, tt.cidrs)))
 
-			// Test IPNet version
-			mergedIPNets := MergeIPNets(ipNets)
-
-			// Convert back to strings for comparison
-			var gotStrings []string
-			for _, ipNet := range mergedIPNets {
-				gotStrings = append(gotStrings, ipNet.String())
-			}
-
-			// Test string version for comparison
-			expectedMerged, err := Merge(tt.cidrs)
-			if err != nil {
-				t.Fatalf("String Merge failed: %v", err)
-			}
-
-			// Verify they produce the same results
 			normalize := func(cidrs []string) map[string]struct{} {
 				m := make(map[string]struct{})
 				for _, c := range cidrs {
@@ -702,10 +678,10 @@ func TestMergeIPNets(t *testing.T) {
 				return m
 			}
 			gotMap := normalize(gotStrings)
-			expMap := normalize(expectedMerged)
+			expMap := normalize(tt.expected)
 
 			if len(gotMap) != len(expMap) {
-				t.Errorf("MergeIPNets result differs from Merge: got %v, expected %v", gotStrings, expectedMerged)
+				t.Errorf("MergeIPNets result differs from expected: got %v, expected %v", gotStrings, tt.expected)
 			}
 			for cidr := range expMap {
 				if _, ok := gotMap[cidr]; !ok {
@@ -752,10 +728,7 @@ func TestIsWhitelistedIPNet(t *testing.T) {
 				t.Fatalf("Failed to parse candidate CIDR: %v", err)
 			}
 
-			whitelistNets, err := StringsToIPNets(tt.whitelist)
-			if err != nil {
-				t.Fatalf("Failed to parse whitelist CIDRs: %v", err)
-			}
+			whitelistNets := mustParseCIDRs(t, tt.whitelist)
 
 			// Test IPNet version
 			gotIPNet := IsWhitelistedIPNet(candidateNet, whitelistNets)
@@ -772,32 +745,6 @@ func TestIsWhitelistedIPNet(t *testing.T) {
 	}
 }
 
-// BenchmarkMergeComparison compares string vs IPNet merge performance
-func BenchmarkMergeComparison(b *testing.B) {
-	// Generate test CIDRs
-	cidrs := make([]string, 100)
-	for i := 0; i < 100; i++ {
-		cidrs[i] = fmt.Sprintf("192.168.%d.0/24", i)
-	}
-
-	// Pre-parse for IPNet version
-	ipNets, _ := StringsToIPNets(cidrs)
-
-	b.Run("Merge_String", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			_, _ = Merge(cidrs)
-		}
-	})
-
-	b.Run("MergeIPNets", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			_ = MergeIPNets(ipNets)
-		}
-	})
-}
-
 // BenchmarkIsWhitelistedComparison compares string vs IPNet whitelist performance
 func BenchmarkIsWhitelistedComparison(b *testing.B) {
 	candidate := "192.168.50.0/24"
@@ -808,7 +755,7 @@ func BenchmarkIsWhitelistedComparison(b *testing.B) {
 
 	// Pre-parse for IPNet version
 	_, candidateNet, _ := net.ParseCIDR(candidate)
-	whitelistNets, _ := StringsToIPNets(whitelist)
+	whitelistNets := mustParseCIDRs(b, whitelist)
 
 	b.Run("IsWhitelisted_String", func(b *testing.B) {
 		b.ReportAllocs()
@@ -842,14 +789,18 @@ func TestNewUserAgentMatcher(t *testing.T) {
 		t.Errorf("Expected %d entries, got %d", expectedCount, matcher.Count())
 	}
 
-	// Check whitelist count
-	if matcher.CountWhitelist() != 2 {
-		t.Errorf("Expected 2 whitelist entries, got %d", matcher.CountWhitelist())
+	// Check the two valid whitelist entries are classified as whitelisted
+	for _, ua := range []string{"Mozilla/5.0", "Googlebot/2.1"} {
+		if matcher.CheckUserAgent(ua) != UserAgentWhitelist {
+			t.Errorf("Expected %q to be whitelisted, got %v", ua, matcher.CheckUserAgent(ua))
+		}
 	}
 
-	// Check blacklist count
-	if matcher.CountBlacklist() != 2 {
-		t.Errorf("Expected 2 blacklist entries, got %d", matcher.CountBlacklist())
+	// Check the two valid blacklist entries are classified as blacklisted
+	for _, ua := range []string{"sqlmap/1.0", "nmap"} {
+		if matcher.CheckUserAgent(ua) != UserAgentBlacklist {
+			t.Errorf("Expected %q to be blacklisted, got %v", ua, matcher.CheckUserAgent(ua))
+		}
 	}
 }
 
@@ -866,11 +817,7 @@ func TestUserAgentMatcher_WhitelistPrecedence(t *testing.T) {
 		t.Errorf("Expected UserAgentWhitelist, got %v", result)
 	}
 
-	if !matcher.IsWhitelisted("Mozilla/5.0") {
-		t.Error("Expected Mozilla/5.0 to be whitelisted")
-	}
-
-	if matcher.IsBlacklisted("Mozilla/5.0") {
+	if result == UserAgentBlacklist {
 		t.Error("Expected Mozilla/5.0 to not be blacklisted (whitelist should win)")
 	}
 }
@@ -904,16 +851,13 @@ func TestUserAgentMatcher_ExactMatch(t *testing.T) {
 				t.Errorf("CheckUserAgent(%q) = %v, want %v", tt.userAgent, result, tt.expected)
 			}
 
-			// Test convenience methods
-			expectedWhitelisted := (tt.expected == UserAgentWhitelist)
-			expectedBlacklisted := (tt.expected == UserAgentBlacklist)
-
-			if matcher.IsWhitelisted(tt.userAgent) != expectedWhitelisted {
-				t.Errorf("IsWhitelisted(%q) = %v, want %v", tt.userAgent, matcher.IsWhitelisted(tt.userAgent), expectedWhitelisted)
+			// Cross-check whitelist/blacklist classification
+			if (result == UserAgentWhitelist) != (tt.expected == UserAgentWhitelist) {
+				t.Errorf("whitelist classification for %q = %v, want %v", tt.userAgent, result == UserAgentWhitelist, tt.expected == UserAgentWhitelist)
 			}
 
-			if matcher.IsBlacklisted(tt.userAgent) != expectedBlacklisted {
-				t.Errorf("IsBlacklisted(%q) = %v, want %v", tt.userAgent, matcher.IsBlacklisted(tt.userAgent), expectedBlacklisted)
+			if (result == UserAgentBlacklist) != (tt.expected == UserAgentBlacklist) {
+				t.Errorf("blacklist classification for %q = %v, want %v", tt.userAgent, result == UserAgentBlacklist, tt.expected == UserAgentBlacklist)
 			}
 		})
 	}
@@ -962,24 +906,8 @@ func TestUserAgentMatcher_NilMatcher(t *testing.T) {
 		t.Error("Nil matcher should return UserAgentNotListed")
 	}
 
-	if matcher.IsWhitelisted("test") {
-		t.Error("Nil matcher should return false for IsWhitelisted")
-	}
-
-	if matcher.IsBlacklisted("test") {
-		t.Error("Nil matcher should return false for IsBlacklisted")
-	}
-
 	if matcher.Count() != 0 {
 		t.Error("Nil matcher should return 0 for Count")
-	}
-
-	if matcher.CountWhitelist() != 0 {
-		t.Error("Nil matcher should return 0 for CountWhitelist")
-	}
-
-	if matcher.CountBlacklist() != 0 {
-		t.Error("Nil matcher should return 0 for CountBlacklist")
 	}
 }
 
@@ -1060,14 +988,14 @@ func TestUserAgentMatcher_SpecialCharacters(t *testing.T) {
 
 	// Test all whitelist entries
 	for _, userAgent := range whitelist {
-		if !matcher.IsWhitelisted(userAgent) {
+		if matcher.CheckUserAgent(userAgent) != UserAgentWhitelist {
 			t.Errorf("Expected %q to be whitelisted", userAgent)
 		}
 	}
 
 	// Test all blacklist entries
 	for _, userAgent := range blacklist {
-		if !matcher.IsBlacklisted(userAgent) {
+		if matcher.CheckUserAgent(userAgent) != UserAgentBlacklist {
 			t.Errorf("Expected %q to be blacklisted", userAgent)
 		}
 	}
@@ -1093,19 +1021,19 @@ func TestUserAgentMatcher_Unicode(t *testing.T) {
 
 	// Test all entries
 	for _, userAgent := range whitelist {
-		if !matcher.IsWhitelisted(userAgent) {
+		if matcher.CheckUserAgent(userAgent) != UserAgentWhitelist {
 			t.Errorf("Expected %q to be whitelisted", userAgent)
 		}
 	}
 
 	for _, userAgent := range blacklist {
-		if !matcher.IsBlacklisted(userAgent) {
+		if matcher.CheckUserAgent(userAgent) != UserAgentBlacklist {
 			t.Errorf("Expected %q to be blacklisted", userAgent)
 		}
 	}
 
 	// Test case insensitive matching with Unicode
-	if !matcher.IsWhitelisted("MOZILLA/5.0 (MACINTOSH; INTEL MAC OS X 10_15_7) APPLEWEBKIT/537.36 测试浏览器") {
+	if matcher.CheckUserAgent("MOZILLA/5.0 (MACINTOSH; INTEL MAC OS X 10_15_7) APPLEWEBKIT/537.36 测试浏览器") != UserAgentWhitelist {
 		t.Error("Unicode case insensitive matching failed")
 	}
 }
@@ -1139,32 +1067,32 @@ func TestUserAgentMatcher_CommentsAndWhitespace(t *testing.T) {
 	}
 
 	// Test that trimmed versions work
-	if !matcher.IsWhitelisted("Mozilla/5.0") {
+	if matcher.CheckUserAgent("Mozilla/5.0") != UserAgentWhitelist {
 		t.Error("Expected Mozilla/5.0 to be whitelisted (trimmed)")
 	}
 
-	if !matcher.IsWhitelisted("Googlebot/2.1") {
+	if matcher.CheckUserAgent("Googlebot/2.1") != UserAgentWhitelist {
 		t.Error("Expected Googlebot/2.1 to be whitelisted (trimmed)")
 	}
 
-	if !matcher.IsWhitelisted("Valid Agent") {
+	if matcher.CheckUserAgent("Valid Agent") != UserAgentWhitelist {
 		t.Error("Expected Valid Agent to be whitelisted")
 	}
 
-	if !matcher.IsBlacklisted("sqlmap/1.0") {
+	if matcher.CheckUserAgent("sqlmap/1.0") != UserAgentBlacklist {
 		t.Error("Expected sqlmap/1.0 to be blacklisted (trimmed)")
 	}
 
-	if !matcher.IsBlacklisted("nmap") {
+	if matcher.CheckUserAgent("nmap") != UserAgentBlacklist {
 		t.Error("Expected nmap to be blacklisted")
 	}
 
 	// Comments should not be in the matcher
-	if matcher.IsWhitelisted("# This is a comment") {
+	if matcher.CheckUserAgent("# This is a comment") != UserAgentNotListed {
 		t.Error("Comments should not be added to matcher")
 	}
 
-	if matcher.IsBlacklisted("# Comment") {
+	if matcher.CheckUserAgent("# Comment") != UserAgentNotListed {
 		t.Error("Comments should not be added to matcher")
 	}
 }

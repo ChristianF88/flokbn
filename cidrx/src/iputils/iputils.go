@@ -32,7 +32,9 @@ func IsValidCidrOrIP(s string) bool {
 	return false
 }
 
-// RandomIPsFromRange generates random IP addresses within a CIDR range
+// RandomIPsFromRange generates random IP addresses within a CIDR range.
+// It is a test-data generator with no production callers; it is kept because
+// tests and benchmarks in four packages use it to synthesize IP corpora.
 func RandomIPsFromRange(cidr string, count int) ([]net.IP, error) {
 	ipList := make([]net.IP, 0, count)
 
