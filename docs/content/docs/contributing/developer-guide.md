@@ -114,6 +114,21 @@ go test ./logparser -v      # Specific package
 go test -race ./...         # Race detector
 ```
 
+### Makefile (Repo Root)
+
+The repo-root `Makefile` is the canonical local gate:
+
+```bash
+make test          # gofmt check + vet + staticcheck + go test + non-Docker e2e suites
+make test-race     # go test -race ./...
+make test-docker   # Docker live e2e suites
+make test-all      # Full sweep: test + test-race + test-docker
+make bench         # Package benchmarks
+make fmt           # gofmt -w .
+```
+
+The git pre-commit hook runs the commit-time Go-only subset (gofmt, vet, staticcheck, go test); `make test` is the fuller sweep including e2e.
+
 ### E2E Tests
 
 End-to-end tests live in `e2e/` and exercise the full binary against generated or live traffic.
