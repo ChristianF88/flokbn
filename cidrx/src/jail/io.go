@@ -111,9 +111,9 @@ func WriteBanFile(filename string, cidrs []string) error {
 	return WriteBanFileWithBlacklist(filename, cidrs, nil)
 }
 
-func WriteBanFileWithBlacklist(filename string, cidrs []string, blacklistCIDRs []string) error {
-	// Build the full file content in memory, then write it atomically so
-	// readers (fail2ban, firewall scripts) never observe a partial file.
+// BuildBanFileContent renders the ban file body (timestamp header, active
+// bans, blacklist section) exactly as WriteBanFileWithBlacklist writes it.
+func BuildBanFileContent(cidrs []string, blacklistCIDRs []string) string {
 	var sb strings.Builder
 	var modificationTime string = time.Now().Format("2006-01-02 15:04:05")
 	sb.WriteString(fmt.Sprintf("# This file was generated automatically. Last modification %s \n", modificationTime))
@@ -135,5 +135,11 @@ func WriteBanFileWithBlacklist(filename string, cidrs []string, blacklistCIDRs [
 		sb.WriteString("# End of manual blacklist\n")
 	}
 
-	return writeFileAtomic(filename, []byte(sb.String()), 0644)
+	return sb.String()
+}
+
+func WriteBanFileWithBlacklist(filename string, cidrs []string, blacklistCIDRs []string) error {
+	// Build the full file content in memory, then write it atomically so
+	// readers (fail2ban, firewall scripts) never observe a partial file.
+	return writeFileAtomic(filename, []byte(BuildBanFileContent(cidrs, blacklistCIDRs)), 0644)
 }

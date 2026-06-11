@@ -286,3 +286,32 @@ func (j *Jail) ListActiveBans() []string {
 	}
 	return cidrs
 }
+
+// ActiveBan is a currently-active ban with its escalation metadata.
+type ActiveBan struct {
+	CIDR      string
+	Stage     int // Cell.ID
+	BanStart  time.Time
+	ExpiresAt time.Time // BanStart.Add(Cell.BanDuration)
+}
+
+// ListActiveBansWithMeta returns one entry per BanActive prisoner, in the
+// same cell/prisoner iteration order as ListActiveBans. Like the ban file,
+// it trusts the BanActive flags refreshed by UpdateBanActiveStatus: a ban
+// expiring between updates still reads as active until the next Update.
+func (j *Jail) ListActiveBansWithMeta() []ActiveBan {
+	bans := []ActiveBan{}
+	for _, cell := range j.Cells {
+		for _, prisoner := range cell.Prisoners {
+			if prisoner.BanActive {
+				bans = append(bans, ActiveBan{
+					CIDR:      prisoner.CIDR,
+					Stage:     cell.ID,
+					BanStart:  prisoner.BanStart,
+					ExpiresAt: prisoner.BanStart.Add(cell.BanDuration),
+				})
+			}
+		}
+	}
+	return bans
+}
