@@ -96,6 +96,177 @@ func TestWriteBanFile(t *testing.T) {
 	// No manual cleanup needed - t.TempDir() handles it automatically
 }
 
+func assertNoTempResidue(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading dir %s: %v", dir, err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Errorf("leftover temp file %s in %s", e.Name(), dir)
+		}
+	}
+}
+
+func TestWriteFileAtomic_Basics(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + string(os.PathSeparator) + "atomic.txt"
+
+	// Fresh path
+	if err := writeFileAtomic(path, []byte("first"), 0644); err != nil {
+		t.Fatalf("writeFileAtomic fresh: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if string(content) != "first" {
+		t.Errorf("content = %q, want %q", content, "first")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0644 {
+		t.Errorf("file mode = %v, want 0644", info.Mode().Perm())
+	}
+
+	// Overwrite existing
+	if err := writeFileAtomic(path, []byte("second, longer content"), 0644); err != nil {
+		t.Fatalf("writeFileAtomic overwrite: %v", err)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if string(content) != "second, longer content" {
+		t.Errorf("content = %q, want %q", content, "second, longer content")
+	}
+	assertNoTempResidue(t, dir)
+
+	// Failure: nonexistent parent directory
+	badPath := dir + string(os.PathSeparator) + "missing-dir" + string(os.PathSeparator) + "f.txt"
+	if err := writeFileAtomic(badPath, []byte("x"), 0644); err == nil {
+		t.Error("writeFileAtomic into nonexistent dir: want error, got nil")
+	}
+	assertNoTempResidue(t, dir)
+}
+
+// TestWriteBanFile_NoPartialReads asserts that a concurrent reader never
+// observes a truncated or interleaved ban file while the writer keeps
+// rewriting it (the pre-atomic os.Create implementation failed this).
+func TestWriteBanFile_NoPartialReads(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + string(os.PathSeparator) + "ban.txt"
+
+	cidrsA := make([]string, 0, 300)
+	cidrsB := make([]string, 0, 300)
+	for i := 0; i < 300; i++ {
+		cidrsA = append(cidrsA, fmt.Sprintf("10.0.%d.%d/32", i/256, i%256))
+		cidrsB = append(cidrsB, fmt.Sprintf("172.16.%d.%d/32", i/256, i%256))
+	}
+	bodyA := "# Active jail bans:\n" + strings.Join(cidrsA, "\n") + "\n"
+	bodyB := "# Active jail bans:\n" + strings.Join(cidrsB, "\n") + "\n"
+	const headerPrefix = "# This file was generated automatically."
+
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue // before the first write
+				}
+				t.Errorf("reader: %v", err)
+				return
+			}
+			content := string(data)
+			nl := strings.IndexByte(content, '\n')
+			if nl < 0 || !strings.HasPrefix(content, headerPrefix) {
+				t.Errorf("reader: missing/torn header line, got %q", truncateForLog(content))
+				return
+			}
+			body := content[nl+1:]
+			if body != bodyA && body != bodyB {
+				t.Errorf("reader: partial/interleaved body observed, got %q", truncateForLog(body))
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 200; i++ {
+		cidrs := cidrsA
+		if i%2 == 1 {
+			cidrs = cidrsB
+		}
+		if err := WriteBanFile(path, cidrs); err != nil {
+			t.Fatalf("WriteBanFile iteration %d: %v", i, err)
+		}
+	}
+	close(stop)
+	<-readerDone
+	assertNoTempResidue(t, dir)
+}
+
+func truncateForLog(s string) string {
+	if len(s) > 120 {
+		return s[:120] + "..."
+	}
+	return s
+}
+
+func TestFileToJail_MissingAndCorrupt(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Missing file: fresh jail, no error.
+	missing := tmpDir + string(os.PathSeparator) + "missing.json"
+	j, err := FileToJail(missing)
+	if err != nil {
+		t.Fatalf("FileToJail(missing) error: %v", err)
+	}
+	if !jailsAreEqual(j, NewJail()) {
+		t.Error("FileToJail(missing) must return a fresh NewJail()")
+	}
+
+	// Corrupt file: must fail loud.
+	corrupt := tmpDir + string(os.PathSeparator) + "corrupt.json"
+	if err := os.WriteFile(corrupt, []byte(`{"Cells": [tru`), 0644); err != nil {
+		t.Fatalf("writing corrupt file: %v", err)
+	}
+	if _, err := FileToJail(corrupt); err == nil {
+		t.Error("FileToJail(corrupt) must return a non-nil error")
+	}
+}
+
+func BenchmarkWriteBanFileWithBlacklist(b *testing.B) {
+	dir := b.TempDir()
+	path := dir + string(os.PathSeparator) + "ban.txt"
+	cidrs := make([]string, 0, 100)
+	for i := 0; i < 100; i++ {
+		cidrs = append(cidrs, fmt.Sprintf("10.0.%d.0/24", i))
+	}
+	blacklist := make([]string, 0, 10)
+	for i := 0; i < 10; i++ {
+		blacklist = append(blacklist, fmt.Sprintf("203.0.%d.0/24", i))
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := WriteBanFileWithBlacklist(path, cidrs, blacklist); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // Helper function to compare two Jail structs
 func jailsAreEqual(j1, j2 Jail) bool {
 	if len(j1.Cells) != len(j2.Cells) {

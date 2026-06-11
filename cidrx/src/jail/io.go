@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -25,19 +27,43 @@ func JSONToJail(jailJSON string) (Jail, error) {
 	return jail, nil
 }
 
-// WriteToFile writes the given content to a file with the specified filename
-func WriteToFile(filename string, content string) error {
-	file, err := os.Create(filename)
+// writeFileAtomic writes data to filename via a temp file in the same
+// directory + rename, so readers never observe a partial file.
+func writeFileAtomic(filename string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(filename), filepath.Base(filename)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	tmpName := tmp.Name()
 
-	_, err = file.WriteString(content)
-	if err != nil {
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, filename); err != nil {
+		os.Remove(tmpName)
 		return err
 	}
 	return nil
+}
+
+// WriteToFile writes the given content to a file with the specified filename
+func WriteToFile(filename string, content string) error {
+	return writeFileAtomic(filename, []byte(content), 0644)
 }
 func ReadFromFile(filename string) (string, error) {
 	content, err := os.ReadFile(filename)
@@ -86,44 +112,28 @@ func WriteBanFile(filename string, cidrs []string) error {
 }
 
 func WriteBanFileWithBlacklist(filename string, cidrs []string, blacklistCIDRs []string) error {
-	// Write the cidrs to the file
-	// ignore lines that start with '# '
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+	// Build the full file content in memory, then write it atomically so
+	// readers (fail2ban, firewall scripts) never observe a partial file.
+	var sb strings.Builder
 	var modificationTime string = time.Now().Format("2006-01-02 15:04:05")
-	if _, err := file.WriteString(fmt.Sprintf("# This file was generated automatically. Last modification %s \n", modificationTime)); err != nil {
-		return err
-	}
+	sb.WriteString(fmt.Sprintf("# This file was generated automatically. Last modification %s \n", modificationTime))
 
 	// Write active jail bans
 	if len(cidrs) > 0 {
-		if _, err := file.WriteString("# Active jail bans:\n"); err != nil {
-			return err
-		}
+		sb.WriteString("# Active jail bans:\n")
 		for _, cidr := range cidrs {
-			if _, err := file.WriteString(cidr + "\n"); err != nil {
-				return err
-			}
+			sb.WriteString(cidr + "\n")
 		}
 	}
 
 	// Write manual blacklist entries
 	if len(blacklistCIDRs) > 0 {
-		if _, err := file.WriteString("# Manual blacklist entries:\n"); err != nil {
-			return err
-		}
+		sb.WriteString("# Manual blacklist entries:\n")
 		for _, cidr := range blacklistCIDRs {
-			if _, err := file.WriteString(cidr + "\n"); err != nil {
-				return err
-			}
+			sb.WriteString(cidr + "\n")
 		}
-		if _, err := file.WriteString("# End of manual blacklist\n"); err != nil {
-			return err
-		}
+		sb.WriteString("# End of manual blacklist\n")
 	}
 
-	return nil
+	return writeFileAtomic(filename, []byte(sb.String()), 0644)
 }
