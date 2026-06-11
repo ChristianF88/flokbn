@@ -51,7 +51,7 @@ e2e:
 
 test-docker:
 	@echo "==> Running e2e suites (docker live)..."
-	$(MAKE) -C e2e live live-detection
+	$(MAKE) -C e2e live live-detection live-firewall
 
 # Full sweep: everything incl. race detector and docker live tests.
 # Sequential sub-makes keep ordering deterministic under make -j.

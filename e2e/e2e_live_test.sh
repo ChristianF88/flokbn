@@ -31,7 +31,7 @@ fail() { FAIL=$((FAIL + 1)); log "FAIL: $1"; }
 
 cleanup() {
     log "Tearing down Docker Compose..."
-    docker compose -p "$COMPOSE_PROJECT" -f "$REPO_ROOT/docker-compose.yml" down -v --remove-orphans 2>/dev/null || true
+    docker compose -p "$COMPOSE_PROJECT" -f "$REPO_ROOT/docker-compose.test.yml" down -v --remove-orphans 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -48,14 +48,14 @@ fi
 # --- Build and start ---
 log "Building and starting Docker Compose stack..."
 cd "$REPO_ROOT"
-docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml build --quiet 2>/dev/null
-docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml up -d 2>/dev/null
+docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml build --quiet 2>/dev/null
+docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml up -d 2>/dev/null
 
 # --- Wait for cidrx container to be running ---
 log "Waiting for cidrx container to start..."
 MAX_WAIT=30
 for i in $(seq 1 $MAX_WAIT); do
-    STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml ps cidrx --format '{{.State}}' 2>/dev/null || echo "")
+    STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml ps cidrx --format '{{.State}}' 2>/dev/null || echo "")
     if [ "$STATUS" = "running" ]; then
         break
     fi
@@ -72,7 +72,7 @@ log "Waiting for Filebeat to connect to cidrx..."
 MAX_WAIT=60
 CONNECTED=false
 for i in $(seq 1 $MAX_WAIT); do
-    LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs cidrx 2>/dev/null || echo "")
+    LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs cidrx 2>/dev/null || echo "")
     if echo "$LOGS" | grep -q "Filebeat connected"; then
         CONNECTED=true
         break
@@ -97,7 +97,7 @@ fi
 # above min_size 50 from the first batch. Poll so fast machines exit early.
 log "Waiting up to 10s for traffic to accumulate and clusters to form..."
 for i in $(seq 1 10); do
-    BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+    BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
     if [ -n "$BAN_PROBE" ]; then
         break
     fi
@@ -106,7 +106,7 @@ done
 
 # --- Check ban file for detections ---
 log "Checking ban file..."
-BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
 if [ -n "$BAN_CONTENT" ]; then
     BAN_COUNT=$(echo "$BAN_CONTENT" | wc -l)
     pass "Ban file has $BAN_COUNT entries"
@@ -124,7 +124,7 @@ fi
 
 # --- Check jail file ---
 log "Checking jail file..."
-JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
+JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
 if [ -n "$JAIL_CONTENT" ]; then
     VALID_JSON=$(echo "$JAIL_CONTENT" | python3 -c "import json, sys; json.load(sys.stdin); print('yes')" 2>/dev/null || echo "no")
     if [ "$VALID_JSON" = "yes" ]; then
@@ -197,7 +197,7 @@ if [ "$FOUND_172_16" = "true" ]; then
     pass "Client network (172.16.x) detected in ban or jail"
 else
     # Check cidrx output logs as fallback
-    DETECT_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs cidrx 2>/dev/null || echo "")
+    DETECT_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs cidrx 2>/dev/null || echo "")
     if echo "$DETECT_LOGS" | grep -q "172.16"; then
         pass "Client network (172.16.x) detected in cidrx output"
     else
@@ -210,7 +210,7 @@ fi
 # Verify it IS producing traffic first, so its absence from ban/jail output is
 # meaningful: cidrx does not ban benign low-rate IPs.
 log "Checking negative client (172.30.99.x) exclusion..."
-NET5_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs clients_net5 --tail=5 2>/dev/null || echo "")
+NET5_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs clients_net5 --tail=5 2>/dev/null || echo "")
 if echo "$NET5_LOGS" | grep -q "OK"; then
     pass "clients_net5 is producing traffic"
 else
@@ -231,7 +231,7 @@ fi
 
 # --- Check cidrx iteration log lines for detection data ---
 log "Checking cidrx logs for iteration summaries..."
-CIDRX_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs cidrx 2>/dev/null || echo "")
+CIDRX_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs cidrx 2>/dev/null || echo "")
 
 # cidrx logs one leveled summary line per loop iteration to stderr
 if echo "$CIDRX_LOGS" | grep 'msg=iteration' | grep -qE 'detected=[1-9]'; then
@@ -257,7 +257,7 @@ fi
 
 # --- Verify proxy is serving traffic ---
 log "Checking proxy health..."
-PROXY_STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml ps proxy --format '{{.State}}' 2>/dev/null || echo "")
+PROXY_STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml ps proxy --format '{{.State}}' 2>/dev/null || echo "")
 if [ "$PROXY_STATUS" = "running" ]; then
     pass "Proxy container is running"
 else
@@ -265,7 +265,7 @@ else
 fi
 
 # --- Verify filebeat is running ---
-FILEBEAT_STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml ps filebeat --format '{{.State}}' 2>/dev/null || echo "")
+FILEBEAT_STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml ps filebeat --format '{{.State}}' 2>/dev/null || echo "")
 if [ "$FILEBEAT_STATUS" = "running" ]; then
     pass "Filebeat container is running"
 else

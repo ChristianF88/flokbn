@@ -1,0 +1,60 @@
+# cidrx Docker DEMO configuration (mounted by docker-compose.demo.yml).
+# Paced for watching the Grafana dashboard: together with the demo overlay's
+# slower client intervals, the first ban lands ~20 s after traffic starts
+# and further clusters get banned progressively instead of all at once.
+# The e2e test suites use docker-test-config.toml (fast detection) instead.
+
+[global]
+jailFile = "/data/jail.json"
+banFile = "/data/blocklist.txt"
+
+[log]
+# Leveled log lines on stderr (visible via `docker compose logs cidrx`).
+level = "info"
+format = "text"
+
+[live]
+port = "9000"
+# HTTP stats endpoints (GET /stats, GET /bans, GET /metrics).
+# 0.0.0.0 bind is the documented exception to the localhost-only default:
+# required so the published port is reachable from the host across the
+# isolated compose network.
+statsListen = "0.0.0.0:8666"
+topTalkers = 5
+
+[live.general_detection]
+# Detect net1 (4 IPs: 172.16.1.32-35, ~5.7 req/s)
+# Detect net2 (2 IPs: 172.16.2.32-33, ~4 req/s)
+# Detect net3 (5 IPs: 172.16.3.32-36, ~9.1 req/s)
+# min_size=450 paces the demo: time-to-ban = 450 / cluster req/s, so the
+# four bans land clearly staggered across the first two minutes:
+# net4 ~20s, net3 ~50s, net1 ~79s, net2 ~113s. The negative client
+# (172.30.99.32, 1 req/3s) stays far below any threshold and must never
+# be banned.
+# Note: bans land at the balanced subtree, not the /24 — clustering only
+# reports a node whose children are evenly loaded, so expect
+# 172.16.16.32/27, 172.16.3.32/28, 172.16.1.32/28|/30, 172.16.2.32/28|/31.
+slidingWindowMaxTime = "5m"
+slidingWindowMaxSize = 10000
+sleepBetweenIterations = 1
+clusterArgSets = [
+    [450, 24, 32, 0.2],  # Detect small clusters (450+ requests)
+]
+useForJail = [true]
+
+[live.aggressive_detection]
+# Detect net4 (32 IPs: 172.16.16.32-63, ~22.9 req/s) - the main attack
+# cluster. min_size=450 -> first ban ~20s after traffic starts.
+# Min depth is 24 ON PURPOSE: at the demo's slow rates a coarser depth
+# range lets the combined 172.16.0.0/19 subtree (~46 req/s across all
+# attack nets) cross the threshold before any single /24 does, producing
+# one giant ban that freezes the whole demo (observed live: a /19 swallowed
+# every net at ~15s). Depth >= 24 makes coarse capture impossible, so the
+# per-net bans land staggered: net4 ~20s, net3 ~50s, net1 ~79s, net2 ~113s.
+slidingWindowMaxTime = "2m"
+slidingWindowMaxSize = 5000
+sleepBetweenIterations = 1
+clusterArgSets = [
+    [450, 24, 28, 0.15], # Detect medium clusters (450+ requests)
+]
+useForJail = [true]

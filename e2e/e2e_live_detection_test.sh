@@ -4,7 +4,7 @@
 # 1 negative control) produces expected clustering detections across
 # multiple detection tries.
 #
-# Docker network layout (from docker-compose.yml). One traffic-gen container
+# Docker network layout (from docker-compose.test.yml). One traffic-gen container
 # per subnet simulates all client IPs via secondary addresses:
 #   net1: 172.16.1.32-35  (clients_net1: 4 IPs,  0.1s interval)  -> curl UA, GET /
 #   net2: 172.16.2.32-33  (clients_net2: 2 IPs,  0.1s interval)  -> curl UA, GET /
@@ -36,7 +36,7 @@ fail() { FAIL=$((FAIL + 1)); log "FAIL: $1"; }
 
 cleanup() {
     log "Tearing down Docker Compose..."
-    docker compose -p "$COMPOSE_PROJECT" -f "$REPO_ROOT/docker-compose.yml" down -v --remove-orphans 2>/dev/null || true
+    docker compose -p "$COMPOSE_PROJECT" -f "$REPO_ROOT/docker-compose.test.yml" down -v --remove-orphans 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -53,14 +53,14 @@ fi
 # --- Build and start ---
 log "Building and starting Docker Compose stack..."
 cd "$REPO_ROOT"
-docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml build --quiet 2>/dev/null
-docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml up -d 2>/dev/null
+docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml build --quiet 2>/dev/null
+docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml up -d 2>/dev/null
 
 # --- Wait for cidrx to start and accept connections ---
 log "Waiting for cidrx container to start..."
 MAX_WAIT=30
 for i in $(seq 1 $MAX_WAIT); do
-    STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml ps cidrx --format '{{.State}}' 2>/dev/null || echo "")
+    STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml ps cidrx --format '{{.State}}' 2>/dev/null || echo "")
     if [ "$STATUS" = "running" ]; then
         break
     fi
@@ -76,7 +76,7 @@ pass "cidrx container started"
 log "Waiting for Filebeat to connect..."
 MAX_WAIT=60
 for i in $(seq 1 $MAX_WAIT); do
-    LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs cidrx 2>/dev/null || echo "")
+    LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs cidrx 2>/dev/null || echo "")
     if echo "$LOGS" | grep -q "Filebeat connected"; then
         pass "Filebeat connected"
         break
@@ -94,7 +94,7 @@ done
 # above min_size 50 from the first batch. Poll so fast machines exit early.
 log "Waiting up to 10s for detections to accumulate..."
 for i in $(seq 1 10); do
-    BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+    BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
     if [ -n "$BAN_PROBE" ]; then
         break
     fi
@@ -103,7 +103,7 @@ done
 
 # --- Test 1: Ban file exists and has entries ---
 log "Test 1: Ban file analysis..."
-BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
 if [ -n "$BAN_CONTENT" ]; then
     BAN_COUNT=$(echo "$BAN_CONTENT" | wc -l)
     pass "Ban file has $BAN_COUNT entries"
@@ -127,7 +127,7 @@ fi
 
 # --- Test 3: Jail file structure ---
 log "Test 3: Jail file validation..."
-JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
+JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
 if [ -n "$JAIL_CONTENT" ]; then
     JAIL_VALID=$(echo "$JAIL_CONTENT" | python3 -c "
 import json, sys
@@ -171,7 +171,7 @@ fi
 
 # --- Test 4: live stats verification via /stats ---
 log "Test 4: live stats via /stats endpoint..."
-CIDRX_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs cidrx 2>/dev/null || echo "")
+CIDRX_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs cidrx 2>/dev/null || echo "")
 
 LOOP_STATS=$(curl -fsS http://localhost:8666/stats 2>/dev/null || echo "")
 if [ -n "$LOOP_STATS" ]; then
@@ -245,7 +245,7 @@ fi
 # --- Test 6: All infrastructure containers running ---
 log "Test 6: Infrastructure health..."
 for SVC in proxy filebeat cidrx; do
-    SVC_STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml ps "$SVC" --format '{{.State}}' 2>/dev/null || echo "unknown")
+    SVC_STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml ps "$SVC" --format '{{.State}}' 2>/dev/null || echo "unknown")
     if [ "$SVC_STATUS" = "running" ]; then
         pass "$SVC container is running"
     else
@@ -258,7 +258,7 @@ log "Test 7: Client traffic verification..."
 # Check the traffic generator of each network
 SAMPLE_CLIENTS=("clients_net1" "clients_net2" "clients_net3" "clients_net4" "clients_net5")
 for CLIENT in "${SAMPLE_CLIENTS[@]}"; do
-    CLIENT_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs "$CLIENT" --tail=5 2>/dev/null || echo "")
+    CLIENT_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs "$CLIENT" --tail=5 2>/dev/null || echo "")
     if echo "$CLIENT_LOGS" | grep -q "OK"; then
         pass "$CLIENT is producing traffic"
     else
@@ -302,14 +302,14 @@ fi
 # Test 7 already proved clients_net5 IS producing traffic, so its absence from
 # the ban and jail files is meaningful: cidrx does not ban benign low-rate IPs.
 log "Test 9: Negative client (172.30.99.x) exclusion..."
-BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
 if echo "$BAN_CONTENT" | grep -q "172.30.99"; then
     fail "Negative client (172.30.99.x) found in ban file"
 else
     pass "Negative client (172.30.99.x) not in ban file"
 fi
 
-JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
+JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
 if echo "$JAIL_CONTENT" | grep -q "172.30.99"; then
     fail "Negative client (172.30.99.x) found in jail file"
 else

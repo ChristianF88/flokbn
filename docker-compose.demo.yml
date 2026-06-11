@@ -1,0 +1,195 @@
+# DEMO base stack (CIDRX-045) — same topology as docker-compose.test.yml but
+# paced for watching the Grafana dashboard: slower clients (~46 req/s total
+# instead of ~580) and a detection config (docker-test-config.demo.toml)
+# tuned so the first ban lands ~20 s after traffic starts and further
+# clusters get banned progressively.
+#
+# Demo usage (two files only):
+#   docker compose -f docker-compose.demo.yml \
+#                  -f docker-compose-firewall-with-monitoring.demo.yml \
+#                  up --build -d
+#
+# The e2e test suites use docker-compose.test.yml (fast) instead.
+services:
+  proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: proxy
+    restart: unless-stopped
+    ports:
+    - '80'
+    volumes:
+    - /tmp:/var/log/nginx:rw
+    networks: &id001
+      net1: {}
+      net2: {}
+      net3: {}
+      net4: {}
+      net5: {}
+  cidrx:
+    build:
+      context: ./cidrx
+      dockerfile: Dockerfile
+    container_name: cidrx
+    restart: unless-stopped
+    ports:
+    - 9000:9000
+    - 8666:8666
+    volumes:
+    - ./docker-test-config.demo.toml:/config/cidrx.toml:ro
+    - cidrx_data:/data
+    healthcheck:
+      test:
+      - CMD
+      - wget
+      - -q
+      - -O
+      - /dev/null
+      - http://127.0.0.1:8666/stats
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    networks: *id001
+  filebeat:
+    build:
+      context: ./filebeat
+      dockerfile: Dockerfile
+    container_name: filebeat
+    user: root
+    depends_on:
+    - proxy
+    - cidrx
+    restart: unless-stopped
+    networks: *id001
+    volumes:
+    - /tmp:/var/log/nginx:ro
+    - filebeat_data:/usr/share/filebeat/data
+    environment:
+      INGESTOR_HOST: cidrx:9000
+      PROXY_CONTAINER_NAME: proxy
+  clients_net1:
+    build: &id002
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: clients_net1
+    depends_on:
+    - proxy
+    cap_add:
+    - NET_ADMIN
+    networks:
+      net1:
+        ipv4_address: 172.16.1.32
+    environment:
+      TARGET_URL: http://proxy:80/
+      INTERVAL: 0.7    # 4 IPs  -> ~5.7 req/s -> ban ~79s
+      IP_BASE: 172.16.1
+      IP_START: 32
+      COUNT: 4
+  clients_net2:
+    build: *id002
+    container_name: clients_net2
+    depends_on:
+    - proxy
+    cap_add:
+    - NET_ADMIN
+    networks:
+      net2:
+        ipv4_address: 172.16.2.32
+    environment:
+      TARGET_URL: http://proxy:80/
+      INTERVAL: 0.5    # 2 IPs  -> ~4 req/s -> ban ~113s
+      IP_BASE: 172.16.2
+      IP_START: 32
+      COUNT: 2
+  clients_net3:
+    build: *id002
+    container_name: clients_net3
+    depends_on:
+    - proxy
+    cap_add:
+    - NET_ADMIN
+    networks:
+      net3:
+        ipv4_address: 172.16.3.32
+    environment:
+      TARGET_URL: http://proxy:80/
+      INTERVAL: 0.55   # 5 IPs  -> ~9.1 req/s -> ban ~50s
+      IP_BASE: 172.16.3
+      IP_START: 32
+      COUNT: 5
+  clients_net4:
+    build: *id002
+    container_name: clients_net4
+    depends_on:
+    - proxy
+    cap_add:
+    - NET_ADMIN
+    networks:
+      net4:
+        ipv4_address: 172.16.16.32
+    environment:
+      TARGET_URL: http://proxy:80/
+      INTERVAL: 1.4    # 32 IPs -> ~22.9 req/s -> ban ~20s
+      IP_BASE: 172.16.16
+      IP_START: 32
+      # Exactly 32 IPs (.32-.63) so the detected cluster 172.16.16.32/27
+      # covers the whole net: with 33 the last IP (.64) falls outside the
+      # /27 ban and keeps trickling 200s for the rest of the demo.
+      COUNT: 32
+  clients_net5:
+    build: *id002
+    container_name: clients_net5
+    depends_on:
+    - proxy
+    cap_add:
+    - NET_ADMIN
+    networks:
+      net5:
+        ipv4_address: 172.30.99.32
+    environment:
+      TARGET_URL: http://proxy:80/
+      INTERVAL: 3
+      IP_BASE: 172.30.99
+      IP_START: 32
+      COUNT: 1
+networks:
+  net1:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.1.0/24
+        ip_range: 172.16.1.0/27
+  net2:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.2.0/24
+        ip_range: 172.16.2.0/27
+  net3:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.3.0/24
+        ip_range: 172.16.3.0/27
+  net4:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.16.0/24
+        ip_range: 172.16.16.0/27
+  net5:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.30.99.0/24
+        ip_range: 172.30.99.0/27
+volumes:
+  filebeat_data: {}
+  cidrx_data: {}

@@ -1,5 +1,6 @@
-# cidrx Docker Configuration
-# This config is used by the Docker container for live mode testing
+# cidrx Docker TEST configuration (mounted by docker-compose.test.yml)
+# Fast detection for the e2e suites; the paced demo variant is
+# docker-test-config.demo.toml
 # It's designed to detect the clustering patterns from the test clients
 
 [global]

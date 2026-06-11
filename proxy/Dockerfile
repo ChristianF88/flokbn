@@ -1,14 +1,20 @@
 FROM nginx:stable-alpine
 
-# install rsyslog for syslog buffering and dumb-init for proper signal handling\ nRUN apk add --no-cache rsyslog dumb-init
-RUN apk add --no-cache dumb-init 
+RUN apk add --no-cache dumb-init
 
-# Copy custom Nginx and rsyslog configs into the container
+# Copy custom Nginx config into the container
 COPY default.conf /etc/nginx/conf.d/default.conf
 
-# Include an entrypoint script to launch rsyslog and nginx
+# Empty deny include so nginx starts before the banpoller's first write
+RUN mkdir -p /etc/nginx/banned && touch /etc/nginx/banned/deny.conf
+
+# Static body for / (see default.conf: deny needs the access phase)
+RUN printf 'ok' > /usr/share/nginx/html/index.html
+
+# Entrypoint launches the banpoller (when BANLIST_URL is set) and nginx
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY banpoller.sh /banpoller.sh
+RUN chmod +x /entrypoint.sh /banpoller.sh
 
 # Expose HTTP port
 EXPOSE 80

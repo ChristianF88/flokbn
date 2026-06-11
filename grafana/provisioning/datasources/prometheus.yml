@@ -1,0 +1,12 @@
+# Provisioned Prometheus datasource (CIDRX-045) — zero manual setup.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 2s

@@ -32,6 +32,7 @@ func newStatsServer(listenAddr string) (*statsServer, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /stats", s.handleStats)
 	mux.HandleFunc("GET /bans", s.handleBans)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.srv = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -100,4 +101,13 @@ func (s *statsServer) handleBans(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = io.WriteString(w, sn.banFileContent)
+}
+
+func (s *statsServer) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	sn := s.loadOr503(w)
+	if sn == nil {
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write(renderMetrics(sn))
 }

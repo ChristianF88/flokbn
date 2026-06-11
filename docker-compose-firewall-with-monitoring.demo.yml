@@ -1,0 +1,87 @@
+# Firewall + observability overlay (CIDRX-045). Pacing-neutral: stack it on
+# either base.
+#
+# Demo (slow, for watching Grafana):
+#   docker compose -f docker-compose.demo.yml \
+#                  -f docker-compose-firewall-with-monitoring.demo.yml \
+#                  up --build -d
+#
+# Fast (what e2e_docker_firewall_test.sh runs):
+#   docker compose -f docker-compose.test.yml \
+#                  -f docker-compose-firewall-with-monitoring.demo.yml \
+#                  up --build -d
+#
+# Adds to the base stack:
+#   - proxy: banpoller enabled (BANLIST_URL) -> nginx denies banned CIDRs
+#     with 403; denied requests vanish from the shipped log, so the closed
+#     loop (ban -> decay -> expiry -> re-ban) is observable.
+#   - nginx-log-exporter: tails the proxy's full access log (incl. 403s)
+#     and exposes per-status request counts for Prometheus.
+#   - prometheus: scrapes cidrx (/metrics, CIDRX-045) + the log exporter.
+#   - grafana: provisioned datasource + "cidrx — closed-loop firewall"
+#     dashboard, anonymous access (test stack only). http://localhost:3000
+services:
+  proxy:
+    environment:
+      BANLIST_URL: http://cidrx:8666/bans
+      BANPOLL_INTERVAL: 2
+    networks:
+      mon: {}
+  cidrx:
+    networks:
+      mon: {}
+  nginx-log-exporter:
+    image: quay.io/martinhelmich/prometheus-nginxlog-exporter:v1.11.0
+    container_name: nginx_log_exporter
+    restart: unless-stopped
+    depends_on:
+    - proxy
+    command:
+    - -config-file
+    - /etc/nginx-log-exporter/config.yaml
+    volumes:
+    - /tmp:/var/log/nginx:ro
+    - ./nginx-exporter/config.yaml:/etc/nginx-log-exporter/config.yaml:ro
+    networks:
+      mon: {}
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    restart: unless-stopped
+    depends_on:
+    - cidrx
+    - nginx-log-exporter
+    ports:
+    - 9090:9090
+    volumes:
+    - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      mon: {}
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    restart: unless-stopped
+    depends_on:
+    - prometheus
+    ports:
+    - 3000:3000
+    environment:
+      # Anonymous admin: local test stack only, never expose publicly.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_BASIC_ENABLED: "false"
+    volumes:
+    - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      mon: {}
+networks:
+  # Pinned subnet: without it Docker auto-allocates the next free /16 from
+  # its default pool, which can land on 172.30.0.0/16 and overlap net5
+  # (172.30.99.0/24) depending on network creation order.
+  mon:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.31.99.0/24

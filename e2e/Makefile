@@ -1,4 +1,4 @@
-.PHONY: all static filters whitelist-blacklist live live-detection clean
+.PHONY: all static filters whitelist-blacklist live live-detection live-firewall clean
 
 # Run all tests that don't require Docker
 all: static filters whitelist-blacklist
@@ -23,8 +23,12 @@ live:
 live-detection:
 	@bash e2e_live_detection_test.sh
 
+# Run the closed-loop firewall overlay test (requires Docker)
+live-firewall:
+	@bash e2e_docker_firewall_test.sh
+
 # Run everything including Docker tests
-everything: all live live-detection
+everything: all live live-detection live-firewall
 
 clean:
 	@echo "Nothing to clean"
