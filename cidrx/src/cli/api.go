@@ -216,6 +216,18 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		})
 	}
 
+	// Load whitelist/blacklist once at startup, mirroring static mode's
+	// ProcessJailWithWhitelist semantics. A broken list config fails loud
+	// instead of silently banning whitelisted ranges.
+	whitelistCIDRs, err := cfg.LoadWhitelistCIDRs()
+	if err != nil {
+		return fmt.Errorf("loading whitelist: %w", err)
+	}
+	blacklistCIDRs, err := cfg.LoadBlacklistCIDRs()
+	if err != nil {
+		return fmt.Errorf("loading blacklist: %w", err)
+	}
+
 	jailInstance, err := jail.FileToJail(cfg.GetJailFile())
 	if err != nil {
 		return fmt.Errorf("reading jail file: %w", err)
@@ -255,6 +267,10 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			maxSleepTime = winInst.config.SleepBetweenIterations
 		}
 	}
+
+	// blacklist_applied is emitted once per run, on the first successful
+	// ban-file write (static emits it once per analysis).
+	blacklistWarned := false
 
 	for {
 		loopStart := time.Now()
@@ -363,14 +379,30 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			mergedCIDRs = append(mergedCIDRs, ipNet.String())
 		}
 
-		if err := jailInstance.Update(mergedCIDRs); err != nil {
+		// Apply whitelist filtering before jail update (static parity).
+		filteredJailCIDRs := cidr.RemoveWhitelisted(mergedCIDRs, whitelistCIDRs)
+		if len(whitelistCIDRs) > 0 {
+			if removed := len(mergedCIDRs) - len(filteredJailCIDRs); removed > 0 {
+				jsonOutput.AddWarning("whitelist_applied", fmt.Sprintf("Whitelist filtering prevented %d CIDRs from being added to jail", removed), 0)
+			}
+		}
+
+		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
 			jsonOutput.AddWarning("jail_update", fmt.Sprintf("some CIDRs failed during jail update: %v", err), 1)
 		}
 		if err := jail.JailToFile(jailInstance, cfg.GetJailFile()); err != nil {
 			jsonOutput.AddError("jail_save", fmt.Sprintf("failed to save jail: %v", err), 1)
 		}
-		if err := jail.WriteBanFile(cfg.GetBanFile(), jailInstance.ListActiveBans()); err != nil {
+
+		// Whitelist also shields pre-existing jail entries from the ban file,
+		// and manual blacklist entries are always appended (static parity).
+		activeBans := jailInstance.ListActiveBans()
+		filteredActiveBans := cidr.RemoveWhitelisted(activeBans, whitelistCIDRs)
+		if err := jail.WriteBanFileWithBlacklist(cfg.GetBanFile(), filteredActiveBans, blacklistCIDRs); err != nil {
 			jsonOutput.AddError("banfile_write", fmt.Sprintf("failed to write ban file: %v", err), 1)
+		} else if len(blacklistCIDRs) > 0 && !blacklistWarned {
+			blacklistWarned = true
+			jsonOutput.AddWarning("blacklist_applied", fmt.Sprintf("Added %d manual blacklist entries to ban file", len(blacklistCIDRs)), 0)
 		}
 
 		loopEnd := time.Since(loopStart)
@@ -381,7 +413,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			ProcessedBatch:  len(batch),
 			LoopDuration:    loopEnd.Milliseconds(),
 			ClusterDuration: totalClusterDuration / 1000, // Convert to milliseconds
-			ActiveBans:      jailInstance.ListActiveBans(),
+			ActiveBans:      filteredActiveBans,
 			DetectedCIDRs:   allDetectedCIDRs,
 			MergedCIDRs:     mergedCIDRs,
 		}
