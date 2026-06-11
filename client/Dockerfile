@@ -1,18 +1,10 @@
-# Use the ultra-slim curl-only image
-FROM curlimages/curl:latest
+# Traffic-generator image: one container simulates a whole subnet of clients
+# by adding secondary IPs to eth0 and running one curl loop per IP.
+# Needs root + NET_ADMIN (granted via compose `cap_add`) for `ip addr add`.
+FROM alpine:3.20
 
-# Build-time defaults (can be overridden with --build-arg)
-ARG TARGET_URL=http://nginx:80/
-ARG INTERVAL=1
+RUN apk add --no-cache curl iproute2
 
-# Expose them as environment variables
-ENV TARGET_URL=${TARGET_URL}
-ENV INTERVAL=${INTERVAL}
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
 
-# Loop: curl the URL, then sleep for $INTERVAL seconds
-ENTRYPOINT ["sh","-c","\
-  echo \"Starting continuous curl to $TARGET_URL every $INTERVAL seconds...\";\
-  while true; do \
-    curl -s -o /dev/null --fail --show-error \"$TARGET_URL\" && echo \"[$(date)] OK\" || echo \"[$(date)] FAIL\";\
-    sleep \"$INTERVAL\";\
-  done"]
+ENTRYPOINT ["/entrypoint.sh"]

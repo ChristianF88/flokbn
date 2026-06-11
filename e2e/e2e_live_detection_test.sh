@@ -3,11 +3,12 @@
 # Verifies that the Docker Compose setup with 4 client networks produces
 # expected clustering detections across multiple detection tries.
 #
-# Docker network layout (from docker-compose.yml):
-#   net1: 172.16.1.32-35  (4 clients,  0.1s interval)  -> curl UA, GET /
-#   net2: 172.16.2.32-33  (2 clients,  0.1s interval)  -> curl UA, GET /
-#   net3: 172.16.3.32-36  (5 clients,  0.1s interval)  -> curl UA, GET /
-#   net4: 172.16.16.32-64 (33 clients, 0.07s interval) -> curl UA, GET /
+# Docker network layout (from docker-compose.yml). One traffic-gen container
+# per subnet simulates all client IPs via secondary addresses:
+#   net1: 172.16.1.32-35  (clients_net1: 4 IPs,  0.1s interval)  -> curl UA, GET /
+#   net2: 172.16.2.32-33  (clients_net2: 2 IPs,  0.1s interval)  -> curl UA, GET /
+#   net3: 172.16.3.32-36  (clients_net3: 5 IPs,  0.1s interval)  -> curl UA, GET /
+#   net4: 172.16.16.32-64 (clients_net4: 33 IPs, 0.07s interval) -> curl UA, GET /
 #
 # Detection config (from docker-test-config.toml):
 #   general_detection:    min_size=2,  depth 24-32, threshold 0.2
@@ -238,10 +239,10 @@ for SVC in proxy filebeat cidrx; do
     fi
 done
 
-# --- Test 7: Verify client containers are producing traffic ---
+# --- Test 7: Verify traffic-gen containers are producing traffic ---
 log "Test 7: Client traffic verification..."
-# Check a sample client from each network
-SAMPLE_CLIENTS=("client1_1" "client2_1" "client3_1" "client4_1")
+# Check the traffic generator of each network
+SAMPLE_CLIENTS=("clients_net1" "clients_net2" "clients_net3" "clients_net4")
 for CLIENT in "${SAMPLE_CLIENTS[@]}"; do
     CLIENT_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs "$CLIENT" --tail=5 2>/dev/null || echo "")
     if echo "$CLIENT_LOGS" | grep -q "OK"; then
@@ -250,6 +251,37 @@ for CLIENT in "${SAMPLE_CLIENTS[@]}"; do
         fail "$CLIENT is not producing traffic"
     fi
 done
+
+# --- Test 8: Stats endpoints reachable from the host ---
+log "Test 8: Stats endpoints..."
+STATS_JSON=$(curl -fsS http://localhost:8666/stats 2>/dev/null || echo "")
+if [ -n "$STATS_JSON" ]; then
+    STATS_VALID=$(echo "$STATS_JSON" | python3 -c "
+import json, sys
+try:
+    j = json.load(sys.stdin)
+    if isinstance(j, dict):
+        print('valid')
+    else:
+        print('invalid_type')
+except:
+    print('invalid_json')
+" 2>/dev/null || echo "error")
+    if [ "$STATS_VALID" = "valid" ]; then
+        pass "/stats returns valid JSON dict"
+    else
+        fail "/stats validation failed: $STATS_VALID"
+    fi
+else
+    fail "/stats not reachable on http://localhost:8666/stats"
+fi
+
+# /bans may contain only header comments early on; HTTP success is enough.
+if curl -fsS -o /dev/null http://localhost:8666/bans 2>/dev/null; then
+    pass "/bans returns HTTP success"
+else
+    fail "/bans not reachable on http://localhost:8666/bans"
+fi
 
 # --- Summary ---
 log "============================="
