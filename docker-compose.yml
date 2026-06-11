@@ -22,11 +22,22 @@ services:
     restart: unless-stopped
     ports:
     - 9000:9000
+    - 8666:8666
     volumes:
-    # Mount config file for easy customization without rebuild
     - ./docker-test-config.toml:/config/cidrx.toml:ro
-    # Mount data directory to persist jail/ban files
     - cidrx_data:/data
+    healthcheck:
+      test:
+      - CMD
+      - wget
+      - -q
+      - -O
+      - /dev/null
+      - http://127.0.0.1:8666/stats
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     networks: *id001
   filebeat:
     build:
@@ -45,492 +56,72 @@ services:
     environment:
       INGESTOR_HOST: cidrx:9000
       PROXY_CONTAINER_NAME: proxy
-  client1_1:
+  clients_net1:
     build: &id002
       context: ./client
       dockerfile: Dockerfile
-    container_name: client1_1
+    container_name: clients_net1
     depends_on:
     - proxy
+    cap_add:
+    - NET_ADMIN
     networks:
       net1:
         ipv4_address: 172.16.1.32
     environment:
       TARGET_URL: http://proxy:80/
       INTERVAL: 0.1
-  client1_2:
+      IP_BASE: 172.16.1
+      IP_START: 32
+      COUNT: 4
+  clients_net2:
     build: *id002
-    container_name: client1_2
+    container_name: clients_net2
     depends_on:
     - proxy
-    networks:
-      net1:
-        ipv4_address: 172.16.1.33
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.1
-  client1_3:
-    build: *id002
-    container_name: client1_3
-    depends_on:
-    - proxy
-    networks:
-      net1:
-        ipv4_address: 172.16.1.34
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.1
-  client1_4:
-    build: *id002
-    container_name: client1_4
-    depends_on:
-    - proxy
-    networks:
-      net1:
-        ipv4_address: 172.16.1.35
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.1
-  client2_1:
-    build: *id002
-    container_name: client2_1
-    depends_on:
-    - proxy
+    cap_add:
+    - NET_ADMIN
     networks:
       net2:
         ipv4_address: 172.16.2.32
     environment:
       TARGET_URL: http://proxy:80/
       INTERVAL: 0.1
-  client2_2:
+      IP_BASE: 172.16.2
+      IP_START: 32
+      COUNT: 2
+  clients_net3:
     build: *id002
-    container_name: client2_2
+    container_name: clients_net3
     depends_on:
     - proxy
-    networks:
-      net2:
-        ipv4_address: 172.16.2.33
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.1
-  client3_1:
-    build: *id002
-    container_name: client3_1
-    depends_on:
-    - proxy
+    cap_add:
+    - NET_ADMIN
     networks:
       net3:
         ipv4_address: 172.16.3.32
     environment:
       TARGET_URL: http://proxy:80/
       INTERVAL: 0.1
-  client3_2:
+      IP_BASE: 172.16.3
+      IP_START: 32
+      COUNT: 5
+  clients_net4:
     build: *id002
-    container_name: client3_2
+    container_name: clients_net4
     depends_on:
     - proxy
-    networks:
-      net3:
-        ipv4_address: 172.16.3.33
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.1
-  client3_3:
-    build: *id002
-    container_name: client3_3
-    depends_on:
-    - proxy
-    networks:
-      net3:
-        ipv4_address: 172.16.3.34
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.1
-  client3_4:
-    build: *id002
-    container_name: client3_4
-    depends_on:
-    - proxy
-    networks:
-      net3:
-        ipv4_address: 172.16.3.35
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.1
-  client3_5:
-    build: *id002
-    container_name: client3_5
-    depends_on:
-    - proxy
-    networks:
-      net3:
-        ipv4_address: 172.16.3.36
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.1
-  client4_1:
-    build: *id002
-    container_name: client4_1
-    depends_on:
-    - proxy
+    cap_add:
+    - NET_ADMIN
     networks:
       net4:
         ipv4_address: 172.16.16.32
     environment:
       TARGET_URL: http://proxy:80/
       INTERVAL: 0.07
-  client4_2:
-    build: *id002
-    container_name: client4_2
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.33
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_3:
-    build: *id002
-    container_name: client4_3
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.34
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_4:
-    build: *id002
-    container_name: client4_4
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.35
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_5:
-    build: *id002
-    container_name: client4_5
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.36
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_6:
-    build: *id002
-    container_name: client4_6
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.37
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_7:
-    build: *id002
-    container_name: client4_7
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.38
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_8:
-    build: *id002
-    container_name: client4_8
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.39
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_9:
-    build: *id002
-    container_name: client4_9
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.40
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_10:
-    build: *id002
-    container_name: client4_10
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.41
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_11:
-    build: *id002
-    container_name: client4_11
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.42
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_12:
-    build: *id002
-    container_name: client4_12
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.43
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_13:
-    build: *id002
-    container_name: client4_13
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.44
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_14:
-    build: *id002
-    container_name: client4_14
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.45
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_15:
-    build: *id002
-    container_name: client4_15
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.46
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_16:
-    build: *id002
-    container_name: client4_16
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.47
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_17:
-    build: *id002
-    container_name: client4_17
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.48
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_18:
-    build: *id002
-    container_name: client4_18
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.49
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_19:
-    build: *id002
-    container_name: client4_19
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.50
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_20:
-    build: *id002
-    container_name: client4_20
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.51
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_21:
-    build: *id002
-    container_name: client4_21
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.52
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_22:
-    build: *id002
-    container_name: client4_22
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.53
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_23:
-    build: *id002
-    container_name: client4_23
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.54
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_24:
-    build: *id002
-    container_name: client4_24
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.55
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_25:
-    build: *id002
-    container_name: client4_25
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.56
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_26:
-    build: *id002
-    container_name: client4_26
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.57
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_27:
-    build: *id002
-    container_name: client4_27
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.58
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_28:
-    build: *id002
-    container_name: client4_28
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.59
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_29:
-    build: *id002
-    container_name: client4_29
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.60
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_30:
-    build: *id002
-    container_name: client4_30
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.61
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_31:
-    build: *id002
-    container_name: client4_31
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.62
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_32:
-    build: *id002
-    container_name: client4_32
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.63
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
-  client4_33:
-    build: *id002
-    container_name: client4_33
-    depends_on:
-    - proxy
-    networks:
-      net4:
-        ipv4_address: 172.16.16.64
-    environment:
-      TARGET_URL: http://proxy:80/
-      INTERVAL: 0.07
+      IP_BASE: 172.16.16
+      IP_START: 32
+      COUNT: 33
 networks:
   net1:
     driver: bridge
@@ -538,24 +129,28 @@ networks:
       driver: default
       config:
       - subnet: 172.16.1.0/24
+        ip_range: 172.16.1.0/27
   net2:
     driver: bridge
     ipam:
       driver: default
       config:
       - subnet: 172.16.2.0/24
+        ip_range: 172.16.2.0/27
   net3:
     driver: bridge
     ipam:
       driver: default
       config:
       - subnet: 172.16.3.0/24
+        ip_range: 172.16.3.0/27
   net4:
     driver: bridge
     ipam:
       driver: default
       config:
       - subnet: 172.16.16.0/24
+        ip_range: 172.16.16.0/27
 volumes:
   filebeat_data: {}
   cidrx_data: {}

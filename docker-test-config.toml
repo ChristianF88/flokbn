@@ -8,6 +8,14 @@ banFile = "/data/blocklist.txt"
 
 [live]
 port = "9000"
+# HTTP stats endpoints (GET /stats, GET /bans).
+# 0.0.0.0 bind is the documented exception to the localhost-only default:
+# required so the published port is reachable from the host across the
+# isolated compose network.
+# While the stack runs:  curl http://localhost:8666/stats
+#                        curl http://localhost:8666/bans
+statsListen = "0.0.0.0:8666"
+topTalkers = 5
 
 [live.general_detection]
 # Detect net1 (4 IPs: 172.16.1.32-35)

@@ -34,6 +34,6 @@ RUN chown cidrx:cidrx /cidrx
 # Switch to non-root user
 USER cidrx
 
-EXPOSE 9000
+EXPOSE 9000 8666
 
 ENTRYPOINT ["/cidrx", "live", "--config", "/config/cidrx.toml"]
