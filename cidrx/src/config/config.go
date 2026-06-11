@@ -88,6 +88,8 @@ type StaticConfig struct {
 type LiveConfig struct {
 	Port        string        `toml:"port"`
 	ReadTimeout time.Duration `toml:"readTimeout"`
+	StatsListen string        `toml:"statsListen"` // host:port for the /stats HTTP server; empty = off
+	TopTalkers  int           `toml:"topTalkers"`  // top-N IPs per window in /stats; 0 = off
 }
 
 // DefaultLiveReadTimeout is the TCP ingestor read timeout used when the
@@ -153,7 +155,7 @@ func LoadConfig(configPath string) (*Config, error) {
 				// Parse live tries from nested config
 				for subKey, subValue := range liveMap {
 					// Skip live configuration fields and only process trie configurations
-					if subKey != "port" && subKey != "readTimeout" && subKey != "slidingWindowMaxTime" && subKey != "slidingWindowMaxSize" && subKey != "sleepBetweenIterations" {
+					if subKey != "port" && subKey != "readTimeout" && subKey != "statsListen" && subKey != "topTalkers" && subKey != "slidingWindowMaxTime" && subKey != "slidingWindowMaxSize" && subKey != "sleepBetweenIterations" {
 						if trieMap, ok := subValue.(map[string]any); ok {
 							trieConfig, err := parseSlidingTrieConfig(trieMap)
 							if err != nil {
@@ -230,6 +232,12 @@ func parseLiveConfig(m map[string]any) (*LiveConfig, error) {
 			return nil, fmt.Errorf("invalid readTimeout %q: %w", v, err)
 		}
 		config.ReadTimeout = duration
+	}
+	if v, ok := m["statsListen"].(string); ok {
+		config.StatsListen = v
+	}
+	if v, ok := m["topTalkers"].(int64); ok {
+		config.TopTalkers = int(v)
 	}
 	return config, nil
 }
@@ -390,6 +398,17 @@ func (c *Config) ValidateLive() error {
 
 	if c.Live.Port == "" {
 		return fmt.Errorf("port is required in live configuration")
+	}
+
+	if c.Live.StatsListen != "" {
+		if _, _, err := net.SplitHostPort(c.Live.StatsListen); err != nil {
+			return fmt.Errorf("invalid statsListen %q (want host:port): %w", c.Live.StatsListen, err)
+		}
+	}
+
+	// topTalkers > 0 without statsListen is accepted but inert.
+	if c.Live.TopTalkers < 0 {
+		return fmt.Errorf("topTalkers must be >= 0, got %d", c.Live.TopTalkers)
 	}
 
 	// Validate required global fields for live mode

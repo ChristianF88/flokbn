@@ -68,6 +68,12 @@ func (f *fakeIngestor) Close() error {
 	return nil
 }
 
+func (f *fakeIngestor) Stats() ingestor.IngestStats {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return ingestor.IngestStats{QueueDepth: len(f.batches)}
+}
+
 func (f *fakeIngestor) closeCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -185,7 +191,7 @@ func startLoop(t *testing.T, ing ingestor.Ingestor, cfg *config.Config) *loopHar
 		cancel:  cancel,
 	}
 	go func() {
-		h.err = runLiveLoop(ctx, ing, cfg, func(o *output.JSONOutput) { h.outputs <- o })
+		h.err = runLiveLoop(ctx, ing, cfg, func(o *output.JSONOutput) { h.outputs <- o }, nil)
 		close(h.done)
 	}()
 	t.Cleanup(func() {
@@ -621,7 +627,7 @@ func TestRunLiveLoop_NoLiveTriesErrors(t *testing.T) {
 	fake := &fakeIngestor{}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{})
 
-	err := runLiveLoop(context.Background(), fake, cfg, func(*output.JSONOutput) {})
+	err := runLiveLoop(context.Background(), fake, cfg, func(*output.JSONOutput) {}, nil)
 	if err == nil || !strings.Contains(err.Error(), "no LiveTries configurations found") {
 		t.Fatalf("err = %v, want 'no LiveTries configurations found'", err)
 	}

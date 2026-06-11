@@ -85,6 +85,17 @@ type Ingestor interface {
 	ReadBatch() ([]Request, error)
 	IsClosed() bool
 	Close() error
+	Stats() IngestStats
+}
+
+// IngestStats is a point-in-time view of the ingestor's counters.
+type IngestStats struct {
+	QueueDepth           int
+	BatchesTotal         uint64
+	RequestsTotal        uint64
+	ParseErrorsTotal     uint64
+	MalformedFieldsTotal uint64
+	LastBatchAt          time.Time // zero until the first batch is read
 }
 
 var _ Ingestor = (*TCPIngestor)(nil)
@@ -97,6 +108,12 @@ type TCPIngestor struct {
 	closed      atomic.Bool
 	closeOnce   sync.Once
 	closeErr    error
+
+	batchesTotal    atomic.Uint64
+	requestsTotal   atomic.Uint64
+	parseErrors     atomic.Uint64
+	malformedFields atomic.Uint64
+	lastBatchUnixNs atomic.Int64
 }
 
 func NewTCPIngestor(addr string, readTimeout time.Duration) (*TCPIngestor, error) {
@@ -141,20 +158,23 @@ func (ing *TCPIngestor) Accept() error {
 	return nil
 }
 
-func parseEvent(evt map[string]interface{}, out *Request) error {
+// parseEvent parses one lumberjack event into out. malformed counts
+// non-fatal field corruption (status/bytes kept as zero), mirroring the
+// log-parser's malformed-field accounting.
+func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err error) {
 	msg, ok := evt["message"].(string)
 	if !ok {
-		return errors.New("missing message field")
+		return 0, errors.New("missing message field")
 	}
 
 	// 1. Extract IP
 	spaceIdx := strings.IndexByte(msg, ' ')
 	if spaceIdx == -1 {
-		return errors.New("invalid log format: no IP")
+		return 0, errors.New("invalid log format: no IP")
 	}
 	ip := net.ParseIP(msg[:spaceIdx])
 	if ip == nil {
-		return errors.New("invalid IP")
+		return 0, errors.New("invalid IP")
 	}
 	out.IP = ip
 	if ip4 := ip.To4(); ip4 != nil {
@@ -165,23 +185,23 @@ func parseEvent(evt map[string]interface{}, out *Request) error {
 	start := strings.IndexByte(msg, '[')
 	end := strings.IndexByte(msg, ']')
 	if start < 0 || end <= start {
-		return errors.New("invalid timestamp format")
+		return 0, errors.New("invalid timestamp format")
 	}
 	t, err := time.Parse("02/Jan/2006:15:04:05 -0700", msg[start+1:end])
 	if err != nil {
-		return err
+		return 0, err
 	}
 	out.Timestamp = t
 
 	// 3. Request line (after first quote)
 	start = strings.IndexByte(msg[end:], '"')
 	if start == -1 {
-		return errors.New("missing request start quote")
+		return 0, errors.New("missing request start quote")
 	}
 	start += end + 1
 	end = strings.IndexByte(msg[start:], '"')
 	if end == -1 {
-		return errors.New("missing request end quote")
+		return 0, errors.New("missing request end quote")
 	}
 	end += start
 	requestLine := msg[start:end]
@@ -191,14 +211,18 @@ func parseEvent(evt map[string]interface{}, out *Request) error {
 		out.URI = parts[1]
 	}
 
-	// 4. Status and bytes
+	// 4. Status and bytes (keep-and-zero on corruption, but count it)
 	fields := strings.Fields(msg[end+2:])
 	if len(fields) >= 2 {
 		if status, err := strconv.Atoi(fields[0]); err == nil {
 			out.Status = uint16(status)
+		} else {
+			malformed++
 		}
 		if bytesSent, err := strconv.Atoi(fields[1]); err == nil {
 			out.Bytes = uint32(bytesSent)
+		} else {
+			malformed++
 		}
 	}
 
@@ -217,7 +241,7 @@ func parseEvent(evt map[string]interface{}, out *Request) error {
 		}
 	}
 
-	return nil
+	return malformed, nil
 }
 
 func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
@@ -229,11 +253,19 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 			if !ok {
 				return out, nil
 			}
+			ing.batchesTotal.Add(1)
+			ing.lastBatchUnixNs.Store(time.Now().UnixNano())
 			for _, evt := range batch.Events {
 				if m, ok := evt.(map[string]interface{}); ok {
 					var entry Request
-					if err := parseEvent(m, &entry); err == nil {
+					if malformed, err := parseEvent(m, &entry); err == nil {
+						if malformed > 0 {
+							ing.malformedFields.Add(uint64(malformed))
+						}
+						ing.requestsTotal.Add(1)
 						out = append(out, entry)
+					} else {
+						ing.parseErrors.Add(1)
 					}
 				}
 			}
@@ -242,6 +274,22 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 			return out, nil
 		}
 	}
+}
+
+// Stats returns a point-in-time view of the ingestor counters. Safe to call
+// concurrently with ReadBatch.
+func (ing *TCPIngestor) Stats() IngestStats {
+	st := IngestStats{
+		QueueDepth:           len(ing.events),
+		BatchesTotal:         ing.batchesTotal.Load(),
+		RequestsTotal:        ing.requestsTotal.Load(),
+		ParseErrorsTotal:     ing.parseErrors.Load(),
+		MalformedFieldsTotal: ing.malformedFields.Load(),
+	}
+	if ns := ing.lastBatchUnixNs.Load(); ns != 0 {
+		st.LastBatchAt = time.Unix(0, ns)
+	}
+	return st
 }
 
 func (ing *TCPIngestor) IsClosed() bool {

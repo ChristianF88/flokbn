@@ -143,6 +143,10 @@ type slidingWindowInstance struct {
 	name   string
 	window *sliding.SlidingWindow
 	config *config.SlidingTrieConfig
+
+	// Lifetime counters, owned by the loop goroutine (no atomics needed).
+	acceptedTotal uint64
+	rejectedTotal uint64 // ShouldIncludeRequest rejections; zero-ts/IP skips excluded
 }
 
 // executeLiveAnalysis runs live mode analysis - works for both CLI and config file inputs
@@ -178,7 +182,25 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		}
 	}()
 
-	return runLiveLoop(ctx, ing, cfg, outputJSON)
+	stats, err := newStatsServerFromConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("stats server: %w", err)
+	}
+	if stats != nil {
+		stats.start()
+		defer stats.shutdown()
+	}
+
+	return runLiveLoop(ctx, ing, cfg, outputJSON, stats)
+}
+
+// newStatsServerFromConfig binds the stats listener when [live] statsListen
+// is set; nil server means the feature is off (zero additional loop cost).
+func newStatsServerFromConfig(cfg *config.Config) (*statsServer, error) {
+	if cfg.Live == nil || cfg.Live.StatsListen == "" {
+		return nil, nil
+	}
+	return newStatsServer(cfg.Live.StatsListen)
 }
 
 // sleepOrDone sleeps for d, returning early when ctx is cancelled.
@@ -197,7 +219,9 @@ func sleepOrDone(ctx context.Context, d time.Duration) {
 // runLiveLoop is the context-cancellable core of live mode. emit receives
 // every JSON output the loop produces (production: outputJSON to stdout).
 // Cancelling ctx closes the ingestor, which makes the loop exit cleanly.
-func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config, emit func(*output.JSONOutput)) error {
+// stats is optional: when non-nil the loop publishes an immutable snapshot
+// to it after each full iteration (nil = feature off, zero extra work).
+func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config, emit func(*output.JSONOutput), stats *statsServer) error {
 	if len(cfg.LiveTries) == 0 {
 		return fmt.Errorf("no LiveTries configurations found")
 	}
@@ -231,6 +255,11 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 	jailInstance, err := jail.FileToJail(cfg.GetJailFile())
 	if err != nil {
 		return fmt.Errorf("reading jail file: %w", err)
+	}
+
+	var statsState *liveStatsState
+	if stats != nil {
+		statsState = newLiveStatsState(cfg, whitelistCIDRs, blacklistCIDRs)
 	}
 
 	// Output initial connection status as JSON
@@ -301,8 +330,15 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		totalClusterDuration := int64(0)
 		totalWindowSize := 0
 
-		// Process each sliding window
-		for _, winInst := range windows {
+		// Per-window per-set snapshot data, built only when stats is enabled.
+		var winClusterStats [][]clusterSetStats
+		if stats != nil {
+			winClusterStats = make([][]clusterSetStats, len(windows))
+		}
+
+		// Process each sliding window (by pointer: lifetime counters persist)
+		for wi := range windows {
+			winInst := &windows[wi]
 			// Filter batch based on this window's regex filters
 			timedIps := make([]sliding.TimedIP, 0, len(batch))
 			for _, msg := range batch {
@@ -312,6 +348,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 
 				// Apply regex filtering based on window config
 				if !winInst.config.ShouldIncludeRequest(msg) {
+					winInst.rejectedTotal++
 					continue
 				}
 
@@ -322,6 +359,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 					UserAgentAllowed: true,
 				})
 			}
+			winInst.acceptedTotal += uint64(len(timedIps))
 
 			// Update this specific window
 			winInst.window.Update(timedIps)
@@ -347,6 +385,11 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 				// Parse CIDRs once for reuse across operations
 				var cidrIPNets []*net.IPNet
 
+				// Per-set slice: appending it to allDetectedCIDRs below
+				// copies the values, so its backing array stays owned by
+				// the snapshot (never aliased by the emit path).
+				var setDetected []output.LiveCIDR
+
 				for _, cidrStr := range cidrs {
 					_, ipNet, err := net.ParseCIDR(cidrStr)
 					if err != nil {
@@ -357,15 +400,20 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 
 					// Use IPNet-native count function for speed
 					count := winInst.window.Trie.CountInRangeIPNet(ipNet)
-					allDetectedCIDRs = append(allDetectedCIDRs, output.LiveCIDR{
+					setDetected = append(setDetected, output.LiveCIDR{
 						CIDR:  cidrStr,
 						Count: count,
 					})
 				}
+				allDetectedCIDRs = append(allDetectedCIDRs, setDetected...)
 
 				// Only add to jail if useForJail is true
 				if useForJail {
 					allMergedCIDRs = append(allMergedCIDRs, cidrIPNets...)
+				}
+
+				if stats != nil {
+					winClusterStats[wi] = append(winClusterStats[wi], newClusterSetStats(argSet, useForJail, clusterDuration, setDetected))
 				}
 			}
 		}
@@ -398,11 +446,19 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		// and manual blacklist entries are always appended (static parity).
 		activeBans := jailInstance.ListActiveBans()
 		filteredActiveBans := cidr.RemoveWhitelisted(activeBans, whitelistCIDRs)
-		if err := jail.WriteBanFileWithBlacklist(cfg.GetBanFile(), filteredActiveBans, blacklistCIDRs); err != nil {
+		banContent := jail.BuildBanFileContent(filteredActiveBans, blacklistCIDRs)
+		if err := jail.WriteToFile(cfg.GetBanFile(), banContent); err != nil {
+			// On failure statsState keeps the previous content: /bans always
+			// serves the last content actually on disk.
 			jsonOutput.AddError("banfile_write", fmt.Sprintf("failed to write ban file: %v", err), 1)
-		} else if len(blacklistCIDRs) > 0 && !blacklistWarned {
-			blacklistWarned = true
-			jsonOutput.AddWarning("blacklist_applied", fmt.Sprintf("Added %d manual blacklist entries to ban file", len(blacklistCIDRs)), 0)
+		} else {
+			if statsState != nil {
+				statsState.recordBanFileWrite(banContent, len(filteredActiveBans)+len(blacklistCIDRs))
+			}
+			if len(blacklistCIDRs) > 0 && !blacklistWarned {
+				blacklistWarned = true
+				jsonOutput.AddWarning("blacklist_applied", fmt.Sprintf("Added %d manual blacklist entries to ban file", len(blacklistCIDRs)), 0)
+			}
 		}
 
 		loopEnd := time.Since(loopStart)
@@ -420,6 +476,10 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 
 		jsonOutput.UpdateDuration(loopStart)
 		emit(jsonOutput)
+
+		if stats != nil {
+			stats.publish(buildSnapshot(statsState, ing, cfg, windows, winClusterStats, &jailInstance, loopEnd, maxSleepTime))
+		}
 
 		// Sleep using maximum sleep time across all windows
 		sleepOrDone(ctx, time.Duration(maxSleepTime)*time.Second)

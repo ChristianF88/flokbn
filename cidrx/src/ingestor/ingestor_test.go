@@ -10,7 +10,7 @@ import (
 func TestParseEvent_MissingMessageField(t *testing.T) {
 	evt := map[string]interface{}{}
 	var req Request
-	err := parseEvent(evt, &req)
+	_, err := parseEvent(evt, &req)
 	if err == nil || err.Error() != "missing message field" {
 		t.Errorf("expected missing message field error, got %v", err)
 	}
@@ -20,7 +20,7 @@ func TestParseEvent_InvalidIP(t *testing.T) {
 	log := `notanip - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
 	var req Request
-	err := parseEvent(evt, &req)
+	_, err := parseEvent(evt, &req)
 	if err == nil || err.Error() != "invalid IP" {
 		t.Errorf("expected invalid IP error, got %v", err)
 	}
@@ -30,7 +30,7 @@ func TestParseEvent_InvalidTimestamp(t *testing.T) {
 	log := `192.168.1.1 - - [badtime] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
 	var req Request
-	err := parseEvent(evt, &req)
+	_, err := parseEvent(evt, &req)
 	if err == nil {
 		t.Errorf("expected error for invalid timestamp, got nil")
 	}
@@ -40,7 +40,7 @@ func TestParseEvent_SetsIPUint32(t *testing.T) {
 	log := `192.168.1.100 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
 	var req Request
-	err := parseEvent(evt, &req)
+	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestParseEvent_UnknownMethod(t *testing.T) {
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "FOO /foo HTTP/1.1" 404 0 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
 	var req Request
-	err := parseEvent(evt, &req)
+	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestParseEvent_MissingUserAgent(t *testing.T) {
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" `
 	evt := map[string]interface{}{"message": log}
 	var req Request
-	err := parseEvent(evt, &req)
+	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

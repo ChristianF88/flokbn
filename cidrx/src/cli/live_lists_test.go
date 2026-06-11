@@ -285,7 +285,7 @@ func TestRunLiveLoop_WhitelistLoadFailureFailsLoud(t *testing.T) {
 			cfg := newLiveConfig(t, windows())
 			tc.setup(cfg)
 
-			err := runLiveLoop(context.Background(), fake, cfg, func(*output.JSONOutput) {})
+			err := runLiveLoop(context.Background(), fake, cfg, func(*output.JSONOutput) {}, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
 				t.Fatalf("err = %v, want error mentioning %q", err, tc.wantSub)
 			}
