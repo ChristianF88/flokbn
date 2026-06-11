@@ -15,7 +15,6 @@ type JSONOutput struct {
 	Tries                 []TrieResult `json:"tries,omitempty"`
 	Clustering            Clustering   `json:"clustering,omitempty"`
 	CIDRAnalysis          CIDRAnalysis `json:"cidr_analysis,omitempty"`
-	LiveStats             *LiveStats   `json:"live_stats,omitempty"`
 	Warnings              []Warning    `json:"warnings"`
 	Errors                []Error      `json:"errors"`
 	UserAgentWhitelistIPs []string     `json:"useragent_whitelist_ips,omitempty"`
@@ -199,18 +198,7 @@ func (j *JSONOutput) AddError(errorType, message string, count int) {
 	})
 }
 
-// LiveStats contains statistics for live mode
-type LiveStats struct {
-	WindowSize      int        `json:"window_size"`
-	ProcessedBatch  int        `json:"processed_batch"`
-	LoopDuration    int64      `json:"loop_duration_ms"`
-	ClusterDuration int64      `json:"cluster_duration_ms"`
-	ActiveBans      []string   `json:"active_bans"`
-	DetectedCIDRs   []LiveCIDR `json:"detected_cidrs"`
-	MergedCIDRs     []string   `json:"merged_cidrs"`
-}
-
-// LiveCIDR represents a CIDR with its count in live mode
+// LiveCIDR represents a CIDR with its count in live mode (served via /stats)
 type LiveCIDR struct {
 	CIDR  string `json:"cidr"`
 	Count uint32 `json:"count"`

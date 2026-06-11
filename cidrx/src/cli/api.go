@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"github.com/ChristianF88/cidrx/output"
 	"github.com/ChristianF88/cidrx/sliding"
 	"github.com/ChristianF88/cidrx/tui"
+	"github.com/ChristianF88/cidrx/version"
 )
 
 // ============================================================================
@@ -155,6 +157,8 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		return fmt.Errorf("no LiveTries configurations found")
 	}
 
+	logger := slog.Default()
+
 	ing, err := ingestor.NewTCPIngestor(
 		":"+cfg.Live.Port,
 		cfg.GetReadTimeout(), // read timeout: avoid client disconnects
@@ -163,6 +167,19 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("creating ingestor: %w", err)
 	}
+
+	totalClusterSets := 0
+	for _, trie := range cfg.LiveTries {
+		totalClusterSets += len(trie.ClusterArgSets)
+	}
+	logger.Info("starting live loop",
+		"version", version.Version,
+		"listen", ":"+cfg.Live.Port,
+		"jail_file", cfg.GetJailFile(),
+		"ban_file", cfg.GetBanFile(),
+		"windows", len(cfg.LiveTries),
+		"cluster_sets", totalClusterSets,
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -174,9 +191,7 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	go func() {
 		select {
 		case <-stop:
-			shutdownOutput := output.NewJSONOutput("live", time.Now())
-			shutdownOutput.AddWarning("info", "Received shutdown signal...", 0)
-			outputJSON(shutdownOutput)
+			logger.Info("received shutdown signal")
 			cancel()
 		case <-ctx.Done():
 		}
@@ -189,9 +204,10 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	if stats != nil {
 		stats.start()
 		defer stats.shutdown()
+		logger.Info("stats server listening", "addr", stats.addr())
 	}
 
-	return runLiveLoop(ctx, ing, cfg, outputJSON, stats)
+	return runLiveLoop(ctx, ing, cfg, logger, stats)
 }
 
 // newStatsServerFromConfig binds the stats listener when [live] statsListen
@@ -216,12 +232,13 @@ func sleepOrDone(ctx context.Context, d time.Duration) {
 	}
 }
 
-// runLiveLoop is the context-cancellable core of live mode. emit receives
-// every JSON output the loop produces (production: outputJSON to stdout).
+// runLiveLoop is the context-cancellable core of live mode. logger receives
+// leveled progress/diagnostic lines (production: the process-wide slog logger
+// on stderr); machine-readable data is served by the stats server endpoints.
 // Cancelling ctx closes the ingestor, which makes the loop exit cleanly.
 // stats is optional: when non-nil the loop publishes an immutable snapshot
 // to it after each full iteration (nil = feature off, zero extra work).
-func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config, emit func(*output.JSONOutput), stats *statsServer) error {
+func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config, logger *slog.Logger, stats *statsServer) error {
 	if len(cfg.LiveTries) == 0 {
 		return fmt.Errorf("no LiveTries configurations found")
 	}
@@ -262,19 +279,13 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		statsState = newLiveStatsState(cfg, whitelistCIDRs, blacklistCIDRs)
 	}
 
-	// Output initial connection status as JSON
-	initOutput := output.NewJSONOutput("live", time.Now())
-	initOutput.AddWarning("info", "Waiting for Filebeat to connect...", 0)
-	emit(initOutput)
+	logger.Info("waiting for Filebeat to connect")
 
 	if err := ing.Accept(); err != nil {
 		return fmt.Errorf("accepting connection: %w", err)
 	}
 
-	// Connection established
-	connectedOutput := output.NewJSONOutput("live", time.Now())
-	connectedOutput.AddWarning("info", "Filebeat connected", 0)
-	emit(connectedOutput)
+	logger.Info("Filebeat connected")
 
 	// Cancellation watcher: closing the ingestor unblocks the loop below.
 	// Started only after Accept so ing's internal state is never written
@@ -303,25 +314,32 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 
 	for {
 		loopStart := time.Now()
-		jsonOutput := output.NewJSONOutput("live", loopStart)
 
 		batch, err := ing.ReadBatch()
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				continue
 			}
-			jsonOutput.AddError("read_batch", fmt.Sprintf("read error: %v", err), 1)
-			emit(jsonOutput)
+			logger.Error("batch read error", "err", err)
 			break
 		}
 
 		if len(batch) == 0 {
 			if ing.IsClosed() {
-				jsonOutput.AddWarning("info", "Ingestor closed. Exiting loop.", 0)
-				emit(jsonOutput)
+				logger.Info("ingestor closed, exiting loop")
 				break
 			}
 			continue
+		}
+
+		if logger.Enabled(ctx, slog.LevelDebug) {
+			ingSt := ing.Stats()
+			logger.Debug("batch read",
+				"size", len(batch),
+				"queue_depth", ingSt.QueueDepth,
+				"parse_errors_total", ingSt.ParseErrorsTotal,
+				"malformed_fields_total", ingSt.MalformedFieldsTotal,
+			)
 		}
 
 		// Collect all CIDRs to ban from all sliding windows
@@ -393,7 +411,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 				for _, cidrStr := range cidrs {
 					_, ipNet, err := net.ParseCIDR(cidrStr)
 					if err != nil {
-						jsonOutput.AddWarning("cidr_parse_error", fmt.Sprintf("error parsing CIDR %s: %v", cidrStr, err), 1)
+						logger.Warn("cidr parse error", "cidr", cidrStr, "err", err)
 						continue
 					}
 					cidrIPNets = append(cidrIPNets, ipNet)
@@ -415,6 +433,17 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 				if stats != nil {
 					winClusterStats[wi] = append(winClusterStats[wi], newClusterSetStats(argSet, useForJail, clusterDuration, setDetected))
 				}
+
+				logger.Debug("cluster set",
+					"window", winInst.name,
+					"set", i+1,
+					"min_size", argSet.MinClusterSize,
+					"min_depth", argSet.MinDepth,
+					"max_depth", argSet.MaxDepth,
+					"threshold", argSet.MeanSubnetDifference,
+					"detected", len(setDetected),
+					"duration_us", clusterDuration.Microseconds(),
+				)
 			}
 		}
 
@@ -431,15 +460,15 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		filteredJailCIDRs := cidr.RemoveWhitelisted(mergedCIDRs, whitelistCIDRs)
 		if len(whitelistCIDRs) > 0 {
 			if removed := len(mergedCIDRs) - len(filteredJailCIDRs); removed > 0 {
-				jsonOutput.AddWarning("whitelist_applied", fmt.Sprintf("Whitelist filtering prevented %d CIDRs from being added to jail", removed), 0)
+				logger.Warn("whitelist filtering prevented CIDRs from being added to jail", "count", removed)
 			}
 		}
 
 		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
-			jsonOutput.AddWarning("jail_update", fmt.Sprintf("some CIDRs failed during jail update: %v", err), 1)
+			logger.Warn("some CIDRs failed during jail update", "err", err)
 		}
 		if err := jail.JailToFile(jailInstance, cfg.GetJailFile()); err != nil {
-			jsonOutput.AddError("jail_save", fmt.Sprintf("failed to save jail: %v", err), 1)
+			logger.Error("failed to save jail", "path", cfg.GetJailFile(), "err", err)
 		}
 
 		// Whitelist also shields pre-existing jail entries from the ban file,
@@ -447,39 +476,41 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		activeBans := jailInstance.ListActiveBans()
 		filteredActiveBans := cidr.RemoveWhitelisted(activeBans, whitelistCIDRs)
 		banContent := jail.BuildBanFileContent(filteredActiveBans, blacklistCIDRs)
+		banFileWritten := false
 		if err := jail.WriteToFile(cfg.GetBanFile(), banContent); err != nil {
 			// On failure statsState keeps the previous content: /bans always
 			// serves the last content actually on disk.
-			jsonOutput.AddError("banfile_write", fmt.Sprintf("failed to write ban file: %v", err), 1)
+			logger.Error("failed to write ban file", "path", cfg.GetBanFile(), "err", err)
 		} else {
+			banFileWritten = true
 			if statsState != nil {
 				statsState.recordBanFileWrite(banContent, len(filteredActiveBans)+len(blacklistCIDRs))
 			}
 			if len(blacklistCIDRs) > 0 && !blacklistWarned {
 				blacklistWarned = true
-				jsonOutput.AddWarning("blacklist_applied", fmt.Sprintf("Added %d manual blacklist entries to ban file", len(blacklistCIDRs)), 0)
+				logger.Info("added manual blacklist entries to ban file", "count", len(blacklistCIDRs))
 			}
 		}
 
 		loopEnd := time.Since(loopStart)
 
-		// Set live stats
-		jsonOutput.LiveStats = &output.LiveStats{
-			WindowSize:      totalWindowSize,
-			ProcessedBatch:  len(batch),
-			LoopDuration:    loopEnd.Milliseconds(),
-			ClusterDuration: totalClusterDuration / 1000, // Convert to milliseconds
-			ActiveBans:      filteredActiveBans,
-			DetectedCIDRs:   allDetectedCIDRs,
-			MergedCIDRs:     mergedCIDRs,
-		}
-
-		jsonOutput.UpdateDuration(loopStart)
-		emit(jsonOutput)
-
+		// Publish the snapshot before the iteration line so anyone reacting
+		// to the log already sees the matching /stats state.
 		if stats != nil {
 			stats.publish(buildSnapshot(statsState, ing, cfg, windows, winClusterStats, &jailInstance, loopEnd, maxSleepTime))
 		}
+
+		logger.Info("iteration",
+			"window", totalWindowSize,
+			"batch", len(batch),
+			"detected", len(allDetectedCIDRs),
+			"merged", len(mergedCIDRs),
+			"jailed", len(filteredJailCIDRs),
+			"active_bans", len(filteredActiveBans),
+			"ban_file_written", banFileWritten,
+			"loop_ms", loopEnd.Milliseconds(),
+			"cluster_ms", totalClusterDuration/1000,
+		)
 
 		// Sleep using maximum sleep time across all windows
 		sleepOrDone(ctx, time.Duration(maxSleepTime)*time.Second)
@@ -488,13 +519,8 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 }
 
 // ============================================================================
-// OUTPUT FUNCTIONS - Unified output handling
+// OUTPUT FUNCTIONS - Unified output handling (static mode)
 // ============================================================================
-
-// outputJSON outputs in default JSON format (non-compact, non-plain)
-func outputJSON(jsonOutput *output.JSONOutput) {
-	outputResult(jsonOutput, OutputConfig{Compact: false, Plain: false})
-}
 
 // outputResult is the unified output function that handles all output formats
 func outputResult(jsonOutput *output.JSONOutput, outputConfig OutputConfig) {

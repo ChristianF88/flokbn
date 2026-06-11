@@ -33,7 +33,7 @@ cd cidrx/cidrx
 docker compose up --build
 ```
 
-Watch detections in a separate terminal:
+Watch detections in a separate terminal (cidrx logs leveled progress lines to stderr; for machine-readable data query `http://localhost:8666/stats`):
 
 ```bash
 docker compose logs -f cidrx

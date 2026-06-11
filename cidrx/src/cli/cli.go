@@ -2,12 +2,14 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/ChristianF88/cidrx/config"
 	"github.com/ChristianF88/cidrx/iputils"
+	"github.com/ChristianF88/cidrx/logging"
 	"github.com/ChristianF88/cidrx/version"
 	cli "github.com/urfave/cli/v2"
 )
@@ -92,6 +94,10 @@ var (
 		Name:  "port",
 		Usage: "Port to listen on",
 	}
+	logLevelFlag = &cli.StringFlag{
+		Name:  "logLevel",
+		Usage: "Log verbosity (debug, info, warn, error); overrides the [log] level from the config file",
+	}
 	slidingWindowMaxTimeFlag = &cli.DurationFlag{
 		Name:  "slidingWindowMaxTime",
 		Usage: "Maximum time duration for sliding window",
@@ -155,7 +161,7 @@ func validateConfigModeFlags(c *cli.Context, allowedFlags []string) error {
 		"sleepBetweenIterations", "clusterArgSet", "useragentRegex", "endpointRegex",
 		"rangesCidr", "plotPath", "whitelist", "blacklist", "userAgentWhitelist",
 		"userAgentBlacklist", "logfile", "logFormat", "startTime", "endTime",
-		"clusterArgSets", "tui", "compact", "plain",
+		"clusterArgSets", "tui", "compact", "plain", "logLevel",
 	}
 
 	for _, flag := range flagsToCheck {
@@ -231,7 +237,7 @@ func handleLiveCommand(c *cli.Context) error {
 // handleLiveConfigMode handles live command when using config file
 func handleLiveConfigMode(c *cli.Context, configPath string) error {
 	// Validate only allowed flags in config mode
-	if err := validateConfigModeFlags(c, []string{"compact", "plain"}); err != nil {
+	if err := validateConfigModeFlags(c, []string{"compact", "plain", "logLevel"}); err != nil {
 		return err
 	}
 
@@ -246,7 +252,16 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 		return fmt.Errorf("invalid live configuration: %w", err)
 	}
 
-	fmt.Println("Running in live mode from config file:")
+	// Install the process-wide logger; --logLevel overrides [log] level.
+	level := cfg.Log.Level
+	if c.IsSet("logLevel") {
+		level = c.String("logLevel")
+	}
+	if err := logging.Setup(level, cfg.Log.Format); err != nil {
+		return err
+	}
+
+	slog.Info("starting live mode", "config", configPath)
 	return LiveFromConfig(cfg)
 }
 
@@ -257,6 +272,11 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 func handleLiveFlagsMode(c *cli.Context) error {
 	if !c.IsSet("port") || !c.IsSet("jailFile") || !c.IsSet("banFile") {
 		return fmt.Errorf("port, jailFile, and banFile are required when not using --config")
+	}
+
+	// Install the process-wide logger (no config file: defaults + --logLevel).
+	if err := logging.Setup(c.String("logLevel"), ""); err != nil {
+		return err
 	}
 
 	cfg := &config.Config{
@@ -436,6 +456,7 @@ var App = &cli.App{
 				configFlag,
 				// Live-specific flags
 				portFlag,
+				logLevelFlag,
 				slidingWindowMaxTimeFlag,
 				slidingWindowMaxSizeFlag,
 				sleepBetweenIterationsFlag,

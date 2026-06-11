@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/ChristianF88/cidrx/config"
 	"github.com/ChristianF88/cidrx/ingestor"
-	"github.com/ChristianF88/cidrx/output"
 )
 
 // ============================================================================
@@ -33,29 +31,11 @@ func newTestStatsServer(t *testing.T) *statsServer {
 	return srv
 }
 
-// startLoopWithStats mirrors startLoop but threads a stats server through.
+// startLoopWithStats mirrors startLoop but threads a real stats server
+// through (HTTP serving included).
 func startLoopWithStats(t *testing.T, ing ingestor.Ingestor, cfg *config.Config, srv *statsServer) *loopHarness {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	h := &loopHarness{
-		t:       t,
-		outputs: make(chan *output.JSONOutput, 64),
-		done:    make(chan struct{}),
-		cancel:  cancel,
-	}
-	go func() {
-		h.err = runLiveLoop(ctx, ing, cfg, func(o *output.JSONOutput) { h.outputs <- o }, srv)
-		close(h.done)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-h.done:
-		case <-time.After(5 * time.Second):
-			t.Error("runLiveLoop did not exit within 5s after cancel")
-		}
-	})
-	return h
+	return startLoopWith(t, ing, cfg, srv)
 }
 
 // httpGet fetches a path from the stats server and returns status, headers

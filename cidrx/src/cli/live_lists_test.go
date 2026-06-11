@@ -11,7 +11,13 @@ import (
 	"github.com/ChristianF88/cidrx/config"
 	"github.com/ChristianF88/cidrx/ingestor"
 	"github.com/ChristianF88/cidrx/jail"
-	"github.com/ChristianF88/cidrx/output"
+)
+
+// Log messages the live loop emits for list handling; the tests below assert
+// on them instead of the former JSON warning types.
+const (
+	whitelistAppliedMsg = "whitelist filtering prevented CIDRs from being added to jail"
+	blacklistAppliedMsg = "added manual blacklist entries to ban file"
 )
 
 // ============================================================================
@@ -43,33 +49,9 @@ func newLiveConfigWithLists(t *testing.T, windows map[string]*config.SlidingTrie
 	return cfg
 }
 
-// liveStatsFrom extracts every LiveStats from a drained output slice.
-func liveStatsFrom(outs []*output.JSONOutput) []*output.LiveStats {
-	var stats []*output.LiveStats
-	for _, o := range outs {
-		if o.LiveStats != nil {
-			stats = append(stats, o.LiveStats)
-		}
-	}
-	return stats
-}
-
-// countWarnings counts warnings of the given type across all outputs.
-func countWarnings(outs []*output.JSONOutput, warningType string) int {
-	n := 0
-	for _, o := range outs {
-		for _, w := range o.Warnings {
-			if w.Type == warningType {
-				n++
-			}
-		}
-	}
-	return n
-}
-
-func detectedCIDRSet(stats *output.LiveStats) map[string]bool {
+func detectedCIDRSet(snap *statsSnapshot) map[string]bool {
 	set := map[string]bool{}
-	for _, d := range stats.DetectedCIDRs {
+	for _, d := range detectedNow(snap) {
 		set[d.CIDR] = true
 	}
 	return set
@@ -92,18 +74,18 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 		if err := h.wait(5 * time.Second); err != nil {
 			t.Fatalf("runLiveLoop returned error: %v", err)
 		}
-		outs := h.drainOutputs()
+		events := h.drainEvents()
 
-		allStats := liveStatsFrom(outs)
-		if len(allStats) == 0 {
-			t.Fatal("no LiveStats outputs emitted")
+		iters := iterationEvents(events)
+		if len(iters) == 0 {
+			t.Fatal("no iteration log records emitted")
 		}
-		stats := allStats[0]
-		if !detectedCIDRSet(stats)["10.5.5.0/24"] {
-			t.Errorf("DetectedCIDRs = %+v, want 10.5.5.0/24 detected (detection is unfiltered)", stats.DetectedCIDRs)
+		it, snap := parseIteration(t, iters[0].rec), iters[0].snap
+		if !detectedCIDRSet(snap)["10.5.5.0/24"] {
+			t.Errorf("detected CIDRs = %+v, want 10.5.5.0/24 detected (detection is unfiltered)", detectedNow(snap))
 		}
-		if len(stats.ActiveBans) != 0 {
-			t.Errorf("ActiveBans = %v, want empty (whitelisted)", stats.ActiveBans)
+		if it.ActiveBans != 0 {
+			t.Errorf("iteration active_bans = %d, want 0 (whitelisted)", it.ActiveBans)
 		}
 		if bans := banCIDRs(t, cfg.GetBanFile()); len(bans) != 0 {
 			t.Errorf("ban file CIDRs = %v, want none", bans)
@@ -111,8 +93,8 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 		if _, _, found := findPrisoner(t, cfg.GetJailFile(), "10.5.5.0/24"); found {
 			t.Error("whitelisted 10.5.5.0/24 must not be jailed")
 		}
-		if countWarnings(outs, "whitelist_applied") == 0 {
-			t.Error("missing whitelist_applied warning")
+		if countMessages(events, whitelistAppliedMsg) == 0 {
+			t.Error("missing whitelist-applied log record")
 		}
 	})
 
@@ -128,15 +110,15 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 		if err := h.wait(5 * time.Second); err != nil {
 			t.Fatalf("runLiveLoop returned error: %v", err)
 		}
-		outs := h.drainOutputs()
+		events := h.drainEvents()
 
-		allStats := liveStatsFrom(outs)
-		if len(allStats) == 0 {
-			t.Fatal("no LiveStats outputs emitted")
+		iters := iterationEvents(events)
+		if len(iters) == 0 {
+			t.Fatal("no iteration log records emitted")
 		}
-		stats := allStats[0]
-		if len(stats.ActiveBans) != 1 || stats.ActiveBans[0] != "10.5.5.128/25" {
-			t.Errorf("ActiveBans = %v, want [10.5.5.128/25]", stats.ActiveBans)
+		snap := iters[0].snap
+		if bans := jailActiveCIDRs(snap); len(bans) != 1 || bans[0] != "10.5.5.128/25" {
+			t.Errorf("active bans = %v, want [10.5.5.128/25]", bans)
 		}
 		bans := banCIDRs(t, cfg.GetBanFile())
 		if len(bans) != 1 || bans[0] != "10.5.5.128/25" {
@@ -168,10 +150,10 @@ func TestRunLiveLoop_BlacklistAppearsInBanFile(t *testing.T) {
 	if err := h.wait(5 * time.Second); err != nil {
 		t.Fatalf("runLiveLoop returned error: %v", err)
 	}
-	outs := h.drainOutputs()
+	events := h.drainEvents()
 
-	if got := len(liveStatsFrom(outs)); got != 2 {
-		t.Fatalf("LiveStats outputs = %d, want 2 (two iterations)", got)
+	if got := len(iterationEvents(events)); got != 2 {
+		t.Fatalf("iteration log records = %d, want 2 (two iterations)", got)
 	}
 
 	banned := map[string]bool{}
@@ -190,8 +172,8 @@ func TestRunLiveLoop_BlacklistAppearsInBanFile(t *testing.T) {
 		t.Errorf("ban file missing blacklist section marker, got:\n%s", raw)
 	}
 
-	if got := countWarnings(outs, "blacklist_applied"); got != 1 {
-		t.Errorf("blacklist_applied warnings = %d, want exactly 1 across all outputs", got)
+	if got := countMessages(events, blacklistAppliedMsg); got != 1 {
+		t.Errorf("blacklist-applied log records = %d, want exactly 1 across the run", got)
 	}
 }
 
@@ -222,7 +204,7 @@ func TestRunLiveLoop_PreexistingWhitelistedBanExcludedFromBanFile(t *testing.T) 
 	if err := h.wait(5 * time.Second); err != nil {
 		t.Fatalf("runLiveLoop returned error: %v", err)
 	}
-	outs := h.drainOutputs()
+	events := h.drainEvents()
 
 	if bans := banCIDRs(t, cfg.GetBanFile()); len(bans) != 0 {
 		t.Errorf("ban file CIDRs = %v, want none (active ban is whitelisted)", bans)
@@ -230,11 +212,15 @@ func TestRunLiveLoop_PreexistingWhitelistedBanExcludedFromBanFile(t *testing.T) 
 	if _, active, found := findPrisoner(t, cfg.GetJailFile(), "192.168.0.0/24"); !found || !active {
 		t.Errorf("prisoner 192.168.0.0/24 found=%v active=%v, want it to stay in jail active", found, active)
 	}
-	for _, stats := range liveStatsFrom(outs) {
-		for _, b := range stats.ActiveBans {
-			if b == "192.168.0.0/24" {
-				t.Errorf("ActiveBans = %v, must exclude whitelisted 192.168.0.0/24", stats.ActiveBans)
-			}
+	// The whitelisted prisoner stays in jail truth but must never reach the
+	// ban-file view (what /bans serves and the iteration counts as active).
+	for _, ev := range iterationEvents(events) {
+		it := parseIteration(t, ev.rec)
+		if it.ActiveBans != 0 {
+			t.Errorf("iteration active_bans = %d, want 0 (whitelisted)", it.ActiveBans)
+		}
+		if strings.Contains(ev.snap.banFileContent, "192.168.0.0/24") {
+			t.Errorf("ban file content must exclude whitelisted 192.168.0.0/24:\n%s", ev.snap.banFileContent)
 		}
 	}
 }
@@ -285,7 +271,7 @@ func TestRunLiveLoop_WhitelistLoadFailureFailsLoud(t *testing.T) {
 			cfg := newLiveConfig(t, windows())
 			tc.setup(cfg)
 
-			err := runLiveLoop(context.Background(), fake, cfg, func(*output.JSONOutput) {}, nil)
+			err := runLiveLoop(context.Background(), fake, cfg, discardLogger(t), nil)
 			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
 				t.Fatalf("err = %v, want error mentioning %q", err, tc.wantSub)
 			}

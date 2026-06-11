@@ -39,6 +39,18 @@ userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: User-Agent 
 # 5. Processing order: UA filters → IP filters → clustering → jail → ban file
 
 #################################################################################
+# LOGGING CONFIGURATION (live mode)                                            #
+#################################################################################
+
+[log]
+# OPTIONAL: Leveled, timestamped log lines written to stderr (live mode).
+# Machine-readable live data is served by the HTTP endpoints configured via
+# [live] statsListen: GET /stats (JSON snapshot) and GET /bans (ban file).
+level = "info"      # debug, info, warn, error (default: "info")
+format = "text"     # text or json (default: "text")
+# The --logLevel CLI flag overrides the level from this file.
+
+#################################################################################
 # STATIC MODE CONFIGURATION                                                     #
 # Used for analyzing existing log files                                        #
 #################################################################################

@@ -14,6 +14,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/ChristianF88/cidrx/config/regexprefilter"
 	"github.com/ChristianF88/cidrx/ingestor"
+	"github.com/ChristianF88/cidrx/logging"
 )
 
 var HomeDir string = os.Getenv("HOME")
@@ -92,6 +93,13 @@ type LiveConfig struct {
 	TopTalkers  int           `toml:"topTalkers"`  // top-N IPs per window in /stats; 0 = off
 }
 
+// LogConfig configures the [log] section: leveled slog output on stderr.
+// Empty values use the defaults (level "info", format "text").
+type LogConfig struct {
+	Level  string `toml:"level"`  // debug, info, warn, error
+	Format string `toml:"format"` // text, json
+}
+
 // DefaultLiveReadTimeout is the TCP ingestor read timeout used when the
 // [live] section does not specify a readTimeout.
 const DefaultLiveReadTimeout = 5 * time.Second
@@ -100,6 +108,7 @@ type Config struct {
 	Global      *GlobalConfig                 `toml:"global"`
 	Static      *StaticConfig                 `toml:"static"`
 	Live        *LiveConfig                   `toml:"live"`
+	Log         *LogConfig                    `toml:"log"`
 	StaticTries map[string]*TrieConfig        `toml:",remain"`
 	LiveTries   map[string]*SlidingTrieConfig `toml:",remain"`
 }
@@ -145,6 +154,14 @@ func LoadConfig(configPath string) (*Config, error) {
 					}
 				}
 			}
+		case "log":
+			if logMap, ok := value.(map[string]any); ok {
+				logConfig, err := parseLogConfig(logMap)
+				if err != nil {
+					return nil, fmt.Errorf("parsing log config: %w", err)
+				}
+				config.Log = logConfig
+			}
 		case "live":
 			if liveMap, ok := value.(map[string]any); ok {
 				liveConfig, err := parseLiveConfig(liveMap)
@@ -179,6 +196,9 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 	if config.Live == nil {
 		config.Live = &LiveConfig{}
+	}
+	if config.Log == nil {
+		config.Log = &LogConfig{}
 	}
 
 	return config, nil
@@ -238,6 +258,36 @@ func parseLiveConfig(m map[string]any) (*LiveConfig, error) {
 	}
 	if v, ok := m["topTalkers"].(int64); ok {
 		config.TopTalkers = int(v)
+	}
+	return config, nil
+}
+
+// parseLogConfig parses the [log] section. Unknown keys are rejected so a
+// typo (e.g. "lvl") fails loud instead of silently using defaults, and the
+// level/format enums are validated via the logging package (the canonical
+// rules the logger itself applies).
+func parseLogConfig(m map[string]any) (*LogConfig, error) {
+	config := &LogConfig{}
+	for key, value := range m {
+		switch key {
+		case "level":
+			v, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("level must be a string, got %T", value)
+			}
+			config.Level = v
+		case "format":
+			v, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("format must be a string, got %T", value)
+			}
+			config.Format = v
+		default:
+			return nil, fmt.Errorf("unknown key %q in [log] section (want level, format)", key)
+		}
+	}
+	if err := logging.Validate(config.Level, config.Format); err != nil {
+		return nil, err
 	}
 	return config, nil
 }

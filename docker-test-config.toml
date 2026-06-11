@@ -6,6 +6,11 @@
 jailFile = "/data/jail.json"
 banFile = "/data/blocklist.txt"
 
+[log]
+# Leveled log lines on stderr (visible via `docker compose logs cidrx`).
+level = "info"
+format = "text"
+
 [live]
 port = "9000"
 # HTTP stats endpoints (GET /stats, GET /bans).

@@ -186,6 +186,18 @@ sudo systemctl start cidrx
 }
 ```
 
+## Logging
+
+Live mode writes leveled, timestamped log lines to **stderr**: one summary line per detection iteration (window size, batch size, detected/merged/jailed counts, timings) plus warnings and errors. Configure via the `[log]` section ([Config File]({{< relref "/docs/reference/config-file/" >}})) or override the level with `--logLevel`:
+
+```toml
+[log]
+level = "info"   # debug, info, warn, error
+format = "text"  # text or json
+```
+
+For machine-readable live data (detections, jail state, ban list), use the HTTP endpoints enabled by `statsListen` in `[live]`: `GET /stats` (JSON snapshot) and `GET /bans` (current ban file).
+
 ## Monitoring
 
 ```bash

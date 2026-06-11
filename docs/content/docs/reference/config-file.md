@@ -21,6 +21,7 @@ cidrx uses TOML configuration files for complex multi-trie setups. Both CLI flag
 
 ```toml
 [global]        # Shared settings (jail, ban, whitelist/blacklist files)
+[log]           # Logging settings (level, format) — live mode
 [static]        # Static mode base settings (logFile, logFormat)
 [static.NAME]   # One or more named tries for static mode
 [live]          # Live mode base settings (port)
@@ -86,6 +87,23 @@ Each `[live.NAME]` section defines an independent sliding window. All windows ru
 
 Duration strings support: `s` (seconds), `m` (minutes), `h` (hours). Examples: `"2h"`, `"30m"`, `"1h30m"`.
 
+## [log] Section
+
+Configures the leveled log lines live mode writes to **stderr** (timestamps included). Machine-readable live data is served by the HTTP endpoints (`GET /stats`, `GET /bans`); static mode's report output is unaffected.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `level` | string | No | `debug`, `info`, `warn`, or `error` (default: `info`) |
+| `format` | string | No | `text` or `json` (default: `text`) |
+
+```toml
+[log]
+level = "info"
+format = "text"
+```
+
+Unknown keys in `[log]` are rejected at load time, as are invalid `level`/`format` values. The `--logLevel` CLI flag overrides `level`.
+
 ## Time Formats
 
 TOML config files use RFC3339 for absolute timestamps:
@@ -105,7 +123,8 @@ CLI flags use a flexible format instead (`YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM
 3. `[static]` requires `logFile`
 4. `[live]` requires `port`
 5. Live mode requires `jailFile` and `banFile` in `[global]`
-6. When using `--config`, most other CLI flags produce an error (static allows `--tui`, `--compact`, `--plain`; live allows `--compact`, `--plain`)
+6. When using `--config`, most other CLI flags produce an error (static allows `--tui`, `--compact`, `--plain`; live allows `--compact`, `--plain`, `--logLevel`)
+7. `[log]` rejects unknown keys and invalid `level`/`format` values
 
 ## Complete Static Example
 

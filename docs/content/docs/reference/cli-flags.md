@@ -100,8 +100,11 @@ cidrx live [options]
 
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `--config` | string | No | - | Path to TOML config file. When used, only `--compact` and `--plain` are allowed alongside it. |
+| `--config` | string | No | - | Path to TOML config file. When used, only `--compact`, `--plain`, and `--logLevel` are allowed alongside it. |
 | `--port` | string | Yes (unless `--config`) | - | Port for Lumberjack protocol listener |
+| `--logLevel` | string | No | `info` | Verbosity of the live-mode log lines on stderr: `debug`, `info`, `warn`, or `error`. Overrides the `[log]` level from the config file. |
+
+Live mode logs leveled, timestamped progress lines to stderr (one summary line per detection iteration). Machine-readable live data is served by the HTTP endpoints (`GET /stats`, `GET /bans`) when `statsListen` is configured.
 
 ### Window Options
 

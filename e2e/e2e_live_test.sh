@@ -201,19 +201,17 @@ else
     fi
 fi
 
-# --- Check cidrx JSON output for detection data ---
-log "Checking cidrx output logs for detection data..."
+# --- Check cidrx iteration log lines for detection data ---
+log "Checking cidrx logs for iteration summaries..."
 CIDRX_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs cidrx 2>/dev/null || echo "")
 
-# cidrx outputs JSON lines to stdout - check for detection indicators
-if echo "$CIDRX_LOGS" | grep -q '"detected_cidrs"'; then
-    pass "cidrx output contains detection data"
-elif echo "$CIDRX_LOGS" | grep -q '"merged_cidrs"'; then
-    pass "cidrx output contains merged CIDR data"
-elif echo "$CIDRX_LOGS" | grep -q '"window_size"'; then
-    pass "cidrx output contains window statistics"
+# cidrx logs one leveled summary line per loop iteration to stderr
+if echo "$CIDRX_LOGS" | grep 'msg=iteration' | grep -qE 'detected=[1-9]'; then
+    pass "cidrx logged iterations with detections"
+elif echo "$CIDRX_LOGS" | grep -q 'msg=iteration'; then
+    pass "cidrx logged iteration summaries"
 else
-    log "NOTE: Could not find detection data in cidrx logs (may be buffered)"
+    fail "No iteration log lines found in cidrx logs"
 fi
 
 # --- Check for panics or fatal errors ---

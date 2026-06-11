@@ -82,14 +82,14 @@ func TestLiveLoop_EndToEnd_LumberjackToBanFile(t *testing.T) {
 		t.Fatalf("Send seq = %d, want 276", seq)
 	}
 
-	stats := h.nextStats()
-	if stats.ProcessedBatch != 276 {
-		t.Errorf("ProcessedBatch = %d, want 276", stats.ProcessedBatch)
+	it, snap := h.nextIteration()
+	if it.Batch != 276 {
+		t.Errorf("iteration batch = %d, want 276", it.Batch)
 	}
-	if stats.WindowSize != 276 {
-		t.Errorf("WindowSize = %d, want 276", stats.WindowSize)
+	if it.Window != 276 {
+		t.Errorf("iteration window = %d, want 276", it.Window)
 	}
-	assertSingleCIDRStats(t, stats, "10.5.5.0/24", 256)
+	assertSingleCIDRState(t, it, snap, "10.5.5.0/24", 256)
 
 	// Files are written before the stats emission, so they are final here.
 	bans := banCIDRs(t, cfg.GetBanFile())
@@ -133,34 +133,34 @@ func TestLiveLoop_EndToEnd_TwoBatchesAccumulate(t *testing.T) {
 	if _, err := client.Send(hotLogEvents(now, 0, 99)); err != nil {
 		t.Fatalf("first Send: %v", err)
 	}
-	stats1 := h.nextStats()
-	if stats1.ProcessedBatch != 99 {
-		t.Errorf("iter1 ProcessedBatch = %d, want 99", stats1.ProcessedBatch)
+	it1, snap1 := h.nextIteration()
+	if it1.Batch != 99 {
+		t.Errorf("iter1 batch = %d, want 99", it1.Batch)
 	}
-	if stats1.WindowSize != 99 {
-		t.Errorf("iter1 WindowSize = %d, want 99", stats1.WindowSize)
+	if it1.Window != 99 {
+		t.Errorf("iter1 window = %d, want 99", it1.Window)
 	}
-	if len(stats1.DetectedCIDRs) != 0 {
-		t.Errorf("iter1 DetectedCIDRs = %+v, want empty (below min cluster size)", stats1.DetectedCIDRs)
+	if detected := detectedNow(snap1); len(detected) != 0 {
+		t.Errorf("iter1 detected = %+v, want empty (below min cluster size)", detected)
 	}
-	if len(stats1.ActiveBans) != 0 {
-		t.Errorf("iter1 ActiveBans = %v, want empty", stats1.ActiveBans)
+	if it1.ActiveBans != 0 {
+		t.Errorf("iter1 active_bans = %d, want 0", it1.ActiveBans)
 	}
 
-	// Waiting for stats1 above guarantees batch 1 was consumed, so this
+	// Waiting for iteration 1 above guarantees batch 1 was consumed, so this
 	// second send lands in its own loop iteration.
 	batch2 := append(hotLogEvents(now, 99, 256), noiseLogEvents(now)...)
 	if _, err := client.Send(batch2); err != nil {
 		t.Fatalf("second Send: %v", err)
 	}
-	stats2 := h.nextStats()
-	if stats2.ProcessedBatch != 177 {
-		t.Errorf("iter2 ProcessedBatch = %d, want 177", stats2.ProcessedBatch)
+	it2, snap2 := h.nextIteration()
+	if it2.Batch != 177 {
+		t.Errorf("iter2 batch = %d, want 177", it2.Batch)
 	}
-	if stats2.WindowSize != 276 {
-		t.Errorf("iter2 WindowSize = %d, want 276", stats2.WindowSize)
+	if it2.Window != 276 {
+		t.Errorf("iter2 window = %d, want 276", it2.Window)
 	}
-	assertSingleCIDRStats(t, stats2, "10.5.5.0/24", 256)
+	assertSingleCIDRState(t, it2, snap2, "10.5.5.0/24", 256)
 
 	bans := banCIDRs(t, cfg.GetBanFile())
 	if len(bans) != 1 || bans[0] != "10.5.5.0/24" {

@@ -157,42 +157,44 @@ else
     fail "Jail file empty or not readable"
 fi
 
-# --- Test 4: cidrx JSON output analysis ---
-log "Test 4: cidrx output analysis..."
+# --- Test 4: live stats verification via /stats ---
+log "Test 4: live stats via /stats endpoint..."
 CIDRX_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs cidrx 2>/dev/null || echo "")
 
-# Extract the last JSON output line (most recent detection cycle)
-# Docker compose logs prefix with "cidrx  | ", strip that first
-LAST_JSON=$(echo "$CIDRX_LOGS" | sed 's/^cidrx[[:space:]]*|[[:space:]]*//' | grep -o '{.*}' | tail -1 || echo "")
-if [ -n "$LAST_JSON" ]; then
-    OUTPUT_ANALYSIS=$(echo "$LAST_JSON" | python3 -c "
+LOOP_STATS=$(curl -fsS http://localhost:8666/stats 2>/dev/null || echo "")
+if [ -n "$LOOP_STATS" ]; then
+    OUTPUT_ANALYSIS=$(echo "$LOOP_STATS" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
-    ls = d.get('live_stats', {})
-    window_size = ls.get('window_size', 0)
-    batch_size = ls.get('processed_batch', 0)
-    detected = len(ls.get('detected_cidrs', []))
-    merged = len(ls.get('merged_cidrs', []))
-    active_bans = len(ls.get('active_bans', []))
-    print(f'{window_size}:{batch_size}:{detected}:{merged}:{active_bans}')
+    windows = d.get('windows') or []
+    window_size = sum(w.get('requests', 0) for w in windows)
+    requests_total = d.get('ingest', {}).get('requests_total', 0)
+    detected = sum(
+        len(cs.get('detected_now') or [])
+        for w in windows
+        for cs in (w.get('cluster_sets') or [])
+    )
+    active_bans = d.get('jail', {}).get('total_active', 0)
+    ban_entries = d.get('lists', {}).get('ban_file', {}).get('entries', 0)
+    print(f'{window_size}:{requests_total}:{detected}:{active_bans}:{ban_entries}')
 except Exception as e:
     print(f'error:{e}')
 " 2>/dev/null || echo "error:parse")
 
     if [[ "$OUTPUT_ANALYSIS" != error:* ]]; then
-        IFS=':' read -r WINDOW_SIZE BATCH_SIZE DETECTED MERGED ACTIVE_BANS <<< "$OUTPUT_ANALYSIS"
+        IFS=':' read -r WINDOW_SIZE REQUESTS_TOTAL DETECTED ACTIVE_BANS BAN_ENTRIES <<< "$OUTPUT_ANALYSIS"
 
         if [ "$WINDOW_SIZE" -gt 0 ]; then
-            pass "Sliding window has $WINDOW_SIZE entries"
+            pass "Sliding windows hold $WINDOW_SIZE requests"
         else
-            fail "Sliding window is empty"
+            fail "Sliding windows are empty"
         fi
 
-        if [ "$BATCH_SIZE" -gt 0 ]; then
-            pass "Last batch processed $BATCH_SIZE events"
+        if [ "$REQUESTS_TOTAL" -gt 0 ]; then
+            pass "Ingestor processed $REQUESTS_TOTAL requests in total"
         else
-            log "NOTE: Last batch had 0 events (may be between batches)"
+            fail "Ingestor processed 0 requests"
         fi
 
         if [ "$DETECTED" -gt 0 ]; then
@@ -202,15 +204,15 @@ except Exception as e:
         fi
 
         if [ "$ACTIVE_BANS" -gt 0 ]; then
-            pass "Active bans: $ACTIVE_BANS"
+            pass "Active bans: $ACTIVE_BANS (ban file entries: $BAN_ENTRIES)"
         else
             log "NOTE: 0 active bans in last cycle"
         fi
     else
-        log "NOTE: Could not parse cidrx JSON output"
+        fail "Could not parse /stats JSON: $OUTPUT_ANALYSIS"
     fi
 else
-    log "NOTE: No JSON output found in cidrx logs"
+    fail "/stats not reachable for live stats verification"
 fi
 
 # --- Test 5: No panics or fatal errors ---
