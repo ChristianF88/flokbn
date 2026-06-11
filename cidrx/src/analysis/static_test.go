@@ -2,8 +2,10 @@ package analysis
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -672,4 +674,127 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// TestStaticWhitelistBeatsManualBlacklist verifies the publish invariant:
+// whitelists always win, including over the manual CIDR blacklist
+// (previously the blacklist was appended after the whitelist pass).
+func TestStaticWhitelistBeatsManualBlacklist(t *testing.T) {
+	writeFile := func(t *testing.T, dir, name, content string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+		return path
+	}
+
+	logContent := `192.168.1.100 - - [01/Jan/2023:12:00:00 +0000] "GET / HTTP/1.1" 200 1234 "-" "SomeAgent/1.0"
+192.168.1.101 - - [01/Jan/2023:12:00:01 +0000] "GET /page1 HTTP/1.1" 200 1234 "-" "GoodBot/1.0"
+`
+
+	newCfg := func(t *testing.T, dir string) *config.Config {
+		return &config.Config{
+			Global: &config.GlobalConfig{
+				JailFile: filepath.Join(dir, "jail.json"),
+				BanFile:  filepath.Join(dir, "ban.txt"),
+			},
+			Static: &config.StaticConfig{
+				LogFile:   writeFile(t, dir, "test.log", logContent),
+				LogFormat: "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"",
+			},
+			StaticTries: map[string]*config.TrieConfig{
+				"test_trie": {
+					ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
+					UseForJail:     []bool{true},
+				},
+			},
+		}
+	}
+
+	readBanCIDRs := func(t *testing.T, path string) []string {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading ban file: %v", err)
+		}
+		var cidrs []string
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			cidrs = append(cidrs, line)
+		}
+		return cidrs
+	}
+
+	// No ban CIDR may contain ip.
+	assertIPNotBanned := func(t *testing.T, cidrs []string, ip string) {
+		t.Helper()
+		parsed := net.ParseIP(ip)
+		for _, c := range cidrs {
+			_, ipNet, err := net.ParseCIDR(c)
+			if err != nil {
+				t.Fatalf("ban file contains invalid CIDR %q: %v", c, err)
+			}
+			if ipNet.Contains(parsed) {
+				t.Errorf("ban file CIDR %s covers whitelisted IP %s", c, ip)
+			}
+		}
+	}
+
+	t.Run("CIDRWhitelistSubtractsManualBlacklist", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := newCfg(t, dir)
+		cfg.Global.Whitelist = writeFile(t, dir, "whitelist.txt", "203.0.113.0/25\n")
+		cfg.Global.Blacklist = writeFile(t, dir, "blacklist.txt", "203.0.113.0/24\n")
+
+		if _, err := ParallelStaticFromConfigNoRequests(cfg); err != nil {
+			t.Fatalf("static run failed: %v", err)
+		}
+
+		cidrs := readBanCIDRs(t, cfg.GetBanFile())
+		banned := make(map[string]bool, len(cidrs))
+		for _, c := range cidrs {
+			banned[c] = true
+		}
+		if banned["203.0.113.0/24"] || banned["203.0.113.0/25"] {
+			t.Errorf("ban file %v must not cover the whitelisted half 203.0.113.0/25", cidrs)
+		}
+		if !banned["203.0.113.128/25"] {
+			t.Errorf("ban file %v missing the non-whitelisted half 203.0.113.128/25", cidrs)
+		}
+		assertIPNotBanned(t, cidrs, "203.0.113.5")
+	})
+
+	t.Run("UAWhitelistedIPWinsOverManualBlacklist", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := newCfg(t, dir)
+		// 192.168.1.101 sends a whitelisted User-Agent; the manual blacklist
+		// covers its whole /24. The published blacklist must exclude the IP.
+		cfg.Global.UserAgentWhitelist = writeFile(t, dir, "ua_whitelist.txt", "GoodBot/1.0\n")
+		cfg.Global.Blacklist = writeFile(t, dir, "blacklist.txt", "192.168.1.0/24\n")
+
+		if _, err := ParallelStaticFromConfigNoRequests(cfg); err != nil {
+			t.Fatalf("static run failed: %v", err)
+		}
+
+		cidrs := readBanCIDRs(t, cfg.GetBanFile())
+		if len(cidrs) == 0 {
+			t.Fatal("ban file empty, want manual blacklist remainder")
+		}
+		assertIPNotBanned(t, cidrs, "192.168.1.101")
+		// The rest of the /24 must still be covered, e.g. the unrelated .100.
+		covered := false
+		target := net.ParseIP("192.168.1.100")
+		for _, c := range cidrs {
+			if _, ipNet, err := net.ParseCIDR(c); err == nil && ipNet.Contains(target) {
+				covered = true
+			}
+		}
+		if !covered {
+			t.Errorf("ban file %v must still cover 192.168.1.100 (not UA-whitelisted)", cidrs)
+		}
+	})
 }

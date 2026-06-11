@@ -226,6 +226,55 @@ if [ -f "$BAN_FILE2" ]; then
     fi
 fi
 
+# --- Test 3: Whitelist beats manual blacklist (whitelists always win) ---
+log "Test 3: Whitelist overlapping manual blacklist..."
+JAIL_FILE3="$TMPDIR/jail3.json"
+BAN_FILE3="$TMPDIR/ban3.txt"
+WHITELIST3="$TMPDIR/whitelist3.txt"
+BLACKLIST3="$TMPDIR/blacklist3.txt"
+echo '{}' > "$JAIL_FILE3"
+
+# Whitelist covers the lower half of the manually blacklisted /24: the
+# published ban file must only contain the non-whitelisted remainder.
+echo "203.0.113.0/25" > "$WHITELIST3"
+echo "203.0.113.0/24" > "$BLACKLIST3"
+
+CONFIG_FILE3="$TMPDIR/wl_beats_bl_config.toml"
+cat > "$CONFIG_FILE3" <<TOML
+[global]
+jailFile = "$JAIL_FILE3"
+banFile = "$BAN_FILE3"
+whitelist = "$WHITELIST3"
+blacklist = "$BLACKLIST3"
+
+[static]
+logFile = "$LOG_FILE"
+logFormat = '$LOG_FORMAT'
+
+[static.main]
+clusterArgSets = [[500, 16, 24, 0.2]]
+useForJail = [true]
+TOML
+
+"$TMPDIR/cidrx" static \
+    --config "$CONFIG_FILE3" \
+    > /dev/null 2>&1
+
+if [ -f "$BAN_FILE3" ]; then
+    if grep -q "203.0.113.0/24" "$BAN_FILE3" || grep -q "203.0.113.0/25" "$BAN_FILE3"; then
+        fail "Ban file publishes whitelisted range (manual blacklist must not override whitelist)"
+    else
+        pass "Ban file excludes whitelisted half of manual blacklist entry"
+    fi
+    if grep -q "203.0.113.128/25" "$BAN_FILE3"; then
+        pass "Ban file contains subtracted remainder 203.0.113.128/25"
+    else
+        fail "Ban file missing subtracted remainder 203.0.113.128/25"
+    fi
+else
+    fail "Ban file not created (Test 3)"
+fi
+
 # --- Summary ---
 log "============================="
 log "Results: $PASS passed, $FAIL failed"

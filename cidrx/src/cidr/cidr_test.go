@@ -1096,3 +1096,95 @@ func TestUserAgentMatcher_CommentsAndWhitespace(t *testing.T) {
 		t.Error("Comments should not be added to matcher")
 	}
 }
+
+func TestComposeBanLists(t *testing.T) {
+	tests := []struct {
+		name            string
+		activeBans      []string
+		manualBlacklist []string
+		whitelist       []string
+		wantBans        []string
+		wantBlacklist   []string
+	}{
+		{
+			name:            "empty whitelist leaves both unchanged",
+			activeBans:      []string{"10.0.0.0/24"},
+			manualBlacklist: []string{"203.0.113.0/24"},
+			whitelist:       nil,
+			wantBans:        []string{"10.0.0.0/24"},
+			wantBlacklist:   []string{"203.0.113.0/24"},
+		},
+		{
+			name:            "whitelist fully covers manual blacklist entry",
+			activeBans:      []string{"10.0.0.0/24"},
+			manualBlacklist: []string{"192.168.1.0/24"},
+			whitelist:       []string{"192.168.0.0/16"},
+			wantBans:        []string{"10.0.0.0/24"},
+			wantBlacklist:   nil,
+		},
+		{
+			name:            "whitelist inside manual blacklist is subtracted",
+			activeBans:      nil,
+			manualBlacklist: []string{"10.0.0.0/16"},
+			whitelist:       []string{"10.0.1.0/24"},
+			wantBans:        nil,
+			wantBlacklist: []string{
+				"10.0.0.0/24", "10.0.2.0/23", "10.0.4.0/22",
+				"10.0.8.0/21", "10.0.16.0/20", "10.0.32.0/19",
+				"10.0.64.0/18", "10.0.128.0/17",
+			},
+		},
+		{
+			name:            "whitelist fully covers active ban",
+			activeBans:      []string{"172.16.5.0/24"},
+			manualBlacklist: nil,
+			whitelist:       []string{"172.16.0.0/12"},
+			wantBans:        nil,
+			wantBlacklist:   nil,
+		},
+		{
+			name:            "whitelist inside active ban is subtracted",
+			activeBans:      []string{"10.5.5.0/24"},
+			manualBlacklist: nil,
+			whitelist:       []string{"10.5.5.0/25"},
+			wantBans:        []string{"10.5.5.128/25"},
+			wantBlacklist:   nil,
+		},
+		{
+			name:            "empty inputs give empty outputs",
+			activeBans:      nil,
+			manualBlacklist: nil,
+			whitelist:       []string{"10.0.0.0/8"},
+			wantBans:        nil,
+			wantBlacklist:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotBans, gotBlacklist := ComposeBanLists(tt.activeBans, tt.manualBlacklist, tt.whitelist)
+			if !equalCIDRSets(gotBans, tt.wantBans) {
+				t.Errorf("publishBans = %v, want %v", gotBans, tt.wantBans)
+			}
+			if !equalCIDRSets(gotBlacklist, tt.wantBlacklist) {
+				t.Errorf("publishBlacklist = %v, want %v", gotBlacklist, tt.wantBlacklist)
+			}
+		})
+	}
+}
+
+func equalCIDRSets(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	set := make(map[string]bool, len(got))
+	for _, c := range got {
+		set[c] = true
+	}
+	for _, c := range want {
+		if !set[c] {
+			return false
+		}
+	}
+	return true
+}

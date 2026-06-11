@@ -491,10 +491,8 @@ func TestInsertIntoHaxmap(t *testing.T) {
 	t.Run("Insert new IP", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		ti := TimedIP{
-			IP:               ip1,
-			EndpointAllowed:  true,
-			UserAgentAllowed: false,
-			Time:             now,
+			IP:   ip1,
+			Time: now,
 		}
 		insertIntoHaxmap(m, ip1, ti)
 		ipUint32 := iputils.IPToUint32(ip1)
@@ -511,27 +509,17 @@ func TestInsertIntoHaxmap(t *testing.T) {
 		if len(stat.DeltaT) != 0 {
 			t.Errorf("Expected DeltaT to be empty, got %v", stat.DeltaT)
 		}
-		if len(stat.EndpointsAllowed) != 1 || stat.EndpointsAllowed[0] != true {
-			t.Errorf("Expected EndpointsAllowed to be [true], got %v", stat.EndpointsAllowed)
-		}
-		if len(stat.UserAgentsAllowed) != 1 || stat.UserAgentsAllowed[0] != false {
-			t.Errorf("Expected UserAgentsAllowed to be [false], got %v", stat.UserAgentsAllowed)
-		}
 	})
 
 	t.Run("Insert same IP again, DeltaT is set", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		ti1 := TimedIP{
-			IP:               ip1,
-			EndpointAllowed:  true,
-			UserAgentAllowed: false,
-			Time:             now,
+			IP:   ip1,
+			Time: now,
 		}
 		ti2 := TimedIP{
-			IP:               ip1,
-			EndpointAllowed:  false,
-			UserAgentAllowed: true,
-			Time:             now.Add(2 * time.Second),
+			IP:   ip1,
+			Time: now.Add(2 * time.Second),
 		}
 		insertIntoHaxmap(m, ip1, ti1)
 		insertIntoHaxmap(m, ip1, ti2)
@@ -548,27 +536,17 @@ func TestInsertIntoHaxmap(t *testing.T) {
 		} else if stat.DeltaT[0] != 2*time.Second {
 			t.Errorf("Expected DeltaT[0] to be 2s, got %v", stat.DeltaT[0])
 		}
-		if len(stat.EndpointsAllowed) != 2 || stat.EndpointsAllowed[1] != false {
-			t.Errorf("Expected EndpointsAllowed[1] to be false, got %v", stat.EndpointsAllowed)
-		}
-		if len(stat.UserAgentsAllowed) != 2 || stat.UserAgentsAllowed[1] != true {
-			t.Errorf("Expected UserAgentsAllowed[1] to be true, got %v", stat.UserAgentsAllowed)
-		}
 	})
 
 	t.Run("Insert multiple different IPs", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		ti1 := TimedIP{
-			IP:               ip1,
-			EndpointAllowed:  true,
-			UserAgentAllowed: false,
-			Time:             now,
+			IP:   ip1,
+			Time: now,
 		}
 		ti2 := TimedIP{
-			IP:               ip2,
-			EndpointAllowed:  false,
-			UserAgentAllowed: true,
-			Time:             now.Add(1 * time.Second),
+			IP:   ip2,
+			Time: now.Add(1 * time.Second),
 		}
 		insertIntoHaxmap(m, ip1, ti1)
 		insertIntoHaxmap(m, ip2, ti2)
@@ -583,10 +561,8 @@ func TestInsertIntoHaxmap(t *testing.T) {
 	t.Run("DeltaT is not appended for first insert", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		ti := TimedIP{
-			IP:               ip1,
-			EndpointAllowed:  true,
-			UserAgentAllowed: false,
-			Time:             now,
+			IP:   ip1,
+			Time: now,
 		}
 		insertIntoHaxmap(m, ip1, ti)
 		stat, _ := m.Get(iputils.IPToUint32(ip1))
@@ -611,11 +587,9 @@ func TestDeleteFromHaxmap(t *testing.T) {
 	t.Run("Delete single entry removes from map", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		stat := IPStat{
-			Last:              now,
-			DeltaT:            []time.Duration{},
-			EndpointsAllowed:  []bool{true},
-			UserAgentsAllowed: []bool{false},
-			Count:             1,
+			Last:   now,
+			DeltaT: []time.Duration{},
+			Count:  1,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
 		deleteFromHaxmap(m, ip1)
@@ -627,11 +601,9 @@ func TestDeleteFromHaxmap(t *testing.T) {
 	t.Run("Delete decrements count and slices for multiple entries", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		stat := IPStat{
-			Last:              now,
-			DeltaT:            []time.Duration{1 * time.Second, 2 * time.Second},
-			EndpointsAllowed:  []bool{true, false, true},
-			UserAgentsAllowed: []bool{false, true, false},
-			Count:             3,
+			Last:   now,
+			DeltaT: []time.Duration{1 * time.Second, 2 * time.Second},
+			Count:  3,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
 		deleteFromHaxmap(m, ip1)
@@ -645,22 +617,14 @@ func TestDeleteFromHaxmap(t *testing.T) {
 		if len(got.DeltaT) != 1 || got.DeltaT[0] != 2*time.Second {
 			t.Errorf("Expected DeltaT to be [2s], got %v", got.DeltaT)
 		}
-		if len(got.EndpointsAllowed) != 2 || got.EndpointsAllowed[0] != false {
-			t.Errorf("Expected EndpointsAllowed[0] to be false, got %v", got.EndpointsAllowed)
-		}
-		if len(got.UserAgentsAllowed) != 2 || got.UserAgentsAllowed[0] != true {
-			t.Errorf("Expected UserAgentsAllowed[0] to be true, got %v", got.UserAgentsAllowed)
-		}
 	})
 
 	t.Run("Delete when count becomes zero resets DeltaT", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		stat := IPStat{
-			Last:              now,
-			DeltaT:            []time.Duration{1 * time.Second},
-			EndpointsAllowed:  []bool{true},
-			UserAgentsAllowed: []bool{false},
-			Count:             1,
+			Last:   now,
+			DeltaT: []time.Duration{1 * time.Second},
+			Count:  1,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
 		deleteFromHaxmap(m, ip1)
@@ -672,18 +636,14 @@ func TestDeleteFromHaxmap(t *testing.T) {
 	t.Run("Delete handles multiple IPs independently", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		stat1 := IPStat{
-			Last:              now,
-			DeltaT:            []time.Duration{},
-			EndpointsAllowed:  []bool{true},
-			UserAgentsAllowed: []bool{false},
-			Count:             1,
+			Last:   now,
+			DeltaT: []time.Duration{},
+			Count:  1,
 		}
 		stat2 := IPStat{
-			Last:              now,
-			DeltaT:            []time.Duration{},
-			EndpointsAllowed:  []bool{false},
-			UserAgentsAllowed: []bool{true},
-			Count:             1,
+			Last:   now,
+			DeltaT: []time.Duration{},
+			Count:  1,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat1)
 		m.Set(iputils.IPToUint32(ip2), stat2)
@@ -696,20 +656,18 @@ func TestDeleteFromHaxmap(t *testing.T) {
 		}
 	})
 }
-func TestDeleteFromHaxmap_EmptySlicesNoPanic(t *testing.T) {
-	// Verify that deleteFromHaxmap doesn't panic when slices are empty
-	// (previously it would index empty slices without bounds checking)
+func TestDeleteFromHaxmap_EmptyDeltaTNoPanic(t *testing.T) {
+	// Verify that deleteFromHaxmap doesn't panic when DeltaT is empty
+	// (previously it would index the empty slice without bounds checking)
 	m := haxmap.New[uint32, IPStat](8)
 	ip := net.ParseIP("10.0.0.1")
 	ipUint32 := iputils.IPToUint32(ip)
 
-	// Create a stat with count > 1 but empty slices (edge case)
+	// Create a stat with count > 1 but empty DeltaT (edge case)
 	stat := IPStat{
-		Last:              time.Now(),
-		DeltaT:            []time.Duration{},
-		EndpointsAllowed:  []bool{},
-		UserAgentsAllowed: []bool{},
-		Count:             2,
+		Last:   time.Now(),
+		DeltaT: []time.Duration{},
+		Count:  2,
 	}
 	m.Set(ipUint32, stat)
 
@@ -948,9 +906,9 @@ func TestSlidingWindow_IPStatAccumulation(t *testing.T) {
 
 	ip := net.ParseIP("192.168.1.1")
 	ips := []TimedIP{
-		{IP: ip, EndpointAllowed: true, UserAgentAllowed: false, Time: now},
-		{IP: ip, EndpointAllowed: false, UserAgentAllowed: true, Time: now.Add(2 * time.Second)},
-		{IP: ip, EndpointAllowed: true, UserAgentAllowed: true, Time: now.Add(5 * time.Second)},
+		{IP: ip, Time: now},
+		{IP: ip, Time: now.Add(2 * time.Second)},
+		{IP: ip, Time: now.Add(5 * time.Second)},
 	}
 	s.Update(ips)
 

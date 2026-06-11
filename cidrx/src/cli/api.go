@@ -15,6 +15,7 @@ import (
 	"github.com/ChristianF88/cidrx/cidr"
 	"github.com/ChristianF88/cidrx/config"
 	"github.com/ChristianF88/cidrx/ingestor"
+	"github.com/ChristianF88/cidrx/iputils"
 	"github.com/ChristianF88/cidrx/jail"
 	"github.com/ChristianF88/cidrx/output"
 	"github.com/ChristianF88/cidrx/sliding"
@@ -219,6 +220,16 @@ func newStatsServerFromConfig(cfg *config.Config) (*statsServer, error) {
 	return newStatsServer(cfg.Live.StatsListen)
 }
 
+// purgeExpired drops entries last seen before cutoff (window-aligned expiry
+// for the User-Agent list IP sets).
+func purgeExpired(m map[uint32]time.Time, cutoff time.Time) {
+	for ip, seen := range m {
+		if seen.Before(cutoff) {
+			delete(m, ip)
+		}
+	}
+}
+
 // sleepOrDone sleeps for d, returning early when ctx is cancelled.
 func sleepOrDone(ctx context.Context, d time.Duration) {
 	if d <= 0 {
@@ -269,6 +280,31 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		return fmt.Errorf("loading blacklist: %w", err)
 	}
 
+	// User-Agent lists (static parity): exact case-insensitive matching via
+	// the same matcher static mode uses. Broken list files fail loud at
+	// startup, like the CIDR lists above.
+	uaWhitelistPatterns, err := cfg.LoadUserAgentWhitelistPatterns()
+	if err != nil {
+		return fmt.Errorf("loading user-agent whitelist: %w", err)
+	}
+	uaBlacklistPatterns, err := cfg.LoadUserAgentBlacklistPatterns()
+	if err != nil {
+		return fmt.Errorf("loading user-agent blacklist: %w", err)
+	}
+	var uaMatcher *cidr.UserAgentMatcher
+	if len(uaWhitelistPatterns) > 0 || len(uaBlacklistPatterns) > 0 {
+		uaMatcher = cidr.NewUserAgentMatcher(uaWhitelistPatterns, uaBlacklistPatterns)
+		logger.Info("user-agent lists loaded",
+			"whitelist_patterns", len(uaWhitelistPatterns),
+			"blacklist_patterns", len(uaBlacklistPatterns),
+		)
+	}
+	// IPs seen with listed User-Agents, with last-seen times. Purged after
+	// the largest window duration each iteration, so memory stays bounded by
+	// the unique listed IPs per window.
+	uaWhitelistIPs := make(map[uint32]time.Time)
+	uaBlacklistIPs := make(map[uint32]time.Time)
+
 	jailInstance, err := jail.FileToJail(cfg.GetJailFile())
 	if err != nil {
 		return fmt.Errorf("reading jail file: %w", err)
@@ -300,11 +336,15 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		}
 	}()
 
-	// Calculate maximum sleep time across all windows
+	// Calculate maximum sleep time and window duration across all windows
 	maxSleepTime := 0
+	maxWindowTime := time.Duration(0)
 	for _, winInst := range windows {
 		if winInst.config.SleepBetweenIterations > maxSleepTime {
 			maxSleepTime = winInst.config.SleepBetweenIterations
+		}
+		if winInst.config.SlidingWindowMaxTime > maxWindowTime {
+			maxWindowTime = winInst.config.SlidingWindowMaxTime
 		}
 	}
 
@@ -342,6 +382,41 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			)
 		}
 
+		// Classify User-Agents once per batch (lists are global, not
+		// per-window). Whitelisted-UA requests never enter any window
+		// (parity with static trie exclusion) and immunize their IP at
+		// publish time; blacklisted-UA IPs are force-jailed as /32 below.
+		if uaMatcher != nil {
+			now := time.Now()
+			kept := batch[:0]
+			for _, msg := range batch {
+				switch uaMatcher.CheckUserAgent(msg.UserAgent) {
+				case cidr.UserAgentWhitelist:
+					if msg.IPUint32 != 0 {
+						uaWhitelistIPs[msg.IPUint32] = now
+					}
+					if statsState != nil {
+						statsState.uaWhitelistHits++
+					}
+					continue
+				case cidr.UserAgentBlacklist:
+					if msg.IPUint32 != 0 {
+						uaBlacklistIPs[msg.IPUint32] = now
+					}
+					if statsState != nil {
+						statsState.uaBlacklistHits++
+					}
+				}
+				kept = append(kept, msg)
+			}
+			batch = kept
+
+			// Window-aligned expiry keeps both sets bounded.
+			cutoff := now.Add(-maxWindowTime)
+			purgeExpired(uaWhitelistIPs, cutoff)
+			purgeExpired(uaBlacklistIPs, cutoff)
+		}
+
 		// Collect all CIDRs to ban from all sliding windows
 		var allMergedCIDRs []*net.IPNet
 		var allDetectedCIDRs []output.LiveCIDR
@@ -371,10 +446,8 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 				}
 
 				timedIps = append(timedIps, sliding.TimedIP{
-					IP:               msg.GetIPNet(),
-					Time:             msg.Timestamp,
-					EndpointAllowed:  true,
-					UserAgentAllowed: true,
+					IP:   msg.GetIPNet(),
+					Time: msg.Timestamp,
 				})
 			}
 			winInst.acceptedTotal += uint64(len(timedIps))
@@ -456,12 +529,29 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			mergedCIDRs = append(mergedCIDRs, ipNet.String())
 		}
 
+		// Whitelists from every source: CIDR list + UA-whitelisted IPs.
+		allWhitelists := whitelistCIDRs
+		if len(uaWhitelistIPs) > 0 {
+			combined := make([]string, 0, len(whitelistCIDRs)+len(uaWhitelistIPs))
+			combined = append(combined, whitelistCIDRs...)
+			for ip := range uaWhitelistIPs {
+				combined = append(combined, iputils.Uint32ToIP(ip).String()+"/32")
+			}
+			allWhitelists = combined
+		}
+
 		// Apply whitelist filtering before jail update (static parity).
-		filteredJailCIDRs := cidr.RemoveWhitelisted(mergedCIDRs, whitelistCIDRs)
-		if len(whitelistCIDRs) > 0 {
+		filteredJailCIDRs := cidr.RemoveWhitelisted(mergedCIDRs, allWhitelists)
+		if len(allWhitelists) > 0 {
 			if removed := len(mergedCIDRs) - len(filteredJailCIDRs); removed > 0 {
 				logger.Warn("whitelist filtering prevented CIDRs from being added to jail", "count", removed)
 			}
+		}
+
+		// Force-jail IPs seen with blacklisted User-Agents as /32 (static
+		// parity). Jail dedups; ban decay handles IPs that stop appearing.
+		for ip := range uaBlacklistIPs {
+			filteredJailCIDRs = append(filteredJailCIDRs, iputils.Uint32ToIP(ip).String()+"/32")
 		}
 
 		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
@@ -471,11 +561,11 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			logger.Error("failed to save jail", "path", cfg.GetJailFile(), "err", err)
 		}
 
-		// Whitelist also shields pre-existing jail entries from the ban file,
-		// and manual blacklist entries are always appended (static parity).
+		// ComposeBanLists is the publish choke point (static parity):
+		// whitelists win over active bans AND the manual blacklist.
 		activeBans := jailInstance.ListActiveBans()
-		filteredActiveBans := cidr.RemoveWhitelisted(activeBans, whitelistCIDRs)
-		banContent := jail.BuildBanFileContent(filteredActiveBans, blacklistCIDRs)
+		publishBans, publishBlacklist := cidr.ComposeBanLists(activeBans, blacklistCIDRs, allWhitelists)
+		banContent := jail.BuildBanFileContent(publishBans, publishBlacklist)
 		banFileWritten := false
 		if err := jail.WriteToFile(cfg.GetBanFile(), banContent); err != nil {
 			// On failure statsState keeps the previous content: /bans always
@@ -484,11 +574,11 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		} else {
 			banFileWritten = true
 			if statsState != nil {
-				statsState.recordBanFileWrite(banContent, len(filteredActiveBans)+len(blacklistCIDRs))
+				statsState.recordBanFileWrite(banContent, len(publishBans)+len(publishBlacklist))
 			}
-			if len(blacklistCIDRs) > 0 && !blacklistWarned {
+			if len(publishBlacklist) > 0 && !blacklistWarned {
 				blacklistWarned = true
-				logger.Info("added manual blacklist entries to ban file", "count", len(blacklistCIDRs))
+				logger.Info("added manual blacklist entries to ban file", "count", len(publishBlacklist))
 			}
 		}
 
@@ -497,6 +587,8 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		// Publish the snapshot before the iteration line so anyone reacting
 		// to the log already sees the matching /stats state.
 		if stats != nil {
+			statsState.uaActiveWhitelistIPs = len(uaWhitelistIPs)
+			statsState.uaActiveBlacklistIPs = len(uaBlacklistIPs)
 			stats.publish(buildSnapshot(statsState, ing, cfg, windows, winClusterStats, &jailInstance, loopEnd, maxSleepTime))
 		}
 
@@ -506,7 +598,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			"detected", len(allDetectedCIDRs),
 			"merged", len(mergedCIDRs),
 			"jailed", len(filteredJailCIDRs),
-			"active_bans", len(filteredActiveBans),
+			"active_bans", len(publishBans),
 			"ban_file_written", banFileWritten,
 			"loop_ms", loopEnd.Milliseconds(),
 			"cluster_ms", totalClusterDuration/1000,

@@ -81,7 +81,7 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 
 	w := sliding.NewSlidingWindowTrie(24*time.Hour, 1000)
 	now := time.Now()
-	w.InsertNew([]sliding.TimedIP{{IP: net.IPv4(10, 0, 0, 1), Time: now, EndpointAllowed: true, UserAgentAllowed: true}})
+	w.InsertNew([]sliding.TimedIP{{IP: net.IPv4(10, 0, 0, 1), Time: now}})
 	windows := []slidingWindowInstance{{name: "w", window: w, config: &config.SlidingTrieConfig{}}}
 
 	// Iteration 1 computes top talkers.
@@ -126,10 +126,8 @@ func BenchmarkBuildSnapshot(b *testing.B) {
 	timed := make([]sliding.TimedIP, 0, 10000)
 	for i := 0; i < 10000; i++ {
 		timed = append(timed, sliding.TimedIP{
-			IP:               net.IPv4(10, byte(i>>16), byte(i>>8), byte(i)),
-			Time:             now,
-			EndpointAllowed:  true,
-			UserAgentAllowed: true,
+			IP:   net.IPv4(10, byte(i>>16), byte(i>>8), byte(i)),
+			Time: now,
 		})
 	}
 	w.Update(timed)

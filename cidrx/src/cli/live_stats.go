@@ -111,11 +111,21 @@ type pathInfo struct {
 	Path string `json:"path"`
 }
 
+// uaListsStats reports User-Agent list activity: cumulative request hits and
+// the currently tracked (window-aligned, TTL-purged) IP set sizes.
+type uaListsStats struct {
+	WhitelistHitsTotal uint64 `json:"whitelist_hits_total"`
+	BlacklistHitsTotal uint64 `json:"blacklist_hits_total"`
+	ActiveWhitelistIPs int    `json:"active_whitelist_ips"`
+	ActiveBlacklistIPs int    `json:"active_blacklist_ips"`
+}
+
 type listsStats struct {
-	Whitelist listInfo    `json:"whitelist"`
-	Blacklist listInfo    `json:"blacklist"`
-	BanFile   banFileInfo `json:"ban_file"`
-	JailFile  pathInfo    `json:"jail_file"`
+	Whitelist      listInfo     `json:"whitelist"`
+	Blacklist      listInfo     `json:"blacklist"`
+	UserAgentLists uaListsStats `json:"user_agent_lists"`
+	BanFile        banFileInfo  `json:"ban_file"`
+	JailFile       pathInfo     `json:"jail_file"`
 }
 
 type loopStats struct {
@@ -135,6 +145,12 @@ type liveStatsState struct {
 	banLastWritten time.Time
 	topTalkers     [][]sliding.TopTalker // indexed like the windows slice
 	lists          listsStats            // skeleton built once; list slices alias the startup-loaded CIDRs (never mutated)
+
+	// User-Agent list counters, written by the loop goroutine only.
+	uaWhitelistHits      uint64
+	uaBlacklistHits      uint64
+	uaActiveWhitelistIPs int
+	uaActiveBlacklistIPs int
 }
 
 func newLiveStatsState(cfg *config.Config, whitelistCIDRs, blacklistCIDRs []string) *liveStatsState {
@@ -215,6 +231,13 @@ func buildSnapshot(
 
 	ingSt := ing.Stats()
 	now := time.Now()
+	lists := st.lists
+	lists.UserAgentLists = uaListsStats{
+		WhitelistHitsTotal: st.uaWhitelistHits,
+		BlacklistHitsTotal: st.uaBlacklistHits,
+		ActiveWhitelistIPs: st.uaActiveWhitelistIPs,
+		ActiveBlacklistIPs: st.uaActiveBlacklistIPs,
+	}
 	snap := &statsSnapshot{
 		SchemaVersion: statsSchemaVersion,
 		GeneratedAt:   now,
@@ -228,7 +251,7 @@ func buildSnapshot(
 			ParseErrorsTotal:     ingSt.ParseErrorsTotal,
 			MalformedFieldsTotal: ingSt.MalformedFieldsTotal,
 		},
-		Lists: st.lists,
+		Lists: lists,
 		Loop: loopStats{
 			Iterations:     st.iterations,
 			LastDurationMS: loopDuration.Milliseconds(),

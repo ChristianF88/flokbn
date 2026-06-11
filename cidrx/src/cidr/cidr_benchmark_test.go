@@ -390,3 +390,24 @@ func BenchmarkNumericCIDR_String(b *testing.B) {
 		_ = s
 	}
 }
+
+// BenchmarkComposeBanLists measures the publish choke point (cold path: runs
+// once per static run / live iteration) with a realistic mix of full drops,
+// partial subtractions and untouched entries.
+func BenchmarkComposeBanLists(b *testing.B) {
+	activeBans := make([]string, 0, 200)
+	for i := 0; i < 200; i++ {
+		activeBans = append(activeBans, fmt.Sprintf("10.%d.%d.0/24", i/256, i%256))
+	}
+	manualBlacklist := []string{"203.0.113.0/24", "198.51.100.0/24", "192.0.2.0/24"}
+	whitelist := []string{
+		"10.0.5.0/24",    // full drop of one active ban
+		"10.0.10.0/25",   // subtraction inside an active ban
+		"203.0.113.0/26", // subtraction inside the manual blacklist
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ComposeBanLists(activeBans, manualBlacklist, whitelist)
+	}
+}

@@ -27,10 +27,8 @@ func BenchmarkSlidingWindowUpdate(b *testing.B) {
 
 		for u := 0; u < len(Ips); u++ {
 			timedIPs = append(timedIPs, TimedIP{
-				IP:               Ips[u],
-				EndpointAllowed:  true,
-				UserAgentAllowed: false,
-				Time:             time.Now(),
+				IP:   Ips[u],
+				Time: time.Now(),
 			})
 
 			if u%batchSize == 0 {

@@ -575,6 +575,15 @@ func RemoveWhitelisted(blacklist []string, whitelist []string) []string {
 	return result
 }
 
+// ComposeBanLists applies the whitelist to both the active jail bans and the
+// manual blacklist as the final step before a ban file is written. Whitelists
+// always win: fully covered entries are dropped and partial overlaps are
+// subtracted (see RemoveWhitelisted). Both static and live mode must publish
+// through this function so the invariant holds in one place.
+func ComposeBanLists(activeBans, manualBlacklist, whitelist []string) (publishBans, publishBlacklist []string) {
+	return RemoveWhitelisted(activeBans, whitelist), RemoveWhitelisted(manualBlacklist, whitelist)
+}
+
 // UserAgentMatchResult represents the result of User-Agent matching
 type UserAgentMatchResult int8
 

@@ -976,18 +976,18 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 		}
 	}
 
-	// Apply whitelist filtering
-	filteredJailCIDRs := cidr.RemoveWhitelisted(allJailCIDRs, whitelistCIDRs)
-
-	// Also remove IPs that were whitelisted by User-Agent
-	if len(jsonOutput.UserAgentWhitelistIPs) > 0 {
-		userAgentWhitelistCIDRs := pools.Pools.GetStringSlice()
-		defer pools.Pools.ReturnStringSlice(userAgentWhitelistCIDRs)
-		for _, ip := range jsonOutput.UserAgentWhitelistIPs {
-			userAgentWhitelistCIDRs = append(userAgentWhitelistCIDRs, ip+"/32")
-		}
-		filteredJailCIDRs = cidr.RemoveWhitelisted(filteredJailCIDRs, userAgentWhitelistCIDRs)
+	// Combine CIDR whitelist and User-Agent-whitelisted IPs into one list:
+	// every whitelist source must win everywhere (pre-jail filter and the
+	// final publish pass below).
+	allWhitelists := pools.Pools.GetStringSlice()
+	defer pools.Pools.ReturnStringSlice(allWhitelists)
+	allWhitelists = append(allWhitelists, whitelistCIDRs...)
+	for _, ip := range jsonOutput.UserAgentWhitelistIPs {
+		allWhitelists = append(allWhitelists, ip+"/32")
 	}
+
+	// Apply whitelist filtering
+	filteredJailCIDRs := cidr.RemoveWhitelisted(allJailCIDRs, allWhitelists)
 
 	// Log whitelist filtering results
 	if len(whitelistCIDRs) > 0 {
@@ -1025,18 +1025,19 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 		}
 	}
 
-	// Always generate ban file from jail
+	// Always generate ban file from jail. ComposeBanLists is the publish
+	// choke point: whitelists win over active bans AND the manual blacklist.
 	activeBans := jailInstance.ListActiveBans()
-	filteredActiveBans := cidr.RemoveWhitelisted(activeBans, whitelistCIDRs)
+	publishBans, publishBlacklist := cidr.ComposeBanLists(activeBans, blacklistCIDRs, allWhitelists)
 
-	err = jail.WriteBanFileWithBlacklist(cfg.GetBanFile(), filteredActiveBans, blacklistCIDRs)
+	err = jail.WriteBanFileWithBlacklist(cfg.GetBanFile(), publishBans, publishBlacklist)
 	if err != nil {
 		jsonOutput.AddError("banfile_write", fmt.Sprintf("failed to write ban file: %v", err), 1)
 		return err
 	}
 
-	if len(blacklistCIDRs) > 0 {
-		jsonOutput.AddWarning("blacklist_applied", fmt.Sprintf("Added %d manual blacklist entries to ban file", len(blacklistCIDRs)), 0)
+	if len(publishBlacklist) > 0 {
+		jsonOutput.AddWarning("blacklist_applied", fmt.Sprintf("Added %d manual blacklist entries to ban file", len(publishBlacklist)), 0)
 	}
 
 	return nil

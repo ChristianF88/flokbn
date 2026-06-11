@@ -12,18 +12,14 @@ import (
 // --- Sliding Window Wrapper ---
 
 type TimedIP struct {
-	IP               net.IP
-	EndpointAllowed  bool
-	UserAgentAllowed bool
-	Time             time.Time
+	IP   net.IP
+	Time time.Time
 }
 
 type IPStat struct {
-	Last              time.Time
-	DeltaT            []time.Duration
-	EndpointsAllowed  []bool
-	UserAgentsAllowed []bool
-	Count             int
+	Last   time.Time
+	DeltaT []time.Duration
+	Count  int
 }
 
 type SlidingWindow struct {
@@ -50,11 +46,9 @@ func insertIntoHaxmap(m *haxmap.Map[uint32, IPStat], ip net.IP, timedIP TimedIP)
 	stat, exists := m.Get(ipUint32)
 	if !exists {
 		stat = IPStat{
-			Last:              timedIP.Time,
-			DeltaT:            make([]time.Duration, 0),
-			EndpointsAllowed:  make([]bool, 0),
-			UserAgentsAllowed: make([]bool, 0),
-			Count:             0,
+			Last:   timedIP.Time,
+			DeltaT: make([]time.Duration, 0),
+			Count:  0,
 		}
 		skipDeltaT = true
 	}
@@ -62,8 +56,6 @@ func insertIntoHaxmap(m *haxmap.Map[uint32, IPStat], ip net.IP, timedIP TimedIP)
 	if !skipDeltaT {
 		stat.DeltaT = append(stat.DeltaT, timedIP.Time.Sub(stat.Last))
 	}
-	stat.EndpointsAllowed = append(stat.EndpointsAllowed, timedIP.EndpointAllowed)
-	stat.UserAgentsAllowed = append(stat.UserAgentsAllowed, timedIP.UserAgentAllowed)
 	stat.Last = timedIP.Time
 	stat.Count++
 	m.Set(ipUint32, stat)
@@ -83,13 +75,6 @@ func deleteFromHaxmap(m *haxmap.Map[uint32, IPStat], ip net.IP) {
 	// Remove the first element from DeltaT
 	if len(stat.DeltaT) > 0 {
 		stat.DeltaT = stat.DeltaT[1:]
-	}
-	// Remove the first element from EndpointsAllowed/UserAgentsAllowed
-	if len(stat.EndpointsAllowed) > 0 {
-		stat.EndpointsAllowed = stat.EndpointsAllowed[1:]
-	}
-	if len(stat.UserAgentsAllowed) > 0 {
-		stat.UserAgentsAllowed = stat.UserAgentsAllowed[1:]
 	}
 	m.Set(ipUint32, stat)
 }
