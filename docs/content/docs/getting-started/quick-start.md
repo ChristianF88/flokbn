@@ -3,7 +3,7 @@ title: "Quick Start"
 description: "Get started with cidrx in minutes"
 summary: "Quick examples to get you analyzing logs immediately"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 120
 toc: true
@@ -35,23 +35,23 @@ This detects clusters of 1000+ requests from IPs in /24 to /32 ranges using a 10
 ────────────────────────────────────────────────────────────────────────────────
 Log File:        /var/log/nginx/access.log
 Analysis Type:   static
-Generated:       2025-10-09 10:00:00 UTC
-Duration:        540 ms
+Generated:       2026-06-11 10:00:00 UTC
+Duration:        570 ms
 
 ⚡ PARSING PERFORMANCE
 ────────────────────────────────────────────────────────────────────────────────
-Total Requests:  1,046,826
-Parse Time:      437 ms
-Parse Rate:      2,394,927 requests/sec
+Total Requests:  2,345,057
+Parse Time:      534 ms
+Parse Rate:      4,388,769 requests/sec
 
 🔍 CLUSTERING RESULTS (1 set)
 ...............................................................................
   Set 1: min_size=1000, depth=24-32, threshold=0.10
   Execution Time: 95 μs
   Detected Threat Ranges:
-    45.40.50.192/26            3,083 requests  (  0.29%)
-    198.51.205.91/32           1,308 requests  (  0.12%)
-    ───────────────────        4,391 requests  (  0.42%) [TOTAL]
+    198.51.100.192/26            3,083 requests  (  0.13%)
+    203.0.113.91/32           1,308 requests  (  0.06%)
+    ───────────────────        4,391 requests  (  0.19%) [TOTAL]
 ```
 
 The detected CIDR ranges represent high-volume IP ranges you can investigate or block.
@@ -131,9 +131,9 @@ See [Output Formats]({{< relref "/docs/reference/output-formats/" >}}) for JSON 
 Use the [Docker test environment]({{< relref "/docs/guides/docker-testing/" >}}) to verify cidrx is working:
 
 ```bash
-docker compose up --build
-docker compose logs -f cidrx
-docker compose down
+docker compose -f docker-compose.test.yml up --build
+docker compose -f docker-compose.test.yml logs -f cidrx
+docker compose -f docker-compose.test.yml down
 ```
 
 ## Next Steps

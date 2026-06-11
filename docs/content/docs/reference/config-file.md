@@ -3,7 +3,7 @@ title: "Config File"
 description: "TOML configuration file schema and reference"
 summary: "Complete reference for cidrx TOML configuration files"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 220
 slug: "config-file"
@@ -70,6 +70,9 @@ Each `[static.NAME]` section defines an independent analysis trie. The `NAME` is
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `port` | string | Yes | Lumberjack protocol listening port |
+| `readTimeout` | string | No | TCP read timeout for the ingestor (duration string; default `5s`) |
+| `statsListen` | string | No | `host:port` for the HTTP stats server (`GET /stats`, `GET /bans`, Prometheus `GET /metrics`); empty = off |
+| `topTalkers` | int | No | Include the top-N IPs per window in `/stats`; `0` = off |
 
 ### Live Windows: [live.NAME]
 
@@ -89,7 +92,7 @@ Duration strings support: `s` (seconds), `m` (minutes), `h` (hours). Examples: `
 
 ## [log] Section
 
-Configures the leveled log lines live mode writes to **stderr** (timestamps included). Machine-readable live data is served by the HTTP endpoints (`GET /stats`, `GET /bans`); static mode's report output is unaffected.
+Configures the leveled log lines live mode writes to **stderr** (timestamps included). Machine-readable live data is served by the HTTP endpoints (`GET /stats`, `GET /bans`, `GET /metrics`); static mode's report output is unaffected.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -176,6 +179,8 @@ userAgentBlacklist = "/etc/cidrx/ua_blacklist.txt"
 
 [live]
 port = "8080"
+statsListen = "127.0.0.1:8666"  # HTTP /stats, /bans, /metrics (optional)
+topTalkers = 5                  # top-N IPs per window in /stats (optional)
 
 # Main detection - 2 hour window
 [live.detection]

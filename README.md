@@ -2,7 +2,7 @@
 
 Fast IP clustering from HTTP access logs. cidrx parses Nginx, Apache, or custom-format
 access logs, builds a binary trie of every observed IP address, and clusters them into
-CIDR ranges based on configurable density thresholds — processing 1M+ requests/sec on
+CIDR ranges based on configurable balance thresholds — processing 1M+ requests/sec on
 commodity hardware.
 
 **[Documentation](https://christianf88.github.io/cidrx/)**
@@ -41,14 +41,15 @@ Duration:        1078 ms
 CLUSTERING RESULTS
 ────────────────────────────────────────────────────────────────────────────────
 Set 1: min_size=1000, depth=24-32, threshold=0.10
-  45.40.50.192/26      3,083 requests  (  0.29%)
-  123.55.205.91/32     1,308 requests  (  0.12%)
+  198.51.100.192/26    3,083 requests  (  0.29%)
+  203.0.113.91/32      1,308 requests  (  0.12%)
   ─────────────────    4,391 requests  (  0.41%) [TOTAL]
 ```
 
 Each clustering parameter set specifies a minimum request count, a CIDR depth range
-to search, and a density threshold. In the example above: at least 1000 requests,
-search /24 through /32, flag any subtree where 10%+ of the address space is active.
+to search, and a balance threshold. In the example above: at least 1000 requests,
+search /24 through /32, and report a subtree once the traffic is spread evenly enough
+across it (threshold 0.1 tolerates 10% imbalance between its two halves).
 Multiple `--clusterArgSets` can run concurrently for multi-tier analysis (e.g. broad /12-/16
 sweeps alongside narrow /24-/32 scans in a single pass).
 
@@ -62,8 +63,9 @@ cidrx processes logs through a four-stage pipeline:
    status code, or whitelist/blacklist files.
 3. **Trie** — Inserts every qualifying IP into a binary trie. Multiple independent tries
    can run in parallel, each with its own filter set.
-4. **Cluster** — Walks the trie at configurable depths and flags subtrees exceeding the
-   density threshold, then collapses them into CIDR ranges with request counts.
+4. **Cluster** — Walks the trie at configurable depths and flags evenly loaded subtrees
+   (traffic spread across the subnet, not one deep source), collapsing them into CIDR
+   ranges with request counts.
 
 Output formats: plain text, JSON, compact JSON, or an interactive TUI.
 
@@ -72,9 +74,12 @@ Output formats: plain text, JSON, compact JSON, or an interactive TUI.
 **Static** — Analyze log files after the fact. Useful for traffic auditing, forensic
 analysis, or generating firewall rules from historical data.
 
-**Live** — Tail a log file in real time. cidrx re-analyzes on a configurable interval
-and can write ban files (CIDR lists compatible with iptables, nginx deny, etc.)
-automatically as new clusters emerge.
+**Live** — Receive logs in real time via the Lumberjack protocol (Filebeat/Logstash).
+cidrx keeps sliding windows of recent traffic, re-runs detection on a configurable
+interval, and maintains a persistent jail with escalating ban durations, writing ban
+files (CIDR lists compatible with iptables, nginx deny, etc.) as new clusters emerge.
+Optional HTTP endpoints expose live state: `GET /stats` (JSON), `GET /bans` (ban list),
+and `GET /metrics` (Prometheus).
 
 ## Use Cases
 
@@ -95,13 +100,17 @@ automatically as new clusters emerge.
 
 - Parses 1M+ requests/sec with zero-copy log extraction
 - Multiple concurrent clustering parameter sets in a single analysis pass
-- Regex filtering on URL path, User-Agent, and query string
+- Regex filtering on URL path and User-Agent (with automatic required-literal prefiltering)
 - Time-window filtering with flexible date/time parsing
-- IP whitelist and blacklist support
+- IP whitelist (never banned) and blacklist (always banned) files
+- User-Agent whitelist (immunize) and blacklist (force-jail) files
+- Persistent jail with escalating ban durations for repeat offenders
+- Live HTTP endpoints: `/stats`, `/bans`, Prometheus `/metrics`
 - Named trie instances with independent filter chains
 - Predefined CIDR ranges for targeted subnet analysis
 - TOML config file support (all CLI flags have config equivalents)
 - JSON, compact JSON, plain text, and interactive TUI output
+- Docker demo stack with closed-loop firewall enforcement and a Grafana dashboard
 
 ## Documentation
 

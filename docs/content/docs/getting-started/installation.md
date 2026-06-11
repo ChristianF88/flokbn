@@ -3,7 +3,7 @@ title: "Installation"
 description: "How to install cidrx on your system"
 summary: "Step-by-step instructions for installing cidrx from source or using Docker"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 110
 toc: true
@@ -16,7 +16,7 @@ seo:
 
 ## Prerequisites
 
-- **Go 1.21 or later** (for building from source)
+- **Go 1.23 or later** (for building from source)
 - **Docker** (optional, for containerized deployment)
 - **Git** (for cloning the repository)
 

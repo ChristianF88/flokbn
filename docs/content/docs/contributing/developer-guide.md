@@ -3,7 +3,7 @@ title: "Developer Guide"
 description: "Developer guide for contributing to cidrx"
 summary: "Performance requirements, testing, and development workflow for cidrx contributors"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 500
 toc: true
@@ -20,7 +20,7 @@ cidrx is open source and welcomes contributions. This guide covers cidrx-specifi
 
 ### 1. Prerequisites
 
-- **Go 1.21+** (check: `go version`)
+- **Go 1.23+** (check: `go version`)
 - **staticcheck** (install: `go install honnef.co/go/tools/cmd/staticcheck@latest`)
 
 ### 2. Clone and Build

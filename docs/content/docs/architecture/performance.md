@@ -3,7 +3,7 @@ title: "Performance"
 description: "Performance benchmarks and optimization guide for cidrx"
 summary: "Benchmarks, memory management, scaling approaches, and optimization techniques"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 420
 toc: true
@@ -18,34 +18,32 @@ cidrx processes millions of log entries per second on commodity hardware.
 
 ## Benchmarks
 
-Based on 1M+ request dataset:
+Measured on a 2.3M-request real-world dataset on a single Linux workstation -- your numbers will vary with hardware and log shape:
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Parse Rate | ~1.3M requests/sec | File I/O optimized |
-| End-to-end | ~1M requests/sec | Including clustering |
-| Memory Usage | ~512MB | With memory pools |
+| Metric | Measured | Notes |
+|--------|----------|-------|
+| Parse Rate (IP-only fast path) | several million requests/sec | When the analysis needs no UA/endpoint/status fields, only the IP is parsed |
+| Parse Rate (full parse) | millions of requests/sec | With UA/endpoint filters active |
+| End-to-end | under a second for 2.3M requests | Parse + trie build + clustering |
 | Cluster Time | <1ms | Multiple cluster sets |
 
 ### Real-World Example
 
-From the reference dataset (1,046,826 requests):
+From the reference dataset (2,345,057 requests, full parse with a User-Agent filter active):
 
 ```
 ⚡ PARSING PERFORMANCE
 ────────────────────────────────────────────────────────────────────────────────
-Total Requests:  1,046,826
-Parse Time:      762 ms
-Parse Rate:      1,373,322 requests/sec
+Total Requests:  2,345,057
+Parse Time:      534 ms
+Parse Rate:      4,388,769 requests/sec
 
-🔍 CLUSTERING RESULTS (3 sets)
-...............................................................................
-  Set 1: Execution Time: 95 μs
-  Set 2: Execution Time: 4 μs
-  Set 3: Execution Time: 3 μs
+🎯 TRIE: cli_trie
+────────────────────────────────────────────────────────────────────────────────
+Trie Build Time:         47 ms
 ```
 
-Total clustering overhead: **102 μs** for 3 cluster sets.
+Without filters the IP-only parse path is faster still. Clustering itself runs in microseconds per arg set on top of that.
 
 ## Performance Breakdown
 
@@ -53,17 +51,17 @@ Total clustering overhead: **102 μs** for 3 cluster sets.
 
 **Bottleneck**: Disk I/O and log parsing
 
-Optimizations applied: buffered file reading (256KB buffers), optimized string parsing, minimal allocations.
+Optimizations applied: zero-copy chunked file reading, an IP-only parse path that skips all other fields when the analysis does not need them, optimized string parsing, minimal allocations.
 
 ### Stage 2: Filtering (~20% of total)
 
-**Bottleneck**: Regex matching, IP lookups
+**Bottleneck**: Regex matching
 
-Optimizations applied: compiled regex caching (5x speedup), adaptive concurrent/sequential filtering, IP range tree for fast whitelist/blacklist lookups.
+Optimizations applied: compiled regex caching, a required-literal prefilter that screens lines with fast substring checks before the regex engine runs, adaptive concurrent/sequential filtering, O(1) exact-match User-Agent lists.
 
 Typical per-request cost:
-- Whitelist/blacklist: <1μs
-- Regex matching: 1-10μs
+- User-Agent list lookup: <1μs
+- Regex matching: 1-10μs (often skipped entirely by the prefilter)
 - Time window: <1μs
 
 ### Stage 3: Trie Building (~15% of total)
@@ -84,23 +82,23 @@ Typical: <1ms for most datasets, scales linearly with unique IPs.
 
 ## Optimization Tips
 
-### Whitelists (10-30% faster overall)
+### Avoid Unneeded Fields
 
-Exclude legitimate traffic early to reduce trie size and clustering work. Keep whitelists under 1000 entries for best performance. See [Filtering]({{< relref "/docs/reference/filtering/" >}}).
+If the analysis only clusters IPs (no UA/endpoint/time filters, no status breakdown), cidrx parses just the IP from each line -- the fastest path by far. Every filter that needs another field forces the full parse.
 
-### Regex Patterns (up to 5x difference)
+### Regex Patterns
 
-Keep patterns simple:
+Prefer patterns with distinctive required literals so the prefilter can skip the regex engine for non-matching lines:
 
 ```
-# Slower - complex pattern
-(?i)(crawler|spider|fetcher|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})
+# Fast - prefilter screens on the literals "crawler", "spider", "fetcher"
+crawler|spider|fetcher
 
-# Faster - simple patterns
-.*crawler.*|.*spider.*|.*fetcher.*
+# Slow - no required literal, every line runs the regex engine
+.*
 ```
 
-Avoid complex lookaheads/lookbehinds. Use User-Agent blacklist files instead of regex when possible.
+Use User-Agent whitelist/blacklist files instead of regex when matching exact strings (O(1) map lookup).
 
 ### Cluster Arg Sets (10-20% faster clustering)
 
@@ -194,7 +192,7 @@ Use multiple windows with staggered intervals for different detection speeds. Se
 
 ## Troubleshooting
 
-### Slow Parsing (<500k requests/sec)
+### Slow Parsing (<1M requests/sec)
 
 Possible causes: slow disk I/O, complex regex patterns, large whitelist.
 
@@ -219,7 +217,7 @@ Based on project requirements:
 
 | Goal | Target |
 |------|--------|
-| Parse rate | >1.3M requests/sec |
-| Total time | <1 second for 1M requests |
+| Parse rate | >1M requests/sec |
+| Total time | <2 seconds for 2M requests |
 | Memory | <512MB for typical workloads |
 | Cluster detection | <5ms |

@@ -39,8 +39,8 @@ cidrx outputs detected ranges:
 CLUSTERING RESULTS
 Set 1: min_size=1000, depth=24-32, threshold=0.10
 Detected Threat Ranges:
-  45.142.120.0/24        15,243 requests  ( 12.34%)
-  103.45.67.128/25        8,891 requests  (  7.20%)
+  198.51.100.0/24        15,243 requests  ( 12.34%)
+  203.0.113.128/25        8,891 requests  (  7.20%)
   198.51.100.42/32        3,456 requests  (  2.80%)
 ```
 

@@ -3,7 +3,7 @@ title: "Live Protection Guide"
 description: "Step-by-step guide to real-time IP range detection with cidrx"
 summary: "Complete walkthrough of live mode for continuous monitoring and automatic blocking"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 820
 toc: true
@@ -196,7 +196,7 @@ level = "info"   # debug, info, warn, error
 format = "text"  # text or json
 ```
 
-For machine-readable live data (detections, jail state, ban list), use the HTTP endpoints enabled by `statsListen` in `[live]`: `GET /stats` (JSON snapshot) and `GET /bans` (current ban file).
+For machine-readable live data (detections, jail state, ban list), use the HTTP endpoints enabled by `statsListen` in `[live]`: `GET /stats` (JSON snapshot), `GET /bans` (current ban file), and `GET /metrics` (Prometheus exposition format).
 
 ## Monitoring
 

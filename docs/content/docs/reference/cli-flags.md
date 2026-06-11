@@ -3,7 +3,7 @@ title: "CLI Flags"
 description: "Complete command-line reference for cidrx"
 summary: "Every cidrx command-line flag with type, default value, and description"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 210
 slug: "cli-flags"
@@ -102,9 +102,11 @@ cidrx live [options]
 |------|------|----------|---------|-------------|
 | `--config` | string | No | - | Path to TOML config file. When used, only `--compact`, `--plain`, and `--logLevel` are allowed alongside it. |
 | `--port` | string | Yes (unless `--config`) | - | Port for Lumberjack protocol listener |
+| `--jailFile` | string | Yes (unless `--config`) | - | Path to jail state file (JSON) |
+| `--banFile` | string | Yes (unless `--config`) | - | Path to ban list output (one CIDR per line) |
 | `--logLevel` | string | No | `info` | Verbosity of the live-mode log lines on stderr: `debug`, `info`, `warn`, or `error`. Overrides the `[log]` level from the config file. |
 
-Live mode logs leveled, timestamped progress lines to stderr (one summary line per detection iteration). Machine-readable live data is served by the HTTP endpoints (`GET /stats`, `GET /bans`) when `statsListen` is configured.
+Live mode logs leveled, timestamped progress lines to stderr (one summary line per detection iteration). Machine-readable live data is served by the HTTP endpoints (`GET /stats`, `GET /bans`, Prometheus `GET /metrics`) when `statsListen` is configured.
 
 ### Window Options
 
@@ -120,9 +122,9 @@ Live mode logs leveled, timestamped progress lines to stderr (one summary line p
 |------|------|-------------|
 | `--clusterArgSet` | string | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. Note: singular form (not `--clusterArgSets`). |
 
-### Filtering, Analysis, Output, and Ban Options
+### Filtering, Analysis, and Output Options
 
-Live mode supports the same flags as static mode: `--useragentRegex`, `--endpointRegex`, `--whitelist`, `--blacklist`, `--userAgentWhitelist`, `--userAgentBlacklist`, `--rangesCidr`, `--plotPath`, `--plain`, `--compact`, `--jailFile`, `--banFile`.
+Live mode supports the same optional flags as static mode: `--useragentRegex`, `--endpointRegex`, `--whitelist`, `--blacklist`, `--userAgentWhitelist`, `--userAgentBlacklist`, `--rangesCidr`, `--plotPath`, `--plain`, `--compact`. (`--jailFile` and `--banFile` are required in live mode; see Core Options above.)
 
 ---
 

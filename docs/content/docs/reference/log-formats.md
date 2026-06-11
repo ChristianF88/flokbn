@@ -3,7 +3,7 @@ title: "Log Formats"
 description: "Log format specifiers for parsing HTTP access logs"
 summary: "Complete reference for cidrx log format specifiers and common format patterns"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 230
 slug: "log-formats"
@@ -31,7 +31,7 @@ cidrx parses HTTP access logs using a format string that maps log fields to spec
 | `%u` | User-Agent | `Mozilla/5.0...` | No |
 | `%^` | Skip field (any value) | *(ignored)* | No (unlimited) |
 
-**Constraints**: Exactly one `%h` is required. No duplicate specifiers (e.g., two `%t` fields are not allowed). IPv4 only.
+**Constraints**: Exactly one `%h` is required. Each field specifier may appear at most once (e.g., two `%t` fields are not allowed); only `%^` (skip) may repeat. IPv4 only.
 
 ## Common Formats
 

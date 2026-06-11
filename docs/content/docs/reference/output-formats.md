@@ -3,7 +3,7 @@ title: "Output Formats"
 description: "JSON, plain text, compact JSON, and TUI output modes"
 summary: "Complete reference for all cidrx output formats with schemas and examples"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 260
 slug: "output-formats"
@@ -157,20 +157,20 @@ Example output:
 ────────────────────────────────────────────────────────────────────────────────
 Log File:        /var/log/nginx/access.log
 Analysis Type:   static
-Generated:       2025-10-09 10:15:23 UTC
-Duration:        540 ms
+Generated:       2026-06-11 10:15:23 UTC
+Duration:        570 ms
 
 ⚡ PARSING PERFORMANCE
 ────────────────────────────────────────────────────────────────────────────────
-Total Requests:  1,046,826
-Parse Time:      437 ms
-Parse Rate:      2,394,927 requests/sec
+Total Requests:  2,345,057
+Parse Time:      534 ms
+Parse Rate:      4,388,769 requests/sec
 
 🎯 TRIE: cli_trie
 ────────────────────────────────────────────────────────────────────────────────
-Requests After Filtering: 1,046,826
-Unique IPs:              1,046,826
-Trie Build Time:         316 ms
+Requests After Filtering: 1,230,755
+Unique IPs:              1,230,755
+Trie Build Time:         47 ms
 Active Filters:          None
 
 🔍 CLUSTERING RESULTS (1 set)
@@ -178,10 +178,10 @@ Active Filters:          None
   Set 1: min_size=1000, depth=24-32, threshold=0.10
   Execution Time: 95 μs
   Detected Threat Ranges:
-    20.171.207.2/32            1,574 requests  (  0.15%)
-    45.40.50.192/26            3,083 requests  (  0.29%)
-    198.51.205.91/32           1,308 requests  (  0.12%)
-    ───────────────────        5,965 requests  (  0.57%) [TOTAL]
+    192.0.2.2/32               1,574 requests  (  0.13%)
+    198.51.100.192/26          3,083 requests  (  0.25%)
+    203.0.113.91/32            1,308 requests  (  0.11%)
+    ───────────────────        5,965 requests  (  0.48%) [TOTAL]
 
 ═══════════════════════════════════════════════════════════════════════════════
 ```
@@ -219,9 +219,9 @@ Works both with `--config` and CLI-only parameters. Available in static mode onl
 When `--banFile` is specified, cidrx writes one CIDR per line:
 
 ```
-45.40.50.192/26
-198.51.205.91/32
-20.171.207.2/32
+198.51.100.192/26
+203.0.113.91/32
+192.0.2.2/32
 ```
 
 This can be consumed directly by iptables, nginx deny directives, or cloud firewall rules:

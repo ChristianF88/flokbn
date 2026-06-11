@@ -3,7 +3,7 @@ title: "Filtering"
 description: "Whitelist, blacklist, regex, and time-based filtering"
 summary: "Complete reference for all cidrx filtering mechanisms and file formats"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 250
 slug: "filtering"
@@ -15,26 +15,28 @@ seo:
   noindex: false
 ---
 
-cidrx filters traffic in multiple stages before clustering. Filtering reduces noise and prevents false positives.
+cidrx filters traffic in two distinct layers: **per-request filters** decide which requests enter the analysis (trie/window), and **ban-pipeline filters** shape what the detections turn into bans.
 
-## Filter Processing Order
+## How the Filters Compose
 
-Filters are applied in this order:
+Per-request, before a request enters analysis:
 
-1. **IP Whitelist** -- excluded first
-2. **IP Blacklist** -- if specified, only these IPs are analyzed
-3. **Time window** -- if startTime/endTime configured
-4. **User-Agent whitelist** -- exclude matching requests
-5. **User-Agent blacklist** -- if specified, only matching requests analyzed
-6. **User-Agent regex** -- pattern filter
-7. **Endpoint regex** -- URL path filter
-8. **CIDR ranges** -- focus on specific networks
+1. **Time window** -- requests outside startTime/endTime are dropped
+2. **User-Agent regex / Endpoint regex** -- only matching requests are analyzed
+3. **User-Agent whitelist** -- matching requests are excluded from analysis, and their source IPs are immunized against bans
+4. **User-Agent blacklist** -- matching requests mark their source IP for force-jailing (the request itself is still analyzed)
+5. **CIDR ranges** -- focus reporting on specific networks
 
-Filters early in the chain reduce work for later stages, improving performance.
+In the ban pipeline, after clustering:
+
+6. **IP whitelist** -- detected CIDRs covered by a whitelist entry are removed before they reach the jail, and the whitelist is subtracted again from everything published (ban file, `/bans`)
+7. **IP blacklist** -- manual always-ban CIDRs, appended to the published ban list
+
+**The whitelist always wins**: over detections, over active bans, and over the manual blacklist.
 
 ## IP Whitelist
 
-Whitelisted IPs are excluded from all analysis. Checked first.
+Whitelisted CIDRs can never be banned. The whitelist is applied to detected clusters before the jail update and subtracted from every published ban list -- it does not exclude the traffic from analysis or statistics.
 
 ### File Format
 
@@ -49,16 +51,13 @@ One CIDR per line. Comments with `#`. Blank lines ignored.
 192.168.0.0/16
 
 # Office networks
-203.0.113.0/24
-198.51.100.0/24
+192.0.2.0/24
 
-# CDN providers
-173.245.48.0/20
-103.21.244.0/22
+# CDN providers — copy your CDN's published ranges here
 
 # Monitoring services
-192.0.2.50/32    # Pingdom
-192.0.2.51/32    # UptimeRobot
+198.51.100.50/32    # uptime checker
+198.51.100.51/32    # status-page probe
 ```
 
 ### Usage
@@ -76,7 +75,7 @@ CLI:
 
 ## IP Blacklist
 
-When a blacklist is specified, **only** blacklisted IPs are analyzed. All others are excluded.
+Blacklisted CIDRs are **always banned**: they are appended to the published ban list regardless of detection results. The blacklist does not restrict which traffic is analyzed.
 
 ### File Format
 
@@ -85,86 +84,52 @@ Same format as whitelist:
 ```
 # /etc/cidrx/blacklist.txt
 
-# Known ranges
-45.40.50.0/24
-198.51.205.0/24
+# Known abusive ranges
+203.0.113.0/25
 
 # Confirmed IPs
-20.171.207.2/32
-203.0.113.99/32
+203.0.113.200/32
 ```
 
 ### Combined Usage
 
-Whitelist and blacklist can be used together. Whitelist is applied first, then blacklist filters the remainder.
+Whitelist and blacklist can be used together. The whitelist wins: any blacklist entry covered by a whitelist entry is dropped from the published ban list.
 
 ## User-Agent Whitelist
 
-Exclude requests matching these User-Agent strings. Uses **exact substring matching** (not regex).
+Requests whose User-Agent is listed are excluded from analysis, and their source IPs are immunized against bans. Matching is a **case-insensitive exact match** of the full User-Agent string (not substring, not regex).
 
 ### File Format
 
-One pattern per line:
+One **full User-Agent string** per line (the exact value the client sends). Comments with `#`. Blank lines ignored.
 
 ```
 # /etc/cidrx/ua_whitelist.txt
 
-# Search engine bots
-Googlebot
-Bingbot
-DuckDuckBot
-Slurp
-Baiduspider
-
-# Social media
-facebookexternalhit
-Twitterbot
-LinkedInBot
+# Search engine bots (full UA strings as sent by the client)
+Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
+Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)
 
 # Monitoring and uptime
-UptimeRobot
-Pingdom
-StatusCake
-Site24x7
-
-# SEO tools
-AhrefsBot
-SemrushBot
+Mozilla/5.0+(compatible; UptimeRobot/2.0; http://www.uptimerobot.com/)
 ```
 
-A request is excluded if its User-Agent **contains** any listed string.
+A request is excluded if its User-Agent **exactly equals** a listed string (case-insensitive). For partial matches use `--useragentRegex` instead.
 
 ## User-Agent Blacklist
 
-When specified, only requests with User-Agents matching these patterns are analyzed. Uses **exact substring matching**.
+Requests whose User-Agent is listed get their source IP **force-jailed** as a /32 -- no clustering threshold needs to be met. Matching is the same **case-insensitive exact match** of the full User-Agent string. If the same string appears in both lists, the whitelist wins.
 
 ### File Format
 
 ```
 # /etc/cidrx/ua_blacklist.txt
 
-# SQL injection tools
-sqlmap
-havij
-
-# Web scanners
-nikto
-acunetix
-netsparker
-w3af
-wpscan
-
-# General tools
-curl
-wget
-python-requests
-Go-http-client
-Java
-
-# Scrapers
-HTTrack
-WebCopier
-WebZIP
+# Exact UA strings of tools you always want banned
+sqlmap/1.7.2#stable (http://sqlmap.org)
+curl/8.5.0
+python-requests/2.31.0
+Go-http-client/1.1
 ```
 
 ## User-Agent Regex
@@ -196,6 +161,10 @@ CLI:
 ### Regex Syntax (RE2)
 
 `.` any character, `*` zero or more, `+` one or more, `?` zero or one, `|` OR, `()` grouping, `[]` character class, `\\` escape, `(?i)` case insensitive.
+
+### Required-Literal Prefilter
+
+cidrx automatically derives the literals a regex *must* contain (e.g. `bot` from `.*bot.*`, or `curl`/`wget` from `curl|wget`) and screens each input with fast substring checks before running the full regex engine. Semantics are unchanged -- the prefilter only skips inputs the regex would reject anyway -- but patterns with distinctive required literals filter large logs considerably faster. Patterns without any required literal (e.g. `.*`) fall back to running the regex directly.
 
 ## Endpoint Regex
 
@@ -310,9 +279,8 @@ useForJail = [true]
 
 ## Performance Tips
 
-- **Whitelist is the biggest optimization** (10-30% faster overall). Exclude CDN, monitoring, and internal IPs.
-- Keep regex simple. `".*bot.*|.*scanner.*"` is faster than complex lookaheads.
-- Use User-Agent blacklist files instead of regex when matching exact strings.
+- Prefer regex patterns with distinctive required literals (`sqlmap|nikto` over `.*`) so the prefilter can skip the regex engine for most lines.
+- Use User-Agent whitelist/blacklist files instead of regex when matching exact strings -- the exact matcher is a single O(1) map lookup.
 - cidrx caches compiled regex patterns. The same pattern used across tries is compiled once.
 
 ## Troubleshooting

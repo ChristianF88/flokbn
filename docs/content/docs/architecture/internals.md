@@ -3,7 +3,7 @@ title: "Internals"
 description: "cidrx internal architecture and design"
 summary: "Deep dive into how cidrx works: pipeline, binary trie, cluster detection, jail system, and code organization"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 410
 toc: true
@@ -137,6 +137,7 @@ type Request struct {
     IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation
     Status    uint16     // Smaller type for status code
     Method    HTTPMethod // 1 byte enum
+    _         byte       // explicit padding for alignment
     Bytes     uint32
     Timestamp time.Time  // Needed for time-range filtering
 
@@ -187,47 +188,54 @@ type TrieNode struct {
 
 ### Cluster Detection Algorithm
 
-The detector performs depth-first traversal of the trie:
+The detector performs depth-first traversal of the trie. A node is reported as a cluster when its two subtrees are *balanced* -- evenly loaded children mean the traffic is spread across the subnet rather than coming from one deeper source:
 
 ```
-For each trie node at depths [minDepth, maxDepth]:
-    Calculate percentage = node.Count / totalRequests
-    If (node.Count >= minSize AND percentage >= threshold):
-        Mark as cluster
-        Add to results
-        Skip children (don't detect sub-ranges)
+For each trie node, descending from the root:
+    Prune children with fewer than minSize requests
+    If depth == maxDepth and node.Count >= minSize:
+        Report node as cluster, stop descending
+    If depth >= minDepth and both children carry traffic
+       and 2*|left.Count - right.Count| < threshold*(node.Count)
+       and node.Count >= minSize:
+        Report node as cluster, stop descending
+    Otherwise recurse into the populated children
 ```
 
 **Pseudocode**:
 
 ```go
 func detectClusters(node *TrieNode, depth int, params ClusterParams) []Cluster {
-    if depth < params.MinDepth {
-        // Too shallow, recurse deeper
-        return detectClusters(node.Left, depth+1, params) +
-               detectClusters(node.Right, depth+1, params)
+    if depth == params.MaxDepth {
+        if node.Count >= params.MinSize {
+            return []Cluster{{CIDR: nodeToCIDR(node, depth), Count: node.Count}}
+        }
+        return nil
     }
 
-    if depth > params.MaxDepth {
-        return []Cluster{}  // Too deep, stop
+    left, right := node.Children[0], node.Children[1]
+    if depth >= params.MinDepth && left != nil && right != nil {
+        diff := absDiff(left.Count, right.Count)
+        if 2*diff < uint64(params.Threshold*float64(node.Count)) &&
+            node.Count >= params.MinSize {
+            // Balanced subtree -- report and don't recurse into children
+            return []Cluster{{CIDR: nodeToCIDR(node, depth), Count: node.Count}}
+        }
     }
 
-    percentage := float64(node.Count) / float64(totalRequests)
-
-    if node.Count >= params.MinSize && percentage >= params.Threshold {
-        // Found cluster -- don't recurse into children
-        return []Cluster{{
-            CIDR:       nodeToCIDR(node, depth),
-            Count:      node.Count,
-            Percentage: percentage,
-        }}
+    // Unbalanced (or too shallow): descend into populated children
+    var out []Cluster
+    if left != nil && left.Count >= params.MinSize {
+        out = append(out, detectClusters(left, depth+1, params)...)
     }
-
-    // Below threshold, check children
-    return detectClusters(node.Left, depth+1, params) +
-           detectClusters(node.Right, depth+1, params)
+    if right != nil && right.Count >= params.MinSize {
+        out = append(out, detectClusters(right, depth+1, params)...)
+    }
+    return out
 }
 ```
+
+(The real implementation does this iteratively with integer-only math; see `trie/trie.go`.)
 
 **Complexity**:
 - **Time**: O(N) where N = unique IPs (worst case)
@@ -250,7 +258,7 @@ The jail uses a tiered cell system with escalating ban durations:
 
 ```go
 type Prisoner struct {
-    CIDR      string    // e.g., "45.40.50.192/26"
+    CIDR      string    // e.g., "198.51.100.192/26"
     BanStart  time.Time // When current ban started
     BanActive bool      // Whether ban is currently active
 }
@@ -387,6 +395,7 @@ cidrx/src/
 ├── ingestor/            # Static/live mode ingestion, Request struct
 ├── iputils/             # IP address utilities
 ├── jail/                # Ban/jail management (tiered cells)
+├── logging/             # Leveled slog setup for live mode
 ├── logparser/           # Log format parsing
 ├── output/              # Output formatting (JSON, plain text)
 ├── pools/               # Memory pool management, TrieNode struct
