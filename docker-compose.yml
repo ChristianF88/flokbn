@@ -14,6 +14,7 @@ services:
       net2: {}
       net3: {}
       net4: {}
+      net5: {}
   cidrx:
     build:
       context: ./cidrx
@@ -122,6 +123,22 @@ services:
       IP_BASE: 172.16.16
       IP_START: 32
       COUNT: 33
+  clients_net5:
+    build: *id002
+    container_name: clients_net5
+    depends_on:
+    - proxy
+    cap_add:
+    - NET_ADMIN
+    networks:
+      net5:
+        ipv4_address: 172.30.99.32
+    environment:
+      TARGET_URL: http://proxy:80/
+      INTERVAL: 3
+      IP_BASE: 172.30.99
+      IP_START: 32
+      COUNT: 1
 networks:
   net1:
     driver: bridge
@@ -151,6 +168,13 @@ networks:
       config:
       - subnet: 172.16.16.0/24
         ip_range: 172.16.16.0/27
+  net5:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.30.99.0/24
+        ip_range: 172.30.99.0/27
 volumes:
   filebeat_data: {}
   cidrx_data: {}

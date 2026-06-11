@@ -26,11 +26,16 @@ topTalkers = 5
 # Detect net1 (4 IPs: 172.16.1.32-35)
 # Detect net2 (2 IPs: 172.16.2.32-33)
 # Detect net3 (5 IPs: 172.16.3.32-36)
+# min_size=50 still catches the smallest cluster: net2's 2 IPs at 0.1s
+# interval send ~20 req/s, i.e. ~200 requests per 10s window. The negative
+# client (172.30.99.32, 1 req/3s, ~3-6 requests per window) stays far below.
+# Negative-client expectation: 172.30.99.32 must never appear in jail/ban
+# output; the e2e suites assert this.
 slidingWindowMaxTime = "5m"
 slidingWindowMaxSize = 10000
-sleepBetweenIterations = 5
+sleepBetweenIterations = 1
 clusterArgSets = [
-    [2, 24, 32, 0.2],   # Detect small clusters (2+ IPs)
+    [50, 24, 32, 0.2],  # Detect small clusters (50+ requests)
 ]
 useForJail = [true]
 
@@ -38,7 +43,7 @@ useForJail = [true]
 # Detect net4 (33 IPs: 172.16.16.32-64) - the main attack cluster
 slidingWindowMaxTime = "2m"
 slidingWindowMaxSize = 5000
-sleepBetweenIterations = 3
+sleepBetweenIterations = 1
 clusterArgSets = [
     [10, 20, 28, 0.15], # Detect medium clusters (10+ IPs)
     [20, 16, 24, 0.2],  # Detect larger networks (20+ IPs)

@@ -21,6 +21,9 @@ filebeat.inputs:
   paths:
     - /var/log/nginx/access.log
   tail_files: true
+  # Default scan_frequency (10s) delays the first harvest by up to 10s after
+  # startup; 1s keeps end-to-end detection latency low for the e2e suites.
+  scan_frequency: 1s
 
   processors:
     - dissect:

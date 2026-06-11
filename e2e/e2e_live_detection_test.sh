@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # E2E test: live mode multi-trie detection verification
-# Verifies that the Docker Compose setup with 4 client networks produces
-# expected clustering detections across multiple detection tries.
+# Verifies that the Docker Compose setup with 5 client networks (4 attack,
+# 1 negative control) produces expected clustering detections across
+# multiple detection tries.
 #
 # Docker network layout (from docker-compose.yml). One traffic-gen container
 # per subnet simulates all client IPs via secondary addresses:
@@ -9,14 +10,17 @@
 #   net2: 172.16.2.32-33  (clients_net2: 2 IPs,  0.1s interval)  -> curl UA, GET /
 #   net3: 172.16.3.32-36  (clients_net3: 5 IPs,  0.1s interval)  -> curl UA, GET /
 #   net4: 172.16.16.32-64 (clients_net4: 33 IPs, 0.07s interval) -> curl UA, GET /
+#   net5: 172.30.99.32    (clients_net5: 1 IP,   3s interval)    -> negative
+#         control; must never be clustered or banned
 #
 # Detection config (from docker-test-config.toml):
-#   general_detection:    min_size=2,  depth 24-32, threshold 0.2
+#   general_detection:    min_size=50, depth 24-32, threshold 0.2
 #   aggressive_detection: min_size=10, depth 20-28, threshold 0.15
 #                         min_size=20, depth 16-24, threshold 0.2
+#   iteration sleep: 1s for both detection tries
 #
 # Prerequisites: docker and docker compose must be available.
-# This test takes ~120-150 seconds to run.
+# This test takes ~40-60 seconds to run.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -84,10 +88,18 @@ for i in $(seq 1 $MAX_WAIT); do
 done
 
 # --- Wait for detections to accumulate ---
-# With 44 clients total, net4 at 0.07s interval = ~14 req/s/client = ~462 req/s
-# 5-minute sliding window should accumulate enough data within 60-90 seconds
-log "Waiting 90s for detections to accumulate..."
-sleep 90
+# 10s max is enough: filebeat harvests within ~1s (scan_frequency 1s),
+# iterations run every 1s, bans activate on the first detection, and even
+# the smallest cluster (net2: 2 IPs at 0.1s interval = ~20 req/s) is far
+# above min_size 50 from the first batch. Poll so fast machines exit early.
+log "Waiting up to 10s for detections to accumulate..."
+for i in $(seq 1 10); do
+    BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+    if [ -n "$BAN_PROBE" ]; then
+        break
+    fi
+    sleep 1
+done
 
 # --- Test 1: Ban file exists and has entries ---
 log "Test 1: Ban file analysis..."
@@ -98,7 +110,7 @@ if [ -n "$BAN_CONTENT" ]; then
     log "Ban file contents:"
     echo "$BAN_CONTENT" | while read -r line; do log "  $line"; done
 else
-    fail "Ban file empty after 90s"
+    fail "Ban file empty after 10s"
 fi
 
 # --- Test 2: Net4 detection (33 clients, most aggressive) ---
@@ -244,7 +256,7 @@ done
 # --- Test 7: Verify traffic-gen containers are producing traffic ---
 log "Test 7: Client traffic verification..."
 # Check the traffic generator of each network
-SAMPLE_CLIENTS=("clients_net1" "clients_net2" "clients_net3" "clients_net4")
+SAMPLE_CLIENTS=("clients_net1" "clients_net2" "clients_net3" "clients_net4" "clients_net5")
 for CLIENT in "${SAMPLE_CLIENTS[@]}"; do
     CLIENT_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs "$CLIENT" --tail=5 2>/dev/null || echo "")
     if echo "$CLIENT_LOGS" | grep -q "OK"; then
@@ -283,6 +295,25 @@ if curl -fsS -o /dev/null http://localhost:8666/bans 2>/dev/null; then
     pass "/bans returns HTTP success"
 else
     fail "/bans not reachable on http://localhost:8666/bans"
+fi
+
+# --- Test 9: Negative client never clustered ---
+# clients_net5 (172.30.99.32) sends 1 request every 3s - far below min_size 50.
+# Test 7 already proved clients_net5 IS producing traffic, so its absence from
+# the ban and jail files is meaningful: cidrx does not ban benign low-rate IPs.
+log "Test 9: Negative client (172.30.99.x) exclusion..."
+BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+if echo "$BAN_CONTENT" | grep -q "172.30.99"; then
+    fail "Negative client (172.30.99.x) found in ban file"
+else
+    pass "Negative client (172.30.99.x) not in ban file"
+fi
+
+JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
+if echo "$JAIL_CONTENT" | grep -q "172.30.99"; then
+    fail "Negative client (172.30.99.x) found in jail file"
+else
+    pass "Negative client (172.30.99.x) not in jail file"
 fi
 
 # --- Summary ---

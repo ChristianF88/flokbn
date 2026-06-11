@@ -23,6 +23,9 @@ RANGES = [
     ('172.16.2.0/24', 2, 0.1),
     ('172.16.3.0/24', 5, 0.1),
     ('172.16.16.0/24', 33, 0.07),
+    # Negative/background client: 1 IP at a slow rate that must never be
+    # clustered or banned; the e2e suites assert its absence from jail/bans.
+    ('172.30.99.0/24', 1, 3),
 ]
 
 # Build contexts and Dockerfile names for services

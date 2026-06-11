@@ -11,9 +11,11 @@
 #   net2: 172.16.2.32-33  (2 clients,  0.1s interval)
 #   net3: 172.16.3.32-36  (5 clients,  0.1s interval)
 #   net4: 172.16.16.32-64 (33 clients, 0.07s interval)
+#   net5: 172.30.99.32    (1 client,   3s interval) - negative control; must
+#         never be clustered or banned
 #
 # Prerequisites: docker and docker compose must be available.
-# This test takes ~90-120 seconds to run.
+# This test takes ~40-60 seconds to run.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -89,8 +91,18 @@ else
 fi
 
 # --- Let traffic accumulate ---
-log "Waiting 60s for traffic to accumulate and clusters to form..."
-sleep 60
+# 10s max is enough: filebeat harvests within ~1s (scan_frequency 1s),
+# iterations run every 1s, bans activate on the first detection, and even
+# the smallest cluster (net2: 2 IPs at 0.1s interval = ~20 req/s) is far
+# above min_size 50 from the first batch. Poll so fast machines exit early.
+log "Waiting up to 10s for traffic to accumulate and clusters to form..."
+for i in $(seq 1 10); do
+    BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+    if [ -n "$BAN_PROBE" ]; then
+        break
+    fi
+    sleep 1
+done
 
 # --- Check ban file for detections ---
 log "Checking ban file..."
@@ -136,38 +148,30 @@ else
     fail "Jail file empty or not readable"
 fi
 
-# --- Wait longer if needed for more detections ---
-log "Waiting additional 30s for more detections..."
-sleep 30
-
-# --- Re-check ban and jail files after additional wait ---
-BAN_CONTENT2=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
-JAIL_CONTENT2=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
-
 # Diagnostic: show what was actually detected
-if [ -n "$BAN_CONTENT2" ]; then
-    BAN_COUNT2=$(echo "$BAN_CONTENT2" | wc -l)
-    log "Ban file ($BAN_COUNT2 entries):"
-    echo "$BAN_CONTENT2" | while read -r line; do log "  ban: $line"; done
+if [ -n "$BAN_CONTENT" ]; then
+    BAN_COUNT=$(echo "$BAN_CONTENT" | wc -l)
+    log "Ban file ($BAN_COUNT entries):"
+    echo "$BAN_CONTENT" | while read -r line; do log "  ban: $line"; done
 fi
-if [ -n "$JAIL_CONTENT2" ]; then
+if [ -n "$JAIL_CONTENT" ]; then
     python3 -c "
 import json, sys
 j = json.load(sys.stdin)
 for cell in j.get('Cells', []):
     for p in cell.get('Prisoners', []):
         print(f\"  jail cell {cell['Id']}: {p['Cidr']} active={p['BanActive']}\")
-" <<< "$JAIL_CONTENT2" 2>/dev/null | while read -r line; do log "$line"; done
+" <<< "$JAIL_CONTENT" 2>/dev/null | while read -r line; do log "$line"; done
 fi
 
 # Verify detections are happening (ban file has entries OR jail has prisoners)
 BAN_ENTRIES=0
 JAIL_PRISONERS=0
-if [ -n "$BAN_CONTENT2" ]; then
-    BAN_ENTRIES=$(echo "$BAN_CONTENT2" | wc -l)
+if [ -n "$BAN_CONTENT" ]; then
+    BAN_ENTRIES=$(echo "$BAN_CONTENT" | wc -l)
 fi
-if [ -n "$JAIL_CONTENT2" ]; then
-    JAIL_PRISONERS=$(echo "$JAIL_CONTENT2" | python3 -c "
+if [ -n "$JAIL_CONTENT" ]; then
+    JAIL_PRISONERS=$(echo "$JAIL_CONTENT" | python3 -c "
 import json, sys
 j = json.load(sys.stdin)
 total = sum(len(c.get('Prisoners',[])) for c in j.get('Cells',[]))
@@ -178,15 +182,15 @@ fi
 if [ "$BAN_ENTRIES" -gt 0 ] || [ "$JAIL_PRISONERS" -gt 0 ]; then
     pass "Detections found: $BAN_ENTRIES ban entries, $JAIL_PRISONERS jail prisoners"
 else
-    fail "No detections in ban or jail files after 90s"
+    fail "No detections in ban or jail files after 10s"
 fi
 
 # Check for 172.16.x detections (any of the client networks)
 FOUND_172_16=false
-if [ -n "$BAN_CONTENT2" ] && echo "$BAN_CONTENT2" | grep -q "172.16"; then
+if [ -n "$BAN_CONTENT" ] && echo "$BAN_CONTENT" | grep -q "172.16"; then
     FOUND_172_16=true
 fi
-if [ -n "$JAIL_CONTENT2" ] && echo "$JAIL_CONTENT2" | grep -q "172.16"; then
+if [ -n "$JAIL_CONTENT" ] && echo "$JAIL_CONTENT" | grep -q "172.16"; then
     FOUND_172_16=true
 fi
 if [ "$FOUND_172_16" = "true" ]; then
@@ -197,8 +201,32 @@ else
     if echo "$DETECT_LOGS" | grep -q "172.16"; then
         pass "Client network (172.16.x) detected in cidrx output"
     else
-        fail "Client network (172.16.x) NOT detected anywhere after 90s"
+        fail "Client network (172.16.x) NOT detected anywhere after 10s"
     fi
+fi
+
+# --- Negative client must never be clustered or banned ---
+# clients_net5 (172.30.99.32) sends 1 request every 3s - far below min_size 50.
+# Verify it IS producing traffic first, so its absence from ban/jail output is
+# meaningful: cidrx does not ban benign low-rate IPs.
+log "Checking negative client (172.30.99.x) exclusion..."
+NET5_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs clients_net5 --tail=5 2>/dev/null || echo "")
+if echo "$NET5_LOGS" | grep -q "OK"; then
+    pass "clients_net5 is producing traffic"
+else
+    fail "clients_net5 is not producing traffic"
+fi
+
+if [ -n "$BAN_CONTENT" ] && echo "$BAN_CONTENT" | grep -q "172.30.99"; then
+    fail "Negative client (172.30.99.x) found in ban file"
+else
+    pass "Negative client (172.30.99.x) not in ban file"
+fi
+
+if [ -n "$JAIL_CONTENT" ] && echo "$JAIL_CONTENT" | grep -q "172.30.99"; then
+    fail "Negative client (172.30.99.x) found in jail file"
+else
+    pass "Negative client (172.30.99.x) not in jail file"
 fi
 
 # --- Check cidrx iteration log lines for detection data ---
