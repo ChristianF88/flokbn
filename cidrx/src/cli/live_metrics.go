@@ -112,6 +112,9 @@ func renderMetrics(sn *statsSnapshot) []byte {
 	writeMetric(&b, "cidrx_loop_iterations_total", "counter",
 		"Live loop iterations since startup.",
 		sample{value: float64(sn.Loop.Iterations)})
+	writeMetric(&b, "cidrx_loop_heartbeats_total", "counter",
+		"Idle-loop heartbeats since startup.",
+		sample{value: float64(sn.Loop.HeartbeatsTotal)})
 	writeMetric(&b, "cidrx_loop_duration_seconds", "gauge",
 		"Duration of the last loop iteration.",
 		sample{value: float64(sn.Loop.LastDurationMS) / 1e3})

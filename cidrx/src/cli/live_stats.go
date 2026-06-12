@@ -67,10 +67,12 @@ type clusterParams struct {
 }
 
 type clusterSetStats struct {
-	Params         clusterParams     `json:"params"`
-	UseForJail     bool              `json:"use_for_jail"`
-	LastDurationUS int64             `json:"last_duration_us"`
-	DetectedNow    []output.LiveCIDR `json:"detected_now"`
+	Params         clusterParams `json:"params"`
+	UseForJail     bool          `json:"use_for_jail"`
+	LastDurationUS int64         `json:"last_duration_us"`
+	// DetectedNow is the latest clustering result. Heartbeat snapshots
+	// (idle loop, no new traffic) carry the last iteration's result.
+	DetectedNow []output.LiveCIDR `json:"detected_now"`
 }
 
 type jailStage struct {
@@ -129,9 +131,10 @@ type listsStats struct {
 }
 
 type loopStats struct {
-	Iterations     uint64 `json:"iterations"`
-	LastDurationMS int64  `json:"last_duration_ms"`
-	SleepS         int    `json:"sleep_s"`
+	Iterations      uint64 `json:"iterations"`
+	HeartbeatsTotal uint64 `json:"heartbeats_total"`
+	LastDurationMS  int64  `json:"last_duration_ms"`
+	SleepS          int    `json:"sleep_s"`
 }
 
 // liveStatsState is the loop-owned (single-goroutine) state behind snapshot
@@ -140,6 +143,7 @@ type loopStats struct {
 type liveStatsState struct {
 	startTime      time.Time
 	iterations     uint64
+	heartbeats     uint64
 	banContent     string
 	banEntries     int
 	banLastWritten time.Time
@@ -203,7 +207,8 @@ func newClusterSetStats(argSet config.ClusterArgSet, useForJail bool, duration t
 // buildSnapshot assembles the immutable per-iteration snapshot. Called from
 // the loop goroutine only; everything reachable from the returned snapshot is
 // either freshly allocated here, immutable (strings), or never mutated after
-// startup (list CIDR slices).
+// startup (list CIDR slices). heartbeat snapshots (idle loop) do not count
+// as iterations and reuse the cached top-talker slices.
 func buildSnapshot(
 	st *liveStatsState,
 	ing ingestor.Ingestor,
@@ -213,19 +218,24 @@ func buildSnapshot(
 	j *jail.Jail,
 	loopDuration time.Duration,
 	sleepS int,
+	heartbeat bool,
 ) *statsSnapshot {
-	st.iterations++
+	if heartbeat {
+		st.heartbeats++
+	} else {
+		st.iterations++
 
-	topN := 0
-	if cfg.Live != nil {
-		topN = cfg.Live.TopTalkers
-	}
-	if topN > 0 && (st.iterations-1)%topTalkersInterval == 0 {
-		if st.topTalkers == nil {
-			st.topTalkers = make([][]sliding.TopTalker, len(windows))
+		topN := 0
+		if cfg.Live != nil {
+			topN = cfg.Live.TopTalkers
 		}
-		for i := range windows {
-			st.topTalkers[i] = windows[i].window.TopTalkers(topN)
+		if topN > 0 && (st.iterations-1)%topTalkersInterval == 0 {
+			if st.topTalkers == nil {
+				st.topTalkers = make([][]sliding.TopTalker, len(windows))
+			}
+			for i := range windows {
+				st.topTalkers[i] = windows[i].window.TopTalkers(topN)
+			}
 		}
 	}
 
@@ -253,9 +263,10 @@ func buildSnapshot(
 		},
 		Lists: lists,
 		Loop: loopStats{
-			Iterations:     st.iterations,
-			LastDurationMS: loopDuration.Milliseconds(),
-			SleepS:         sleepS,
+			Iterations:      st.iterations,
+			HeartbeatsTotal: st.heartbeats,
+			LastDurationMS:  loopDuration.Milliseconds(),
+			SleepS:          sleepS,
 		},
 		banFileContent: st.banContent,
 	}

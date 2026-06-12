@@ -98,7 +98,8 @@ fi
 log "Waiting up to 10s for traffic to accumulate and clusters to form..."
 for i in $(seq 1 10); do
     BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
-    if [ -n "$BAN_PROBE" ]; then
+    BAN_PROBE_ENTRIES=$(echo "$BAN_PROBE" | grep -v '^#' | grep -c . || true)
+    if [ "$BAN_PROBE_ENTRIES" -gt 0 ]; then
         break
     fi
     sleep 1
@@ -108,7 +109,7 @@ done
 log "Checking ban file..."
 BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
 if [ -n "$BAN_CONTENT" ]; then
-    BAN_COUNT=$(echo "$BAN_CONTENT" | wc -l)
+    BAN_COUNT=$(echo "$BAN_CONTENT" | grep -v '^#' | grep -c . || true)
     pass "Ban file has $BAN_COUNT entries"
 
     # net4 (172.16.16.0/24) is the largest cluster (33 clients at 0.07s)

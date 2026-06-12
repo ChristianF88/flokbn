@@ -230,6 +230,17 @@ func purgeExpired(m map[uint32]time.Time, cutoff time.Time) {
 	}
 }
 
+const (
+	// liveHeartbeatFloor is the minimum idle-heartbeat interval. The
+	// heartbeat normally fires every maxSleepTime seconds, but configs with
+	// SleepBetweenIterations 0 (tests, aggressive setups) still need bans to
+	// expire and snapshots to advance during zero-traffic stretches.
+	liveHeartbeatFloor = time.Second
+	// liveIdlePoll is how long the loop sleeps after an empty ReadBatch
+	// before polling again (ReadBatch is non-blocking).
+	liveIdlePoll = time.Second
+)
+
 // sleepOrDone sleeps for d, returning early when ctx is cancelled.
 func sleepOrDone(ctx context.Context, d time.Duration) {
 	if d <= 0 {
@@ -352,14 +363,30 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 	// ban-file write (static emits it once per analysis).
 	blacklistWarned := false
 
+	// Idle-heartbeat state. ReadBatch is non-blocking, so during zero-traffic
+	// stretches the loop must still expire jail bans, refresh the ban file,
+	// and publish snapshots — otherwise bans never lift (lockout feedback
+	// loop) and /stats freezes. lastTick is the last time either a full
+	// iteration or a heartbeat ran.
+	heartbeatInterval := time.Duration(maxSleepTime) * time.Second
+	if heartbeatInterval < liveHeartbeatFloor {
+		heartbeatInterval = liveHeartbeatFloor
+	}
+	lastTick := time.Now()
+	// Change-detection key for the published ban lists; invalid until the
+	// first successful ban-file write, so the first heartbeat always syncs
+	// the file once (recovers from a stale ban file on disk).
+	var lastBanKey string
+	banKeyValid := false
+	// Last iteration's per-window cluster stats, re-served by heartbeat
+	// snapshots (no traffic means no new clustering result).
+	var lastWinClusterStats [][]clusterSetStats
+
 	for {
 		loopStart := time.Now()
 
 		batch, err := ing.ReadBatch()
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				continue
-			}
 			logger.Error("batch read error", "err", err)
 			break
 		}
@@ -368,6 +395,14 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			if ing.IsClosed() {
 				logger.Info("ingestor closed, exiting loop")
 				break
+			}
+			sleepOrDone(ctx, liveIdlePoll)
+			if time.Since(lastTick) >= heartbeatInterval {
+				runHeartbeat(&jailInstance, cfg, logger, stats, statsState, ing,
+					windows, lastWinClusterStats, whitelistCIDRs, uaWhitelistIPs,
+					blacklistCIDRs, &lastBanKey, &banKeyValid, &blacklistWarned,
+					maxSleepTime)
+				lastTick = time.Now()
 			}
 			continue
 		}
@@ -520,6 +555,9 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			}
 		}
 
+		// Remember this iteration's cluster stats for heartbeat snapshots.
+		lastWinClusterStats = winClusterStats
+
 		// Merge all CIDRs collected across configurations
 		mergedIPNets := cidr.MergeIPNets(allMergedCIDRs)
 
@@ -530,15 +568,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		}
 
 		// Whitelists from every source: CIDR list + UA-whitelisted IPs.
-		allWhitelists := whitelistCIDRs
-		if len(uaWhitelistIPs) > 0 {
-			combined := make([]string, 0, len(whitelistCIDRs)+len(uaWhitelistIPs))
-			combined = append(combined, whitelistCIDRs...)
-			for ip := range uaWhitelistIPs {
-				combined = append(combined, iputils.Uint32ToIP(ip).String()+"/32")
-			}
-			allWhitelists = combined
-		}
+		allWhitelists := composeAllWhitelists(whitelistCIDRs, uaWhitelistIPs)
 
 		// Apply whitelist filtering before jail update (static parity).
 		filteredJailCIDRs := cidr.RemoveWhitelisted(mergedCIDRs, allWhitelists)
@@ -573,6 +603,8 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			logger.Error("failed to write ban file", "path", cfg.GetBanFile(), "err", err)
 		} else {
 			banFileWritten = true
+			lastBanKey = banListKey(publishBans, publishBlacklist)
+			banKeyValid = true
 			if statsState != nil {
 				statsState.recordBanFileWrite(banContent, len(publishBans)+len(publishBlacklist))
 			}
@@ -589,7 +621,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		if stats != nil {
 			statsState.uaActiveWhitelistIPs = len(uaWhitelistIPs)
 			statsState.uaActiveBlacklistIPs = len(uaBlacklistIPs)
-			stats.publish(buildSnapshot(statsState, ing, cfg, windows, winClusterStats, &jailInstance, loopEnd, maxSleepTime))
+			stats.publish(buildSnapshot(statsState, ing, cfg, windows, winClusterStats, &jailInstance, loopEnd, maxSleepTime, false))
 		}
 
 		logger.Info("iteration",
@@ -606,8 +638,103 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 
 		// Sleep using maximum sleep time across all windows
 		sleepOrDone(ctx, time.Duration(maxSleepTime)*time.Second)
+		lastTick = time.Now()
 	}
 	return nil
+}
+
+// composeAllWhitelists merges the startup whitelist CIDRs with the currently
+// tracked UA-whitelisted IPs as /32s. Returns whitelistCIDRs unchanged (zero
+// allocation) when no UA IPs are tracked.
+func composeAllWhitelists(whitelistCIDRs []string, uaWhitelistIPs map[uint32]time.Time) []string {
+	if len(uaWhitelistIPs) == 0 {
+		return whitelistCIDRs
+	}
+	combined := make([]string, 0, len(whitelistCIDRs)+len(uaWhitelistIPs))
+	combined = append(combined, whitelistCIDRs...)
+	for ip := range uaWhitelistIPs {
+		combined = append(combined, iputils.Uint32ToIP(ip).String()+"/32")
+	}
+	return combined
+}
+
+// banListKey is the change-detection key for the published ban lists. The
+// NUL separator cannot appear in a CIDR string, so distinct list pairs map
+// to distinct keys.
+func banListKey(publishBans, publishBlacklist []string) string {
+	return strings.Join(publishBans, "\n") + "\x00" + strings.Join(publishBlacklist, "\n")
+}
+
+// runHeartbeat keeps live mode honest while no traffic arrives: it expires
+// jail bans, persists the jail when bans flipped inactive, rewrites the ban
+// file only when the published lists changed, and publishes a heartbeat
+// snapshot so /stats keeps advancing. Called from the loop goroutine only.
+func runHeartbeat(
+	jailInstance *jail.Jail,
+	cfg *config.Config,
+	logger *slog.Logger,
+	stats *statsServer,
+	statsState *liveStatsState,
+	ing ingestor.Ingestor,
+	windows []slidingWindowInstance,
+	lastWinClusterStats [][]clusterSetStats,
+	whitelistCIDRs []string,
+	uaWhitelistIPs map[uint32]time.Time,
+	blacklistCIDRs []string,
+	lastBanKey *string,
+	banKeyValid *bool,
+	blacklistWarned *bool,
+	maxSleepTime int,
+) {
+	hbStart := time.Now()
+
+	// Expiry only flips bans active -> inactive, so a count delta is an
+	// exact change signal.
+	before := len(jailInstance.ListActiveBans())
+	jailInstance.UpdateBanActiveStatus()
+	after := len(jailInstance.ListActiveBans())
+	if after != before {
+		if err := jail.JailToFile(*jailInstance, cfg.GetJailFile()); err != nil {
+			logger.Error("failed to save jail", "path", cfg.GetJailFile(), "err", err)
+		}
+	}
+
+	// Compose the publish lists exactly like the iteration path. UA-
+	// blacklisted IPs are deliberately NOT re-appended as /32 fills: with no
+	// traffic those IPs are not recurring, so their bans decay normally.
+	allWhitelists := composeAllWhitelists(whitelistCIDRs, uaWhitelistIPs)
+	publishBans, publishBlacklist := cidr.ComposeBanLists(jailInstance.ListActiveBans(), blacklistCIDRs, allWhitelists)
+
+	wrote := false
+	if key := banListKey(publishBans, publishBlacklist); !*banKeyValid || key != *lastBanKey {
+		banContent := jail.BuildBanFileContent(publishBans, publishBlacklist)
+		if err := jail.WriteToFile(cfg.GetBanFile(), banContent); err != nil {
+			logger.Error("failed to write ban file", "path", cfg.GetBanFile(), "err", err)
+		} else {
+			wrote = true
+			*lastBanKey = key
+			*banKeyValid = true
+			if statsState != nil {
+				statsState.recordBanFileWrite(banContent, len(publishBans)+len(publishBlacklist))
+			}
+			if len(publishBlacklist) > 0 && !*blacklistWarned {
+				*blacklistWarned = true
+				logger.Info("added manual blacklist entries to ban file", "count", len(publishBlacklist))
+			}
+		}
+	}
+
+	// Publish before logging so anyone reacting to the heartbeat line
+	// already sees the matching /stats state (same order as iterations).
+	if stats != nil {
+		stats.publish(buildSnapshot(statsState, ing, cfg, windows, lastWinClusterStats, jailInstance, time.Since(hbStart), maxSleepTime, true))
+	}
+
+	logger.Debug("heartbeat",
+		"expired", before-after,
+		"active_bans", len(publishBans),
+		"ban_file_written", wrote,
+	)
 }
 
 // ============================================================================
