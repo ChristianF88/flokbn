@@ -34,7 +34,7 @@ func TestStaticFromConfigBasic(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestStaticFromConfigMultipleTries(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestStaticFromConfigWithTimeRange(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestStaticFromConfigInvalidLogFile(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err == nil {
 		t.Error("Expected error for nonexistent log file, got nil")
 	}
@@ -234,7 +234,7 @@ func TestStaticFromConfigInvalidClusterParams(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	// Should not fail completely, but should have warnings
 	if err != nil && result == nil {
 		t.Fatalf("Unexpected complete failure: %v", err)
@@ -270,7 +270,7 @@ func TestStaticFromConfigTiming(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestStaticFromConfigEmptyTries(t *testing.T) {
 		StaticTries: map[string]*config.TrieConfig{},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -383,7 +383,7 @@ Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 	}
 
 	// Run static analysis
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -464,7 +464,7 @@ EvilScraper/2.0
 	}
 
 	// Run static analysis
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -543,7 +543,7 @@ Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
 	}
 
 	// Run static analysis
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -637,7 +637,7 @@ EvilScraper/2.0
 
 	// Measure performance
 	start := time.Now()
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -750,7 +750,7 @@ func TestStaticWhitelistBeatsManualBlacklist(t *testing.T) {
 		cfg.Global.Whitelist = writeFile(t, dir, "whitelist.txt", "203.0.113.0/25\n")
 		cfg.Global.Blacklist = writeFile(t, dir, "blacklist.txt", "203.0.113.0/24\n")
 
-		if _, err := ParallelStaticFromConfigNoRequests(cfg); err != nil {
+		if _, err := Static(cfg); err != nil {
 			t.Fatalf("static run failed: %v", err)
 		}
 
@@ -776,7 +776,7 @@ func TestStaticWhitelistBeatsManualBlacklist(t *testing.T) {
 		cfg.Global.UserAgentWhitelist = writeFile(t, dir, "ua_whitelist.txt", "GoodBot/1.0\n")
 		cfg.Global.Blacklist = writeFile(t, dir, "blacklist.txt", "192.168.1.0/24\n")
 
-		if _, err := ParallelStaticFromConfigNoRequests(cfg); err != nil {
+		if _, err := Static(cfg); err != nil {
 			t.Fatalf("static run failed: %v", err)
 		}
 

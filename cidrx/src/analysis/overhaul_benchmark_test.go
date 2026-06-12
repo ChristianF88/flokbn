@@ -37,7 +37,7 @@ func BenchmarkStaticOverhaul(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, _, err := ParallelStaticFromConfigWithRequests(cfg); err != nil {
+			if _, _, err := StaticWithRequests(cfg); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -48,7 +48,7 @@ func BenchmarkStaticOverhaul(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, err := ParallelStaticFromConfigNoRequests(cfg); err != nil {
+			if _, err := Static(cfg); err != nil {
 				b.Fatal(err)
 			}
 		}

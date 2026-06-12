@@ -36,7 +36,7 @@ func BenchmarkStaticPipeline(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := ParallelStaticFromConfigNoRequests(cfg)
+		_, err := Static(cfg)
 		if err != nil {
 			b.Fatalf("StaticFromConfig failed: %v", err)
 		}
@@ -58,7 +58,7 @@ func BenchmarkStaticPipeline_ParseOnly(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := ParallelStaticFromConfigNoRequests(cfg)
+		_, err := Static(cfg)
 		if err != nil {
 			b.Fatalf("StaticFromConfig failed: %v", err)
 		}

@@ -77,8 +77,8 @@ func assertTriesEqual(t *testing.T, label string, want, got []output.TrieResult)
 }
 
 // TestNoRequestsMatchesFullPath_Unfiltered verifies that the IP-only fast path
-// (ParallelStaticFromConfigNoRequests with no filters) produces a JSONOutput
-// identical, in every field that matters, to ParallelStaticFromConfigWithRequests.
+// (Static with no filters) produces a JSONOutput
+// identical, in every field that matters, to StaticWithRequests.
 func TestNoRequestsMatchesFullPath_Unfiltered(t *testing.T) {
 	logFile, cleanup := testutil.GenerateTestLogFile(t, 50000)
 	defer cleanup()
@@ -107,11 +107,11 @@ func TestNoRequestsMatchesFullPath_Unfiltered(t *testing.T) {
 		},
 	}
 
-	full, _, err := ParallelStaticFromConfigWithRequests(cfg)
+	full, _, err := StaticWithRequests(cfg)
 	if err != nil {
 		t.Fatalf("full path error: %v", err)
 	}
-	noReq, err := ParallelStaticFromConfigNoRequests(cfg)
+	noReq, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("no-requests path error: %v", err)
 	}
@@ -149,11 +149,11 @@ func TestNoRequestsMatchesFullPath_Filtered(t *testing.T) {
 		},
 	}
 
-	full, _, err := ParallelStaticFromConfigWithRequests(cfg)
+	full, _, err := StaticWithRequests(cfg)
 	if err != nil {
 		t.Fatalf("full path error: %v", err)
 	}
-	noReq, err := ParallelStaticFromConfigNoRequests(cfg)
+	noReq, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("no-requests path error: %v", err)
 	}

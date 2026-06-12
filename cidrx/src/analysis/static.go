@@ -19,8 +19,8 @@ import (
 	"github.com/ChristianF88/cidrx/trie"
 )
 
-// ParallelStaticFromConfigWithRequests runs parallel static analysis
-func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
+// StaticWithRequests runs static analysis from config and also returns the parsed requests
+func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
 	analysisStart := time.Now()
 	jsonOutput := output.NewJSONOutput("static", analysisStart)
 
@@ -137,7 +137,7 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 			defer trieWG.Done()
 
 			for work := range trieWorkChan {
-				result, whitelistIPs, blacklistIPs := processTrieParallel(work.name, work.config, requests, cfg, jsonOutput)
+				result, whitelistIPs, blacklistIPs := processTrie(work.name, work.config, requests, cfg, jsonOutput)
 
 				// Thread-safe append to results and merge UA IPs
 				triesMutex.Lock()
@@ -196,9 +196,9 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 	return jsonOutput, requests, nil
 }
 
-// processTrieParallel processes a single trie with parallel insertion.
+// processTrie builds and analyzes a single trie; callers run one goroutine per trie.
 // Returns the trie result along with collected User-Agent whitelist/blacklist IPs.
-func processTrieParallel(trieName string, trieConfig *config.TrieConfig, requests []ingestor.Request,
+func processTrie(trieName string, trieConfig *config.TrieConfig, requests []ingestor.Request,
 	cfg *config.Config, jsonOutput *output.JSONOutput) (output.TrieResult, []string, []string) {
 
 	insertStart := time.Now()
@@ -332,7 +332,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 
 		if usesConcurrency {
 			// Concurrent filtering for large datasets with complex patterns
-			err = processRequestsConcurrentlyParallel(
+			err = filterRequestsConcurrent(
 				requests, trieConfig, startTime, endTime,
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
@@ -343,7 +343,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 			}
 		} else {
 			// Sequential filtering for simple cases (faster for small datasets)
-			processRequestsSequentiallyParallel(
+			filterRequests(
 				requests, trieConfig, startTime, endTime,
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
@@ -418,20 +418,20 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	return trieResult, userAgentWhitelistIPs, userAgentBlacklistIPs
 }
 
-// ParallelStaticFromConfigNoRequests runs parallel static analysis and returns
-// the same *output.JSONOutput as ParallelStaticFromConfigWithRequests, but never
+// Static runs static analysis from config and returns
+// the same *output.JSONOutput as StaticWithRequests, but never
 // returns the parsed []ingestor.Request. For the common unfiltered case (no
 // UA/endpoint/time filters on any trie) it takes an IP-only parse fast path that
 // never materialises ingestor.Request structs, cutting allocations sharply.
 //
 // When any trie requires non-IP fields (filters present) it delegates to
-// ParallelStaticFromConfigWithRequests and drops the requests, since correct
+// StaticWithRequests and drops the requests, since correct
 // filtering needs the full request fields.
-func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput, error) {
+func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	analysisStart := time.Now()
 	jsonOutput := output.NewJSONOutput("static", analysisStart)
 
-	// Validate config (mirror ParallelStaticFromConfigWithRequests exactly).
+	// Validate config (mirror StaticWithRequests exactly).
 	if cfg == nil {
 		jsonOutput.AddError("config_error", "configuration is nil", 1)
 		return jsonOutput, fmt.Errorf("configuration is nil")
@@ -456,7 +456,7 @@ func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput,
 	}
 
 	// Determine whether any trie needs non-IP fields (filters). This is the same
-	// decision made by ParallelStaticFromConfigWithRequests.
+	// decision made by StaticWithRequests.
 	needsStringFields := false
 	needsNonIPFields := false
 	userAgentMatcherForCheck, _ := cfg.CreateUserAgentMatcher()
@@ -478,7 +478,7 @@ func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput,
 	// requests slice.
 	if needsNonIPFields {
 		_ = needsStringFields
-		result, _, derr := ParallelStaticFromConfigWithRequests(cfg)
+		result, _, derr := StaticWithRequests(cfg)
 		return result, derr
 	}
 
@@ -516,7 +516,7 @@ func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput,
 	// linear pass) and reused by every trie.
 	uniqueIPs := iputils.CountDistinctSorted(ips)
 
-	// Process tries in parallel, mirroring ParallelStaticFromConfigWithRequests.
+	// Process tries in parallel, mirroring StaticWithRequests.
 	var trieWG sync.WaitGroup
 	var triesMutex sync.Mutex
 	trieResults := make([]output.TrieResult, 0, len(cfg.StaticTries))
@@ -582,7 +582,7 @@ func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput,
 
 // processTrieFromSortedIPs builds a single trie from a shared, already
 // ascending-sorted slice of nonzero IPs and populates the TrieResult identically
-// to processTrieParallel's unfiltered branch (no filters => no UA IP sets, so it
+// to processTrie's unfiltered branch (no filters => no UA IP sets, so it
 // returns no whitelist/blacklist IPs). sortedIPs is read-only and shared across
 // tries; it must not be mutated. totalRequests is the full-path TotalRequests
 // (len(ips)+invalidCount) used as the denominator for the invalid-IP warning;
@@ -606,7 +606,7 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 		return trieResult
 	}
 
-	// Warn if time parsing failed (mirrors processTrieParallel). A trie whose
+	// Warn if time parsing failed (mirrors processTrie). A trie whose
 	// StartTimeRaw/EndTimeRaw failed to parse has nil StartTime/EndTime and thus
 	// reaches this unfiltered fast path — the warning must still fire.
 	if trieConfig.StartTimeRaw != "" && trieConfig.StartTime == nil {
@@ -620,7 +620,7 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 				trieName, trieConfig.EndTimeRaw), 1)
 	}
 
-	// The time-range warning in processTrieParallel needs both StartTime and
+	// The time-range warning in processTrie needs both StartTime and
 	// EndTime non-nil, which forces the full (filtered) path, so it can never
 	// fire here; we mirror that by only carrying the CIDRRanges parameter (and
 	// UseForJail, which is filter independent).
@@ -652,7 +652,7 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 		InsertTimeMS:                insertDuration.Milliseconds(),
 	}
 
-	// CIDR range analysis (identical to processTrieParallel).
+	// CIDR range analysis (identical to processTrie).
 	if len(trieConfig.CIDRRanges) > 0 {
 		for _, cidrRange := range trieConfig.CIDRRanges {
 			count, err := trieInstance.CountInRange(cidrRange)
@@ -672,14 +672,14 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 		}
 	}
 
-	// Clustering (identical to processTrieParallel).
+	// Clustering (identical to processTrie).
 	processClustering(trieConfig, trieInstance.Trie, jsonOutput, &trieResult)
 
 	return trieResult
 }
 
-// processRequestsConcurrentlyParallel implements high-performance concurrent filtering
-func processRequestsConcurrentlyParallel(
+// filterRequestsConcurrent implements high-performance concurrent filtering
+func filterRequestsConcurrent(
 	requests []ingestor.Request,
 	trieConfig *config.TrieConfig,
 	startTime, endTime time.Time,
@@ -804,8 +804,8 @@ func processRequestsConcurrentlyParallel(
 	return nil
 }
 
-// processRequestsSequentiallyParallel provides optimized sequential processing for simple filtering cases
-func processRequestsSequentiallyParallel(
+// filterRequests provides optimized sequential processing for simple filtering cases
+func filterRequests(
 	requests []ingestor.Request,
 	trieConfig *config.TrieConfig,
 	startTime, endTime time.Time,
