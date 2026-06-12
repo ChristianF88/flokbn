@@ -22,20 +22,20 @@ jailFile = "/tmp/cidrx_jail.json"        # Jail state persistence file
 banFile = "/tmp/cidrx_ban.txt"           # Output file for banned IPs/CIDRs
 
 # OPTIONAL: Whitelist and blacklist files for IP filtering
-# Relative paths are supported and recommended for portability
+# Relative paths are supported and resolved from the current working directory
 whitelist = "config_examples/whitelist.txt"              # Optional: IPs/CIDRs never to ban
 blacklist = "config_examples/blacklist.txt"              # Optional: IPs/CIDRs always to ban
 
 # OPTIONAL: User-Agent based filtering
-# These files contain substrings to match against User-Agent headers
-userAgentWhitelist = "config_examples/ua_whitelist.txt"  # Optional: User-Agent patterns that whitelist IPs
-userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: User-Agent patterns that blacklist IPs
+# These files contain exact User-Agent strings (full-string match, not substrings)
+userAgentWhitelist = "config_examples/ua_whitelist.txt"  # Optional: exact User-Agent strings that whitelist IPs
+userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-Agent strings that blacklist IPs
 
 # WHITELIST/BLACKLIST BEHAVIOR:
 # 1. IP Whitelist: IPs matching these CIDRs are never added to jail
 # 2. IP Blacklist: IPs matching these CIDRs are always added to ban file
-# 3. User-Agent Whitelist: IPs with these UA patterns are excluded from analysis
-# 4. User-Agent Blacklist: IPs with these UA patterns are immediately banned
+# 3. User-Agent Whitelist: IPs with these exact UA strings are excluded from analysis
+# 4. User-Agent Blacklist: IPs with these exact UA strings are immediately banned
 # 5. Processing order: UA filters → IP filters → clustering → jail → ban file
 
 #################################################################################
@@ -269,13 +269,14 @@ useForJail = [true, true, true]
 # 1. Always maintain an IP whitelist for essential services
 # 2. Test blacklist patterns before deployment
 # 3. Monitor jail file size and rotation
-# 4. Use specific User-Agent patterns to avoid false positives
+# 4. Use exact User-Agent strings that are specific enough to avoid false positives
 # 5. Regularly review and update filtering rules
 
 # OPERATIONAL NOTES:
 # 1. The jail file persists banned IPs across restarts
 # 2. The ban file is generated fresh each run
-# 3. Relative paths are resolved from the config file location
+# 3. Relative paths are resolved from the current working directory you run
+#    cidrx in, NOT from the config file location
 # 4. Log rotation requires restarting the analysis
 # 5. Monitor system resources with large datasets
 
