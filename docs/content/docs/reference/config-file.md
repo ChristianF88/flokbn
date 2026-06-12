@@ -21,14 +21,14 @@ cidrx uses TOML configuration files for complex multi-trie setups. Both CLI flag
 
 ```toml
 [global]        # Shared settings (jail, ban, whitelist/blacklist files)
-[log]           # Logging settings (level, format) — live mode
+[log]           # Logging settings (level, format) - live mode
 [static]        # Static mode base settings (logFile, logFormat)
 [static.NAME]   # One or more named tries for static mode
 [live]          # Live mode base settings (port)
 [live.NAME]     # One or more named windows for live mode
 ```
 
-A config file contains **either** `[static]` or `[live]` sections, not both.
+A config file may contain both `[static]` and `[live]` sections; the `static` command only reads `[static]` (plus `[global]`/`[log]`), the `live` command only reads `[live]`. Keeping one file per mode is still the clearer setup.
 
 ## [global] Section
 
@@ -57,8 +57,8 @@ Each `[static.NAME]` section defines an independent analysis trie. The `NAME` is
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `clusterArgSets` | array of arrays | Yes | Cluster parameters. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
-| `useForJail` | array of bools | Yes | Which cluster arg sets contribute to jail. Must match `clusterArgSets` length. |
+| `clusterArgSets` | array of arrays | No | Cluster parameters. Without it the trie only reports parse stats and `cidrRanges` analysis. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
+| `useForJail` | array of bools | No | Which cluster arg sets contribute to the jail. Sets without a matching entry default to `false` (detected and reported, but never jailed) - so in practice give it the same length as `clusterArgSets`. |
 | `cidrRanges` | array of strings | No | Focus on specific CIDR ranges |
 | `useragentRegex` | string | No | User-Agent filter regex |
 | `endpointRegex` | string | No | Endpoint filter regex |
@@ -76,19 +76,23 @@ Each `[static.NAME]` section defines an independent analysis trie. The `NAME` is
 
 ### Live Windows: [live.NAME]
 
-Each `[live.NAME]` section defines an independent sliding window. All windows run concurrently and share the same jail.
+Each `[live.NAME]` section defines an independent sliding window (own filters, own time/size bounds, own cluster arg sets). All windows share the same jail and ban file.
+
+All windows are processed by a **single detection loop**: each iteration reads one batch, updates every window, runs every cluster arg set, then sleeps. The sleep is the **largest** `sleepBetweenIterations` across all windows - a window asking for `5` will not run more often than another asking for `10`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `slidingWindowMaxTime` | string | Yes | Window time span (e.g. `"2h"`, `"30m"`) |
-| `slidingWindowMaxSize` | int | Yes | Maximum requests in window |
-| `sleepBetweenIterations` | int | Yes | Seconds between detection runs |
-| `clusterArgSets` | array of arrays | Yes | Cluster parameters |
-| `useForJail` | array of bools | Yes | Which cluster arg sets contribute to jail |
+| `slidingWindowMaxTime` | string | Yes* | Window time span (e.g. `"2h"`, `"30m"`) |
+| `slidingWindowMaxSize` | int | Yes* | Maximum requests in window |
+| `sleepBetweenIterations` | int | Yes* | Seconds between detection runs (largest value across windows wins, see above) |
+| `clusterArgSets` | array of arrays | Yes* | Cluster parameters |
+| `useForJail` | array of bools | No | Which cluster arg sets contribute to the jail; missing entries default to `false` (detected but never jailed) |
 | `useragentRegex` | string | No | User-Agent filter regex |
 | `endpointRegex` | string | No | Endpoint filter regex |
 
-Duration strings support: `s` (seconds), `m` (minutes), `h` (hours). Examples: `"2h"`, `"30m"`, `"1h30m"`.
+\* Required for the window to do anything, but **not validated at load time** - a window missing any of these starts fine and silently detects nothing. See [Validation Rules](#validation-rules).
+
+Duration strings accept any Go duration: `s` (seconds), `m` (minutes), `h` (hours), also `ms` etc. Examples: `"2h"`, `"30m"`, `"1h30m"`.
 
 ## [log] Section
 
@@ -121,13 +125,21 @@ CLI flags use a flexible format instead (`YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM
 
 ## Validation Rules
 
-1. `useForJail` must have the same length as `clusterArgSets`
-2. `clusterArgSets` entries must have exactly 4 values: `[minSize, minDepth, maxDepth, threshold]`
-3. `[static]` requires `logFile`
-4. `[live]` requires `port`
-5. Live mode requires `jailFile` and `banFile` in `[global]`
-6. When using `--config`, most other CLI flags produce an error (static allows `--tui`, `--compact`, `--plain`; live allows `--compact`, `--plain`, `--logLevel`)
-7. `[log]` rejects unknown keys and invalid `level`/`format` values
+Enforced at load/startup (the run aborts with an error):
+
+1. `[static]` requires an existing `logFile`
+2. `[live]` requires `port`, plus `jailFile` and `banFile` in `[global]`, plus at least one `[live.NAME]` window
+3. `statsListen`, when set, must be a valid `host:port`; `topTalkers` must be >= 0
+4. Regex patterns and duration strings must compile/parse
+5. When using `--config`, most other CLI flags produce an error (static allows `--tui`, `--compact`, `--plain`; live allows only `--logLevel`)
+6. `[log]` rejects unknown keys and invalid `level`/`format` values
+
+**Not** enforced - silently tolerated, so double-check these by hand:
+
+- A `clusterArgSets` entry needs at least 4 values `[minSize, minDepth, maxDepth, threshold]`; entries with fewer values or with `minDepth > maxDepth` are **silently dropped** in TOML (the CLI flags reject them with an error instead).
+- `useForJail` is not length-checked: cluster arg sets without a matching entry are detected but never jailed.
+- The `[live.NAME]` fields marked required above (`slidingWindowMaxTime`, `slidingWindowMaxSize`, `sleepBetweenIterations`, `clusterArgSets`) are not checked: a window missing them starts without error and silently detects nothing.
+- An invalid RFC3339 `startTime`/`endTime` in `[static.NAME]` does **not** abort the run: it surfaces as a diagnostic in the output and the time filter is silently skipped (all requests are analyzed).
 
 ## Complete Static Example
 
@@ -211,14 +223,16 @@ clusterArgSets = [[500, 28, 32, 0.1]]
 useForJail = [true]
 ```
 
+For a complete, working live config you can run immediately, see `docker-test-config.demo.toml` in the repository root - it drives the [Docker demo stack]({{< relref "/docs/guides/docker-testing/" >}}).
+
 ## Troubleshooting
 
 **TOML syntax error**: Use `=` not `:` for assignments. Strings must be quoted.
 
 **Missing required field**: Check the required columns in the tables above.
 
-**Invalid cluster arguments**: Each entry needs exactly 4 values: `[[minSize, minDepth, maxDepth, threshold]]`.
+**Invalid cluster arguments**: Each entry needs 4 values: `[[minSize, minDepth, maxDepth, threshold]]`. Malformed TOML entries are silently dropped - if a set seems ignored, check its value count and that `minDepth <= maxDepth`.
 
 **File not found**: Verify the path exists and is absolute.
 
-**Array length mismatch**: `useForJail` must have the same number of entries as `clusterArgSets`.
+**Detections never banned**: Check `useForJail` - sets without a `true` entry at their position are reported but never jailed.

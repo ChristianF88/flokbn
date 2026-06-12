@@ -14,7 +14,30 @@ seo:
   noindex: false
 ---
 
-## Prerequisites
+## Prebuilt Binaries (Recommended)
+
+Every release ships static binaries - no Go toolchain required. Download the archive for your platform from the [releases page](https://github.com/ChristianF88/cidrx/releases/latest):
+
+| Platform | Archive |
+|----------|---------|
+| Linux x86_64 | `cidrx_<version>_Linux_x86_64.tar.gz` |
+| Linux arm64 | `cidrx_<version>_Linux_arm64.tar.gz` |
+| Linux armv7 (e.g. Raspberry Pi) | `cidrx_<version>_Linux_armv7.tar.gz` |
+| macOS Intel | `cidrx_<version>_Darwin_x86_64.tar.gz` |
+| macOS Apple Silicon | `cidrx_<version>_Darwin_arm64.tar.gz` |
+| Windows x86_64 | `cidrx_<version>_Windows_x86_64.zip` |
+
+Unpack and put the binary on your `PATH`:
+
+```bash
+tar -xzf cidrx_*_Linux_x86_64.tar.gz
+sudo mv cidrx /usr/local/bin/
+cidrx --help
+```
+
+Each release includes a `checksums.txt`; verify your download with `sha256sum -c checksums.txt`.
+
+## Prerequisites (building from source)
 
 - **Go 1.23 or later** (for building from source)
 - **Docker** (optional, for containerized deployment)
@@ -90,32 +113,7 @@ See [Docker Testing Guide]({{< relref "/docs/guides/docker-testing/" >}}) for th
 
 ## Development Setup
 
-### Install Dependencies
-
-```bash
-cd cidrx/cidrx/src
-go mod download
-```
-
-### Install Development Tools
-
-```bash
-go install honnef.co/go/tools/cmd/staticcheck@latest
-```
-
-### Run Tests
-
-```bash
-go test ./...
-go test -cover ./...
-go test -bench=. -benchtime=1ms ./...
-```
-
-### Run Static Analysis
-
-```bash
-staticcheck ./...
-```
+Working on cidrx itself? The [Developer Guide]({{< relref "/docs/contributing/developer-guide/" >}}) covers dependencies, tests, static analysis, and benchmarks.
 
 ## File Permissions
 
@@ -135,13 +133,13 @@ sudo chown cidrx-user:cidrx-user /var/lib/cidrx
 
 ## Troubleshooting
 
-**`go: command not found`** -- Install Go from https://golang.org/dl/
+**`go: command not found`** - Install Go from https://golang.org/dl/
 
-**`package X is not in GOROOT`** -- Run `go mod download` to fetch dependencies.
+**`package X is not in GOROOT`** - Run `go mod download` to fetch dependencies.
 
-**`permission denied` reading logs** -- Add your user to the `adm` group: `sudo usermod -a -G adm $USER`
+**`permission denied` reading logs** - Add your user to the `adm` group: `sudo usermod -a -G adm $USER`
 
-**Cannot create jail file** -- Ensure the directory exists and is writable.
+**Cannot create jail file** - Ensure the directory exists and is writable.
 
 ## Next Steps
 

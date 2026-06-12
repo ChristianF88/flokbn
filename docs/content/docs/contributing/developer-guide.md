@@ -138,10 +138,11 @@ cd e2e
 make all              # Static E2E tests (no Docker required)
 make live             # Live mode E2E test (requires Docker)
 make live-detection   # Live mode multi-trie detection test (requires Docker)
+make live-firewall    # Closed-loop firewall E2E test (requires Docker)
 make everything       # All of the above
 ```
 
-Individual targets: `static`, `filters`, `whitelist-blacklist`, `live`, `live-detection`.
+Individual targets: `static`, `filters`, `whitelist-blacklist`, `live`, `live-detection`, `live-firewall`.
 
 ## Code Quality
 
@@ -268,7 +269,7 @@ go build -race -o cidrx .
 
 ```bash
 go install github.com/go-delve/delve/cmd/dlv@latest
-dlv test ./logparser -- -test.run TestParseLogLine
+dlv test ./logparser - -test.run TestParseLogLine
 ```
 
 ## Cleanup

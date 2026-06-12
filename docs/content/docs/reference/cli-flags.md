@@ -28,6 +28,7 @@ Two commands: **`static`** (historical log analysis) and **`live`** (real-time m
 | Flag | Description |
 |------|-------------|
 | `--help`, `-h` | Show help |
+| `--version`, `-v` | Print the version |
 
 ## Static Mode
 
@@ -49,7 +50,7 @@ cidrx static [options]
 
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `--clusterArgSets` | string | Yes (unless `--config`) | - | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
+| `--clusterArgSets` | string | No | - | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. Without it, the run reports parse statistics and any `--rangesCidr` analysis but detects no clusters. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
 
 ### Filtering Options
 
@@ -86,7 +87,9 @@ Default output (no flag) is pretty-printed JSON. See [Output Formats]({{< relref
 | Flag | Type | Description |
 |------|------|-------------|
 | `--jailFile` | string | Path to jail state file (JSON) |
-| `--banFile` | string | Path to ban list output (one CIDR per line) |
+| `--banFile` | string | Path to ban list output (CIDRs plus `#` comment headers) |
+
+Static mode writes the jail and ban files only when **both** flags are set; with only one of them, no jail/ban output is produced. All cluster arg sets passed via `--clusterArgSets` count toward jailing (matching live mode; per-set control is config-file only). Note that the jail file is only created when at least one range was actually jailed - a run with no detections leaves no jail file, while the ban file is always written (header-only if empty).
 
 ---
 
@@ -100,10 +103,10 @@ cidrx live [options]
 
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `--config` | string | No | - | Path to TOML config file. When used, only `--compact`, `--plain`, and `--logLevel` are allowed alongside it. |
+| `--config` | string | No | - | Path to TOML config file. When used, only `--logLevel` is allowed alongside it. |
 | `--port` | string | Yes (unless `--config`) | - | Port for Lumberjack protocol listener |
 | `--jailFile` | string | Yes (unless `--config`) | - | Path to jail state file (JSON) |
-| `--banFile` | string | Yes (unless `--config`) | - | Path to ban list output (one CIDR per line) |
+| `--banFile` | string | Yes (unless `--config`) | - | Path to ban list output (CIDRs plus `#` comment headers) |
 | `--logLevel` | string | No | `info` | Verbosity of the live-mode log lines on stderr: `debug`, `info`, `warn`, or `error`. Overrides the `[log]` level from the config file. |
 
 Live mode logs leveled, timestamped progress lines to stderr (one summary line per detection iteration). Machine-readable live data is served by the HTTP endpoints (`GET /stats`, `GET /bans`, Prometheus `GET /metrics`) when `statsListen` is configured.
@@ -116,15 +119,19 @@ Live mode logs leveled, timestamped progress lines to stderr (one summary line p
 | `--slidingWindowMaxSize` | int | `100000` | Maximum requests in sliding window |
 | `--sleepBetweenIterations` | int | `10` | Seconds between detection iterations |
 
+Flags-only live mode creates a **single** sliding window (internally named `cli_default`). Multiple windows, the HTTP stats server (`statsListen`, `topTalkers`), and the ingestor `readTimeout` are only available via `--config` - there are no CLI flags for them. See [Config File]({{< relref "/docs/reference/config-file/" >}}).
+
 ### Clustering Options
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--clusterArgSet` | string | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. Note: singular form (not `--clusterArgSets`). |
+| `--clusterArgSet` | string | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. Note: singular form (not `--clusterArgSets`). When omitted, a default set of `1000,30,32,0.2` is used. All sets passed this way are jailed (`useForJail` true). |
 
-### Filtering, Analysis, and Output Options
+### Filtering Options
 
-Live mode supports the same optional flags as static mode: `--useragentRegex`, `--endpointRegex`, `--whitelist`, `--blacklist`, `--userAgentWhitelist`, `--userAgentBlacklist`, `--rangesCidr`, `--plotPath`, `--plain`, `--compact`. (`--jailFile` and `--banFile` are required in live mode; see Core Options above.)
+Live mode supports the same filter flags as static mode: `--useragentRegex`, `--endpointRegex`, `--whitelist`, `--blacklist`, `--userAgentWhitelist`, `--userAgentBlacklist`.
+
+`--rangesCidr`, `--plotPath`, `--plain`, `--compact`, and `--tui` are static-only flags - the live command rejects them with an error. Live mode produces log lines, the jail/ban files, and the optional HTTP endpoints, not a report.
 
 ---
 
@@ -133,8 +140,7 @@ Live mode supports the same optional flags as static mode: `--useragentRegex`, `
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | General error (invalid arguments, file not found) |
-| `2` | Configuration error |
+| `1` | Any error (invalid arguments, file not found, configuration error). The message is printed to stdout/stderr. |
 
 ## CLI vs Config File
 

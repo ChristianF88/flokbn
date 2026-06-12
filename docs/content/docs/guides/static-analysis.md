@@ -1,11 +1,12 @@
 ---
-title: "Static Analysis Guide"
+title: "Static Analysis"
 description: "Step-by-step guide to analyzing historical logs with cidrx"
 summary: "Complete walkthrough of static mode for log analysis and cluster detection"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2025-11-26T10:00:00+00:00
+lastmod: 2026-06-12T10:00:00+00:00
 draft: false
 weight: 810
+slug: "static-analysis-guide"
 toc: true
 seo:
   title: "cidrx Static Analysis Guide"
@@ -27,6 +28,21 @@ Analyze a log file with a single cluster arg set:
 ```
 
 This detects IP clusters with 1000+ requests in /24 to /32 ranges using a 10% threshold. For parameter details, see [Clustering]({{< relref "/docs/reference/clustering/" >}}).
+
+## Interpreting Results
+
+cidrx outputs the detected ranges with request counts and their share of total traffic:
+
+```
+CLUSTERING RESULTS
+Set 1: min_size=1000, depth=24-32, threshold=0.10
+Detected Threat Ranges:
+  198.51.100.0/24        15,243 requests  ( 12.34%)
+  203.0.113.128/25        8,891 requests  (  7.20%)
+  192.0.2.7/32            3,456 requests  (  2.80%)
+```
+
+Reading the prefix lengths: `/24` = large cluster (256 IPs), `/25` = medium cluster (128 IPs), `/32` = a single high-volume IP. Reported ranges never overlap - a `/32` inside an already-detected `/24` would be absorbed by it.
 
 ## Multi-Tier Detection
 
@@ -111,7 +127,7 @@ Write detected ranges to files for firewall integration:
   --clusterArgSets 1000,24,32,0.1 --plain
 ```
 
-The ban file contains one CIDR per line, ready for iptables or nginx. See [Output Formats]({{< relref "/docs/reference/output-formats/" >}}) for firewall integration examples.
+Both flags must be set together - with only one of them, no jail/ban output is written. Cluster arg sets passed on the command line all count toward jailing, so every detected range is added to the jail and published to the ban file. Note that the jail file is only created once at least one range has actually been jailed; the ban file is always written (header-only if nothing is banned). See [Output Formats]({{< relref "/docs/reference/output-formats/" >}}) for the exact ban file format, the `#`-comment filtering caveat, and iptables/nginx integration patterns.
 
 ## Using Configuration Files
 
@@ -156,8 +172,6 @@ See [Performance]({{< relref "/docs/architecture/performance/" >}}) for optimiza
 
 ## Best Practices
 
-1. **Start conservative** -- high thresholds first, then tune down
-2. **Use multiple cluster arg sets** -- different sizes catch different cluster sizes
-3. **Maintain whitelists** -- protect legitimate traffic
-4. **Review before blocking** -- audit detected ranges before applying to firewalls
-5. **Test in staging** -- verify detection behavior before production
+1. **Start with high thresholds and large min sizes**, then tune down - it keeps the first runs free of false positives
+2. **Use multiple cluster arg sets** - different depth/size tiers catch different cluster shapes
+3. **Maintain whitelists and review detected ranges** before feeding the ban file to a firewall

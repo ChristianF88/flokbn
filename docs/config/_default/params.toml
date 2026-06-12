@@ -1,13 +1,10 @@
 # Hugo
 title = "cidrx Documentation"
-description = "High-performance botnet detection tool that analyzes HTTP logs and automatically identifies attack patterns by clustering IP addresses into CIDR ranges."
+description = "High-performance IP clustering tool: parses web-server access logs and groups IP addresses into CIDR ranges. Used for botnet detection, abuse analysis, and ban-list generation."
 images = ["cover.png"]
 
 # mainSections
 mainSections = ["docs"]
-
-[social]
-  twitter = ""
 
 # Doks (@thulite/doks-core)
 [doks]
@@ -21,7 +18,7 @@ mainSections = ["docs"]
 
   ## Button
   navBarButton = false # false (default) or true
-  navBarButtonUrl = "/docs/prologue/introduction/"
+  navBarButtonUrl = "/docs/getting-started/"
   navBarButtonText = "Get started"
 
   # FlexSearch
@@ -60,7 +57,7 @@ mainSections = ["docs"]
 
   # UX
   headerBar = false # true (default) or false
-  backgroundDots = true # true (default) or false
+  backgroundDots = false # true (default) or false
 
   # Homepage
   sectionFooter = false # false (default) or true
@@ -130,7 +127,7 @@ mainSections = ["docs"]
     maskIconColor = "white" # white (default)
   [seo.schemas]
     type = "Organization" # Organization (default) or Person
-    logo = "favicon-512x512.png" # Logo of Organization — favicon-512x512.png (default)
+    logo = "favicon-512x512.png" # Logo of Organization - favicon-512x512.png (default)
     name = "cidrx" # Name of Organization or Person
     sameAs = ["https://github.com/ChristianF88/cidrx"] # E.g. ["https://github.com/thuliteio/thulite", "https://fosstodon.org/@thulite"]
     images = ["cover.png"] # ["cover.png"] (default)

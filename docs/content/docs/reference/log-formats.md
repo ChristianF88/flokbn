@@ -17,6 +17,8 @@ seo:
 
 cidrx parses HTTP access logs using a format string that maps log fields to specifiers.
 
+Format strings apply to **static mode only**. Live mode parses incoming events with a fixed combined-log layout (client IP as the first field) - see the [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}).
+
 ## Format Specifiers
 
 | Specifier | Description | Example Value | Required |
@@ -121,6 +123,8 @@ Log: `Oct  9 10:15:23 webserver nginx: 192.0.2.1 - - [09/Oct/2025:10:15:23] "GET
 Expected format: `DD/MMM/YYYY:HH:MM:SS ±ZZZZ`
 
 Months: Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec. Timezone is optional.
+
+**Timezone handling differs between modes.** The static parser reads only the first 20 bytes of the field (`DD/MMM/YYYY:HH:MM:SS`) and **ignores the offset** - timestamps are treated as UTC wall-clock times regardless of the `±ZZZZ` suffix. Live mode does parse the offset. Practical rule: keep your log timestamps and your `--startTime`/`--endTime` values in the same timezone, or time filters will be shifted by the offset.
 
 Include surrounding brackets in the format string if present in the log:
 

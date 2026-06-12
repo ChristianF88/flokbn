@@ -45,6 +45,7 @@ cidrx is an IP clustering tool that analyzes HTTP logs and groups IP addresses i
 
 - **IPv4 Only**: Currently only IPv4 addresses are supported. IPv6 is not implemented yet.
 - **Lumberjack Protocol**: Live mode uses the Lumberjack protocol for log ingestion. HTTP/JSON API support is planned for future releases.
+- **Fixed Live Log Layout**: Live mode expects the standard combined log format with the client IP as the first field. Configurable [format strings]({{< relref "/docs/reference/log-formats/" >}}) apply to static mode only.
 - **Single IP Field**: Log format must contain exactly one `%h` (IP address) field. Multiple IP fields are not supported.
 - **No Duplicate Fields**: Log format cannot contain duplicate field specifiers (e.g., two `%t` timestamp fields or two `%s` status fields).
 

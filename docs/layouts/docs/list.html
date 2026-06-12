@@ -1,0 +1,51 @@
+{{ define "main" }}
+<div class="cx-docs-list">
+  <div class="cx-shell cx-shell-narrow">
+
+    <header class="cx-list-header">
+      <p class="cx-section-kicker">
+        {{ if eq .CurrentSection .FirstSection }}INDEX / DOCUMENTATION{{ else }}SECTION / {{ .Title | upper }}{{ end }}
+      </p>
+      <h1 class="cx-list-title">{{ .Title }}</h1>
+      {{ with .Content }}<div class="cx-list-intro">{{ . }}</div>{{ end }}
+    </header>
+
+    {{ if .Sections }}
+    {{/* Docs root: one card per section, with its pages listed */}}
+    <div class="cx-section-grid">
+      {{ $i := 0 }}
+      {{ range .Sections.ByWeight }}
+      {{ $i = add $i 1 }}
+      <article class="cx-section-card">
+        <div class="cx-section-card-head">
+          <span class="cx-docsmap-idx">{{ printf "%02d" $i }}</span>
+          <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
+        </div>
+        <p class="cx-section-card-summary">{{ .Summary | plainify }}</p>
+        <ul class="cx-section-card-pages">
+          {{ range .RegularPages.ByWeight }}
+          <li><a href="{{ .RelPermalink }}">{{ .Title }}</a></li>
+          {{ end }}
+        </ul>
+      </article>
+      {{ end }}
+    </div>
+    {{ else }}
+    {{/* Leaf section: one card per page */}}
+    <div class="cx-page-grid">
+      {{ $i := 0 }}
+      {{ range .RegularPages.ByWeight }}
+      {{ $i = add $i 1 }}
+      <a class="cx-page-card" href="{{ .RelPermalink }}">
+        <span class="cx-docsmap-idx">{{ printf "%02d" $i }}</span>
+        <h2>{{ .Title }}</h2>
+        <p>{{ .Summary | plainify }}</p>
+        <span class="cx-docsmap-go" aria-hidden="true">&rarr;</span>
+      </a>
+      {{ end }}
+    </div>
+    {{ end }}
+
+  </div>
+</div>
+{{ end }}

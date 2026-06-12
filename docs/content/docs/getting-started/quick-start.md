@@ -58,17 +58,9 @@ The detected CIDR ranges represent high-volume IP ranges you can investigate or 
 
 ## Common Use Cases
 
-### Emergency Response
+### Multi-Tier Detection
 
-Catch different cluster sizes with multiple cluster arg sets:
-
-```bash
-./cidrx static --logfile access.log \
-  --clusterArgSets 500,28,32,0.1 \
-  --clusterArgSets 2000,20,28,0.2 \
-  --clusterArgSets 10000,16,24,0.3 \
-  --plain
-```
+To catch small, medium, and large clusters in one run, pass several `--clusterArgSets` - see the [Static Analysis guide]({{< relref "/docs/guides/static-analysis/#multi-tier-detection" >}}) for the pattern.
 
 ### Time-Specific Analysis
 
@@ -91,19 +83,11 @@ Catch different cluster sizes with multiple cluster arg sets:
   --plain
 ```
 
+Detected ranges (minus whitelisted ones) are jailed and written to the ban file. The jail file only appears once at least one range has actually been jailed; the ban file is always written. See [Output Formats]({{< relref "/docs/reference/output-formats/#ban-file-format" >}}) for the file formats and firewall integration.
+
 ## Real-Time Protection
 
-Switch to live mode for continuous monitoring:
-
-```bash
-./cidrx live --port 8080 \
-  --jailFile /etc/cidrx/jail.json \
-  --banFile /etc/cidrx/ban.txt \
-  --slidingWindowMaxTime 2h \
-  --slidingWindowMaxSize 100000
-```
-
-See the [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}) for Filebeat setup and production deployment.
+For continuous monitoring and automatic blocking, run cidrx in live mode - the [Live Protection guide]({{< relref "/docs/guides/live-protection/" >}}) covers the command, Filebeat setup, and production deployment.
 
 ## Using Configuration Files
 
@@ -117,28 +101,15 @@ See [Config File]({{< relref "/docs/reference/config-file/" >}}) for the complet
 
 ## Output Formats
 
-```bash
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1           # JSON (default)
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact # Compact JSON
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain   # Plain text
-./cidrx static --config cidrx.toml --tui                                       # Interactive TUI
-```
-
-See [Output Formats]({{< relref "/docs/reference/output-formats/" >}}) for JSON schemas and firewall integration.
+Besides `--plain`, static mode can emit JSON (default), compact JSON (`--compact`), or an interactive TUI (`--tui`) - see [Output Formats]({{< relref "/docs/reference/output-formats/" >}}) for the schemas and examples.
 
 ## Testing Your Setup
 
-Use the [Docker test environment]({{< relref "/docs/guides/docker-testing/" >}}) to verify cidrx is working:
-
-```bash
-docker compose -f docker-compose.test.yml up --build
-docker compose -f docker-compose.test.yml logs -f cidrx
-docker compose -f docker-compose.test.yml down
-```
+The [Docker test and demo stacks]({{< relref "/docs/guides/docker-testing/" >}}) let you verify cidrx end-to-end against simulated traffic - including a closed-loop demo with firewall enforcement, Prometheus, and Grafana.
 
 ## Next Steps
 
-- [Static Analysis Guide]({{< relref "/docs/guides/static-analysis/" >}}) - Detailed walkthrough with filtering and multi-tier detection
+- [Static Analysis]({{< relref "/docs/guides/static-analysis/" >}}) - Detailed walkthrough with filtering and multi-tier detection
 - [CLI Flags]({{< relref "/docs/reference/cli-flags/" >}}) - Complete command-line reference
 - [Clustering]({{< relref "/docs/reference/clustering/" >}}) - Parameter tuning guide
 - [Filtering]({{< relref "/docs/reference/filtering/" >}}) - Whitelist/blacklist file formats

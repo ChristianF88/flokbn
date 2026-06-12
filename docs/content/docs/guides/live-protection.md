@@ -1,11 +1,12 @@
 ---
-title: "Live Protection Guide"
+title: "Live Protection"
 description: "Step-by-step guide to real-time IP range detection with cidrx"
 summary: "Complete walkthrough of live mode for continuous monitoring and automatic blocking"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-06-12T10:00:00+00:00
 draft: false
 weight: 820
+slug: "live-protection-guide"
 toc: true
 seo:
   title: "cidrx Live Protection Guide"
@@ -18,11 +19,12 @@ Live mode provides real-time detection by continuously monitoring incoming logs 
 
 ## How Live Mode Works
 
-- Receives logs from Filebeat/Logstash via Lumberjack protocol
-- Maintains sliding windows of recent requests in memory
-- Runs detection on a configurable timer (every N seconds)
-- Automatically updates jail and ban files when new ranges are detected
-- Multiple independent windows can run concurrently
+- Receives logs from Filebeat/Logstash via the Lumberjack protocol (TCP)
+- Waits for the first shipper connection at startup, then loops: read a batch, update every sliding window, run every cluster arg set, update jail and ban file, sleep
+- The sleep between iterations is the **largest** `sleepBetweenIterations` across all configured windows - one loop drives all windows
+- Multiple windows (own filters, sizes, cluster arg sets) share one jail and one ban file
+- Repeat offenders escalate through 5 jail stages: 10 minutes, 4 hours, 7 days, 30 days, 180 days
+- Whitelist/blacklist and User-Agent list files are loaded **once at startup** - restart cidrx to pick up edits
 
 ## Quick Start (CLI)
 
@@ -34,7 +36,7 @@ Live mode provides real-time detection by continuously monitoring incoming logs 
   --slidingWindowMaxSize 100000
 ```
 
-For all CLI flags, see [CLI Flags]({{< relref "/docs/reference/cli-flags/" >}}).
+Flags-only mode runs a single sliding window; multiple windows and the HTTP stats endpoints require a config file. For all CLI flags, see [CLI Flags]({{< relref "/docs/reference/cli-flags/" >}}).
 
 ## Configuration File (Recommended)
 
@@ -77,6 +79,8 @@ sleepBetweenIterations = 10    # Every 10 seconds
 sleepBetweenIterations = 5     # Every 5 seconds (more CPU, faster detection)
 ```
 
+With multiple windows, the single detection loop sleeps for the **largest** value across all windows - a `5` next to a `10` still iterates every 10 seconds.
+
 ## Filebeat Integration
 
 Configure Filebeat to ship logs to cidrx:
@@ -98,11 +102,19 @@ output.logstash:
 sudo systemctl restart filebeat
 ```
 
+### Expected log line format
+
+Live mode parses each event's `message` field itself and expects the standard **combined log format with the client IP as the first field**:
+
+```
+192.0.2.1 - - [09/Oct/2025:10:15:23 +0000] "GET / HTTP/1.1" 200 1234 "-" "curl/8.5.0"
+```
+
+The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion. If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the cidrx side, which live mode does not support). Lines that don't parse are counted as parse errors in `/stats` and skipped.
+
 ## Firewall Integration
 
-### iptables
-
-Monitor the ban file and update rules:
+Monitor the ban file and update iptables rules when it changes:
 
 ```bash
 #!/bin/bash
@@ -114,23 +126,16 @@ while true; do
   CURRENT_HASH=$(md5sum "$BANFILE" | cut -d' ' -f1)
   if [ "$CURRENT_HASH" != "$LAST_HASH" ]; then
     iptables -F CIDRX-BLOCK 2>/dev/null || iptables -N CIDRX-BLOCK
-    while read cidr; do
-      iptables -A CIDRX-BLOCK -s "$cidr" -j DROP
-    done < "$BANFILE"
+    grep -v '^#' "$BANFILE" | while read -r cidr; do
+      [ -n "$cidr" ] && iptables -A CIDRX-BLOCK -s "$cidr" -j DROP
+    done
     LAST_HASH="$CURRENT_HASH"
   fi
   sleep 10
 done
 ```
 
-### nginx
-
-```bash
-sed 's/^/deny /; s/$/;/' /etc/cidrx/ban.txt > /etc/nginx/cidrx-bans.conf
-nginx -s reload
-```
-
-See [Output Formats]({{< relref "/docs/reference/output-formats/" >}}) for more firewall integration patterns.
+The ban file contains `#` comment lines alongside the CIDRs (hence the `grep -v '^#'`) - see the [Ban File Format]({{< relref "/docs/reference/output-formats/#ban-file-format" >}}) for the exact format and further integration patterns (nginx and more).
 
 ## Production Deployment
 
@@ -196,7 +201,24 @@ level = "info"   # debug, info, warn, error
 format = "text"  # text or json
 ```
 
-For machine-readable live data (detections, jail state, ban list), use the HTTP endpoints enabled by `statsListen` in `[live]`: `GET /stats` (JSON snapshot), `GET /bans` (current ban file), and `GET /metrics` (Prometheus exposition format).
+## HTTP Endpoints
+
+For machine-readable live data, set `statsListen` in `[live]` (config file only - no CLI flag). Bind to localhost unless you have a reason not to:
+
+```toml
+[live]
+port = "8080"
+statsListen = "127.0.0.1:8666"
+topTalkers = 5   # optional: top-N IPs per window in /stats
+```
+
+| Endpoint | Content |
+|----------|---------|
+| `GET /stats` | JSON snapshot of the last iteration: `ingest` (connection, queue, totals, parse errors), `windows` (size, accepted/rejected counts, per-set detections and timings, optional `top_talkers`), `jail` (active bans per stage with start/expiry), `lists`, `loop` |
+| `GET /bans` | The ban file content last written to disk, verbatim (`text/plain`) |
+| `GET /metrics` | Prometheus exposition format; all metrics are prefixed `cidrx_` (ingest, window, cluster, jail, ban-file, and loop families) |
+
+All three return `503` with a `Retry-After` header until the loop has completed its first iteration. The snapshot updates once per iteration, not per request.
 
 ## Monitoring
 
@@ -211,7 +233,7 @@ tail -f /etc/cidrx/ban.txt
 cat /etc/cidrx/jail.json | jq '.Cells | length'
 ```
 
-The jail file uses a tiered cell structure with escalating bans. See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the jail data model.
+The jail file uses a tiered cell structure with escalating bans (stage 1-5: 10 minutes, 4 hours, 7 days, 30 days, 180 days; re-detection after expiry moves a range to the next stage). See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the jail data model.
 
 ## Troubleshooting
 
@@ -237,8 +259,6 @@ Add [whitelists]({{< relref "/docs/reference/filtering/" >}}) and increase [clus
 
 ## Best Practices
 
-1. **Start conservative** -- high thresholds, monitor for 24 hours
-2. **Maintain whitelists** -- protect legitimate traffic
-3. **Multiple windows** -- different windows for different traffic patterns
-4. **Regular backups** -- back up jail files and configurations
-5. **Test in staging** -- use the [Docker environment]({{< relref "/docs/guides/docker-testing/" >}}) first
+1. **Maintain whitelists** - live mode bans automatically, so legitimate ranges must be protected up front
+2. **Use multiple windows** - different window sizes and cluster arg sets catch different traffic patterns
+3. **Rehearse with the [Docker demo stack]({{< relref "/docs/guides/docker-testing/" >}})** - it shows the full closed loop (detection, firewall enforcement, ban expiry, Grafana dashboard) against simulated traffic before you touch production

@@ -1,1 +1,96 @@
-// Put your custom SCSS variables here
+// =============================================================
+// cidrx "Address Space" - design tokens
+// Light-first data-craft aesthetic: warm paper, vermilion ember,
+// cobalt blue, amber. Expressive grotesque headlines.
+// =============================================================
+
+// --- Brand palette ------------------------------------------------
+$cx-paper:   #faf7f2; // warm paper (light body bg)
+$cx-surface: #ffffff; // cards / raised surfaces (light)
+$cx-ink:     #14161a; // near-black ink (headings, light)
+$cx-body:    #33383f; // body text (light)
+$cx-line:    #e7e0d4; // warm hairline borders (light)
+
+$cx-ember:   #c73e06; // primary accent - links, buttons (AA on paper)
+$cx-flame:   #f4490c; // vivid display accent - large type, graphics
+$cx-cobalt:  #0b5fd9; // secondary accent - data blue
+$cx-amber:   #ffb02e; // highlight / decoration
+$cx-deep:    #101522; // deep ink-navy panel (terminal, CTA)
+
+// Dark mode counterparts
+$cx-dark-bg:      #0e1219;
+$cx-dark-surface: #151b25;
+$cx-dark-line:    #232b38;
+$cx-dark-body:    #c8ceda;
+$cx-dark-heading: #f2f4f8;
+$cx-dark-ember:   #ff8a5c; // links on dark (AA)
+$cx-dark-cobalt:  #6fa8ff;
+
+// --- Typography ----------------------------------------------------
+$font-family-sans-serif:
+    "Instrument Sans",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif,
+    "Apple Color Emoji",
+    "Segoe UI Emoji";
+
+$font-family-monospace:
+    "Spline Sans Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    monospace;
+
+$cx-font-display: "Bricolage Grotesque", $font-family-sans-serif;
+
+$headings-font-family: $cx-font-display;
+$headings-font-weight: 700;
+$headings-color: $cx-ink;
+
+$font-size-base: 1rem;
+$lead-font-weight: 400;
+
+// --- Bootstrap overrides (light) ----------------------------------
+$primary: $cx-ember;
+$info: $cx-cobalt;
+
+$body-bg: $cx-paper;
+$body-color: $cx-body;
+
+$link-color: $cx-ember;
+$link-hover-color: darken($cx-ember, 8%);
+
+$border-color: $cx-line;
+$card-border-color: $cx-line;
+
+$border-radius: 0.5rem;
+$border-radius-sm: 0.375rem;
+$border-radius-lg: 0.75rem;
+
+$code-color: #a83405;
+
+// --- Dark color mode variables (Doks consumes these) ---------------
+$body-bg-dark: $cx-dark-bg;
+$body-overlay-dark: $cx-dark-surface;
+$border-dark: $cx-dark-line;
+$body-color-dark: $cx-dark-body;
+$headings-color-dark: $cx-dark-heading;
+$dots-dark: darken($cx-dark-body, 50%);
+$link-color-dark: $cx-dark-ember;
+$button-color-dark: $link-color-dark;
+$focus-color-dark: lighten($link-color-dark, 2.5%);
+
+$light-bg-subtle-dark: $cx-dark-surface;
+$light-border-subtle-dark: $cx-dark-line;
+
+$navbar-dark-color: $body-color-dark;
+$navbar-dark-hover-color: $link-color-dark;
+$navbar-dark-active-color: $link-color-dark;

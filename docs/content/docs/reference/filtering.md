@@ -21,22 +21,25 @@ cidrx filters traffic in two distinct layers: **per-request filters** decide whi
 
 Per-request, before a request enters analysis:
 
-1. **Time window** -- requests outside startTime/endTime are dropped
-2. **User-Agent regex / Endpoint regex** -- only matching requests are analyzed
-3. **User-Agent whitelist** -- matching requests are excluded from analysis, and their source IPs are immunized against bans
-4. **User-Agent blacklist** -- matching requests mark their source IP for force-jailing (the request itself is still analyzed)
-5. **CIDR ranges** -- focus reporting on specific networks
+1. **Time window** - requests outside startTime/endTime are dropped
+2. **User-Agent regex / Endpoint regex** - only matching requests are analyzed
+3. **User-Agent whitelist** - matching requests are excluded from analysis, and their source IPs are immunized against bans
+4. **User-Agent blacklist** - matching requests mark their source IP for force-jailing (the request itself is still analyzed)
 
 In the ban pipeline, after clustering:
 
-6. **IP whitelist** -- detected CIDRs covered by a whitelist entry are removed before they reach the jail, and the whitelist is subtracted again from everything published (ban file, `/bans`)
-7. **IP blacklist** -- manual always-ban CIDRs, appended to the published ban list
+5. **IP whitelist** - detected CIDRs covered by a whitelist entry are removed before they reach the jail, and the whitelist is subtracted again from everything published (ban file, `/bans`)
+6. **IP blacklist** - manual always-ban CIDRs, appended to the published ban list
+
+CIDR ranges (`cidrRanges` / `--rangesCidr`) are **not** a filter in either layer - they only add [per-range request counts](#cidr-range-reporting) to the report.
 
 **The whitelist always wins**: over detections, over active bans, and over the manual blacklist.
 
 ## IP Whitelist
 
-Whitelisted CIDRs can never be banned. The whitelist is applied to detected clusters before the jail update and subtracted from every published ban list -- it does not exclude the traffic from analysis or statistics.
+Whitelisted CIDRs can never be banned. The whitelist is applied to detected clusters before the jail update and subtracted from every published ban list - it does not exclude the traffic from analysis or statistics.
+
+All list files (IP and User-Agent, whitelist and blacklist) are loaded **once at startup**. In live mode, restart cidrx to pick up edits; a malformed list file fails loudly at startup rather than silently banning protected ranges.
 
 ### File Format
 
@@ -53,7 +56,7 @@ One CIDR per line. Comments with `#`. Blank lines ignored.
 # Office networks
 192.0.2.0/24
 
-# CDN providers — copy your CDN's published ranges here
+# CDN providers - copy your CDN's published ranges here
 
 # Monitoring services
 198.51.100.50/32    # uptime checker
@@ -118,7 +121,7 @@ A request is excluded if its User-Agent **exactly equals** a listed string (case
 
 ## User-Agent Blacklist
 
-Requests whose User-Agent is listed get their source IP **force-jailed** as a /32 -- no clustering threshold needs to be met. Matching is the same **case-insensitive exact match** of the full User-Agent string. If the same string appears in both lists, the whitelist wins.
+Requests whose User-Agent is listed get their source IP **force-jailed** as a /32 - no clustering threshold needs to be met. Matching is the same **case-insensitive exact match** of the full User-Agent string. If the same string appears in both lists, the whitelist wins.
 
 ### File Format
 
@@ -164,7 +167,7 @@ CLI:
 
 ### Required-Literal Prefilter
 
-cidrx automatically derives the literals a regex *must* contain (e.g. `bot` from `.*bot.*`, or `curl`/`wget` from `curl|wget`) and screens each input with fast substring checks before running the full regex engine. Semantics are unchanged -- the prefilter only skips inputs the regex would reject anyway -- but patterns with distinctive required literals filter large logs considerably faster. Patterns without any required literal (e.g. `.*`) fall back to running the regex directly.
+cidrx automatically derives the literals a regex *must* contain (e.g. `bot` from `.*bot.*`, or `curl`/`wget` from `curl|wget`) and screens each input with fast substring checks before running the full regex engine. Semantics are unchanged - the prefilter only skips inputs the regex would reject anyway - but patterns with distinctive required literals filter large logs considerably faster. Patterns without any required literal (e.g. `.*`) fall back to running the regex directly.
 
 ## Endpoint Regex
 
@@ -216,9 +219,9 @@ startTime = "2025-01-15T14:00:00Z"
 endTime = "2025-01-15T16:00:00Z"
 ```
 
-## CIDR Range Focusing
+## CIDR Range Reporting
 
-Analyze only traffic from specific networks.
+Report request counts for specific networks. This is a **reporting feature, not a filter**: every range listed gets its own request count and traffic share in the output, while the analysis - including clustering - still sees all traffic.
 
 TOML:
 ```toml
@@ -230,7 +233,7 @@ CLI:
 --rangesCidr "203.0.113.0/24" --rangesCidr "198.51.100.0/24"
 ```
 
-Useful for investigating known problematic ASNs or following up on detected ranges.
+Useful for keeping an eye on known problematic ASNs or following up on previously detected ranges.
 
 ## Combining Filters
 
@@ -280,8 +283,8 @@ useForJail = [true]
 ## Performance Tips
 
 - Prefer regex patterns with distinctive required literals (`sqlmap|nikto` over `.*`) so the prefilter can skip the regex engine for most lines.
-- Use User-Agent whitelist/blacklist files instead of regex when matching exact strings -- the exact matcher is a single O(1) map lookup.
-- cidrx caches compiled regex patterns. The same pattern used across tries is compiled once.
+- Use User-Agent whitelist/blacklist files instead of regex when matching exact strings - the exact matcher is a single O(1) map lookup.
+- Regex patterns are compiled once at startup (per trie/window), never per line.
 
 ## Troubleshooting
 

@@ -4,7 +4,7 @@ relativeURLs = false
 canonifyURLs = false
 disableAliases = true
 disableHugoGeneratorInject = true
-# disableKinds = ["taxonomy", "term"]
+disableKinds = ["taxonomy", "term"]
 enableEmoji = true
 enableGitInfo = false
 enableRobotsTXT = true
@@ -51,13 +51,7 @@ copyRight = "Copyright (c) 2025 cidrx Project"
     dir = ":cacheDir/:project"
     maxAge = -1 # "30m"
 
-[taxonomies]
-  contributor = "contributors"
-  category = "categories"
-  tag = "tags"
-
 [permalinks]
-  blog = "/blog/:slug/"
   docs = "/docs/:sections[1:]/:slug/"
 # docs = "/docs/1.0/:sections[1:]/:slug/"
 
@@ -66,20 +60,6 @@ copyRight = "Copyright (c) 2025 cidrx Project"
 
 [pagination]
   pagerSize = 10
-
-[related]
-  threshold = 80
-  includeNewer = true
-  toLower = false
-    [[related.indices]]
-      name = "categories"
-      weight = 100
-    [[related.indices]]
-      name = "tags"
-      weight = 80
-    [[related.indices]]
-      name = "date"
-      weight = 10
 
 [imaging]
   anchor = "Center"

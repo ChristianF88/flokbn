@@ -14,9 +14,4 @@ seo:
   noindex: false
 ---
 
-Deep dive into cidrx internals for power users, developers, and those optimizing for their workload.
-
-## Topics
-
-- **[Internals]({{< relref "/docs/architecture/internals/" >}})** - Pipeline, trie data structure, jail system, and package organization
-- **[Performance]({{< relref "/docs/architecture/performance/" >}})** - Benchmarks, optimization techniques, and scaling
+Deep dive into cidrx internals for power users, developers, and those optimizing for their workload - the pipeline, the binary trie, the jail system, and the benchmarks behind the performance claims.

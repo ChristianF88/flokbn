@@ -16,13 +16,6 @@ seo:
 
 cidrx is an open-source IP clustering tool that welcomes contributions from the community. Whether you're fixing bugs, adding features, improving documentation, or optimizing performance, your help is appreciated.
 
-## Getting Started
-
-Choose the guide that fits your contribution:
-
-- **[Developer Guide]({{< relref "/docs/contributing/developer-guide/" >}})** - Complete development workflow, testing, benchmarking, and performance requirements
-- **[Documentation]({{< relref "/docs/contributing/documentation/" >}})** - How to update the Hugo-based documentation site
-
 ## Ways to Contribute
 
 - **Code**: Implement new features, fix bugs, or optimize performance

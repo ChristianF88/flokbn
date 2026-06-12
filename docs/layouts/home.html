@@ -1,55 +1,360 @@
 {{ define "main" }}
-<section class="section container-fluid mt-n3 pb-3">
-  <div class="row justify-content-center">
-    <div class="col-lg-12 text-center">
-      <h1>{{ .Title }}</h1>
-    </div>
-    <div class="col-lg-9 col-xl-8 text-center">
-      <p class="lead">{{ .Params.lead | safeHTML }}</p>
-      {{ with site.GetPage "/docs/getting-started/introduction" }}<a class="btn btn-primary btn-cta rounded-pill btn-lg my-3" href="{{ .Permalink }}" role="button">Docs</a>{{ end }}
-      {{ .Content }}
-    </div>
-  </div>
-</section>
-{{ end }}
+<div class="cx-home">
 
-{{ define "sidebar-prefooter" }}
-  {{ if site.Params.doks.backgroundDots -}}
-  <div class="d-flex justify-content-start">
-    <div class="bg-dots"></div>
-  </div>
-  {{ end -}}
-  {{ if eq $.Site.Language.LanguageName "English" }}
-  <section class="section section-md section-features">
-    <div class="container">
-      <div class="row justify-content-center text-center">
-        <div class="col-lg-5">
-          <h2 class="h4">Emergency Response</h2>
-          <p>Quickly identify high-volume IP clusters in your logs. {{ with site.GetPage "/docs/guides/static-analysis" }}<a href="{{ .Permalink }}">Static analysis guide →</a>{{ end }}</p>
+  <!-- ============================================================ HERO -->
+  <section class="cx-hero">
+    <div class="cx-shell">
+      <div class="cx-hero-grid">
+        <div class="cx-hero-copy">
+          <p class="cx-kicker"><span class="cx-kicker-dot" aria-hidden="true"></span>Open source &middot; Go &middot; IPv4 &middot; CLI</p>
+          <h1 class="cx-hero-title">
+            A million IPs.<br>
+            A handful of <span class="cx-hero-accent">ranges</span>.
+          </h1>
+          <p class="cx-hero-lead">{{ .Params.lead | safeHTML }}</p>
+          <div class="cx-hero-actions">
+            {{ with site.GetPage "/docs/getting-started/quick-start" }}
+            <a class="cx-btn cx-btn-primary" href="{{ .RelPermalink }}">Quick start<span class="cx-btn-arrow" aria-hidden="true">&rarr;</span></a>
+            {{ end }}
+            {{ with site.GetPage "/docs/reference/cli-flags" }}
+            <a class="cx-btn cx-btn-ghost" href="{{ .RelPermalink }}">CLI reference</a>
+            {{ end }}
+          </div>
+          <p class="cx-hero-meta"><code>static</code> for historical logs &middot; <code>live</code> for real-time banning &middot; JSON / plain / TUI output</p>
         </div>
-        <div class="col-lg-5">
-          <h2 class="h4">Real-Time Protection</h2>
-          <p>Continuous monitoring with automatic IP banning. {{ with site.GetPage "/docs/guides/live-protection" }}<a href="{{ .Permalink }}">Live protection guide →</a>{{ end }}</p>
+
+        <div class="cx-hero-viz" aria-hidden="false">
+          <svg class="cx-trie" viewBox="0 0 660 430" role="img" aria-label="Diagram: a binary trie groups individual IP addresses into a single CIDR range, 203.0.113.0/24" xmlns="http://www.w3.org/2000/svg">
+            <title>IPs collapse into a CIDR range through the trie</title>
+            <!-- edges -->
+            <g class="cx-trie-edges">
+              <path class="cx-edge" d="M40,215 C100,215 100,115 160,115"/>
+              <path class="cx-edge cx-edge-hot" d="M40,215 C100,215 100,315 160,315"/>
+              <path class="cx-edge" d="M160,115 C215,115 215,65 270,65"/>
+              <path class="cx-edge" d="M160,115 C215,115 215,165 270,165"/>
+              <path class="cx-edge cx-edge-hot" d="M160,315 C215,315 215,265 270,265"/>
+              <path class="cx-edge cx-edge-hot" d="M160,315 C215,315 215,365 270,365"/>
+              <path class="cx-edge" d="M270,65 C325,65 325,40 380,40"/>
+              <path class="cx-edge" d="M270,65 C325,65 325,90 380,90"/>
+              <path class="cx-edge" d="M270,165 C325,165 325,140 380,140"/>
+              <path class="cx-edge" d="M270,165 C325,165 325,190 380,190"/>
+              <path class="cx-edge cx-edge-hot" d="M270,265 C325,265 325,240 380,240"/>
+              <path class="cx-edge cx-edge-hot" d="M270,265 C325,265 325,290 380,290"/>
+              <path class="cx-edge cx-edge-hot" d="M270,365 C325,365 325,340 380,340"/>
+              <path class="cx-edge cx-edge-hot" d="M270,365 C325,365 325,390 380,390"/>
+            </g>
+            <!-- bracket grouping the hot leaves -->
+            <path class="cx-bracket" d="M496,228 h14 v174 h-14" fill="none"/>
+            <!-- nodes -->
+            <g class="cx-trie-nodes">
+              <circle class="cx-node cx-node-root" cx="40" cy="215" r="9"/>
+              <circle class="cx-node" cx="160" cy="115" r="7"/>
+              <circle class="cx-node cx-node-hot" cx="160" cy="315" r="7"/>
+              <circle class="cx-node" cx="270" cy="65" r="6"/>
+              <circle class="cx-node" cx="270" cy="165" r="6"/>
+              <circle class="cx-node cx-node-hot" cx="270" cy="265" r="6"/>
+              <circle class="cx-node cx-node-hot" cx="270" cy="365" r="6"/>
+              <g class="cx-leaves">
+                <circle class="cx-node cx-node-leaf" cx="380" cy="40" r="5"/>
+                <circle class="cx-node cx-node-leaf" cx="380" cy="90" r="5"/>
+                <circle class="cx-node cx-node-leaf" cx="380" cy="140" r="5"/>
+                <circle class="cx-node cx-node-leaf" cx="380" cy="190" r="5"/>
+                <circle class="cx-halo" cx="380" cy="240" r="5"/>
+                <circle class="cx-halo" cx="380" cy="290" r="5"/>
+                <circle class="cx-halo" cx="380" cy="340" r="5"/>
+                <circle class="cx-halo" cx="380" cy="390" r="5"/>
+                <circle class="cx-node cx-node-leaf cx-node-hot" cx="380" cy="240" r="5"/>
+                <circle class="cx-node cx-node-leaf cx-node-hot" cx="380" cy="290" r="5"/>
+                <circle class="cx-node cx-node-leaf cx-node-hot" cx="380" cy="340" r="5"/>
+                <circle class="cx-node cx-node-leaf cx-node-hot" cx="380" cy="390" r="5"/>
+              </g>
+            </g>
+            <!-- leaf labels -->
+            <g class="cx-trie-labels">
+              <text x="394" y="44">192.0.2.17</text>
+              <text x="394" y="94">192.0.2.44</text>
+              <text x="394" y="144">198.51.100.6</text>
+              <text x="394" y="194">198.51.100.71</text>
+              <text class="cx-label-hot" x="394" y="244">203.0.113.9</text>
+              <text class="cx-label-hot" x="394" y="294">203.0.113.54</text>
+              <text class="cx-label-hot" x="394" y="344">203.0.113.131</text>
+              <text class="cx-label-hot" x="394" y="394">203.0.113.202</text>
+              <text class="cx-label-root" x="28" y="244">0.0.0.0/0</text>
+            </g>
+            <!-- range chip -->
+            <g class="cx-range-chip" transform="translate(518,288)">
+              <rect x="0" y="0" rx="6" width="134" height="54"/>
+              <text class="cx-chip-cidr" x="12" y="23">203.0.113.0/24</text>
+              <text class="cx-chip-tag" x="12" y="42">DETECTED CLUSTER</text>
+            </g>
+          </svg>
         </div>
-        <div class="col-lg-5">
-          <h2 class="h4">Forensic Analysis</h2>
-          <p>Investigate historical traffic patterns and time windows. {{ with site.GetPage "/docs/reference/filtering" }}<a href="{{ .Permalink }}">Filtering reference →</a>{{ end }}</p>
+      </div>
+    </div>
+
+    <!-- IPv4 range strip -->
+    <div class="cx-rangestrip" aria-hidden="true">
+      <div class="cx-shell">
+        <div class="cx-rangestrip-track">
+          <span class="cx-seg" style="flex:9"></span>
+          <span class="cx-seg cx-seg-hit" style="flex:2"><i>192.0.2.0/24</i></span>
+          <span class="cx-seg" style="flex:14"></span>
+          <span class="cx-seg cx-seg-hit cx-seg-hit-b" style="flex:3"><i>198.51.100.0/24</i></span>
+          <span class="cx-seg" style="flex:7"></span>
+          <span class="cx-seg cx-seg-hit" style="flex:4"><i>203.0.113.0/24</i></span>
+          <span class="cx-seg" style="flex:11"></span>
+        </div>
+        <div class="cx-rangestrip-caption">
+          <span>0.0.0.0</span>
+          <span>one pass over the IPv4 space - detected ranges light up</span>
+          <span>255.255.255.255</span>
         </div>
       </div>
     </div>
   </section>
-  {{ end }}
+
+  <!-- ============================================================ STATS -->
+  <section class="cx-stats">
+    <div class="cx-shell">
+      <div class="cx-stats-grid">
+        <div class="cx-stat">
+          <span class="cx-stat-num">~4M</span>
+          <span class="cx-stat-label">requests/sec measured parse rate, full parse on the reference dataset</span>
+        </div>
+        <div class="cx-stat">
+          <span class="cx-stat-num">~50<em>ms</em></span>
+          <span class="cx-stat-label">trie build for ~1.2M unique IPs on the reference dataset</span>
+        </div>
+        <div class="cx-stat">
+          <span class="cx-stat-num">&lt;1<em>ms</em></span>
+          <span class="cx-stat-label">cluster detection across multiple cluster arg sets</span>
+        </div>
+        <div class="cx-stat">
+          <span class="cx-stat-num">~50<em>B</em></span>
+          <span class="cx-stat-label">memory per unique IP in the trie - usage scales linearly</span>
+        </div>
+      </div>
+      <p class="cx-stats-note">Measured on a 2.3M-request real-world dataset on a single Linux workstation - your numbers will vary with hardware and log shape. {{ with site.GetPage "/docs/architecture/performance" }}<a href="{{ .RelPermalink }}">Full benchmarks &rarr;</a>{{ end }}</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ DEMO -->
+  <section class="cx-demo">
+    <div class="cx-shell">
+      <div class="cx-demo-grid">
+        <div class="cx-demo-copy">
+          <p class="cx-section-kicker">00 / SEE IT RUN</p>
+          <h2 class="cx-section-title">One command from raw log to clustered&nbsp;ranges</h2>
+          <p>Point <code>cidrx static</code> at an access log and give it one or more cluster arg sets - <code>minSize,minDepth,maxDepth,threshold</code>. Each set is a detection tier: tight ones catch single hot hosts, loose ones catch whole subnets misbehaving together.</p>
+          <ul class="cx-checklist">
+            <li>Multiple detection tiers in a single pass</li>
+            <li>Whitelists protect monitoring and partner IPs</li>
+            <li>Plain or JSON output you can script into <code>iptables</code>, <code>nftables</code>, or a WAF</li>
+          </ul>
+          {{ with site.GetPage "/docs/guides/static-analysis" }}
+          <a class="cx-inline-link" href="{{ .RelPermalink }}">Static analysis guide &rarr;</a>
+          {{ end }}
+        </div>
+        <div class="cx-terminal" role="figure" aria-label="Illustrative cidrx terminal session">
+          <div class="cx-terminal-bar">
+            <span class="cx-terminal-dot"></span><span class="cx-terminal-dot"></span><span class="cx-terminal-dot"></span>
+            <span class="cx-terminal-title">cidrx static - illustrative output, RFC&nbsp;5737 ranges</span>
+          </div>
+          <pre class="cx-terminal-body"><code><span class="t-prompt">$</span> cidrx static --logfile /var/log/nginx/access.log \
+    --clusterArgSets 1000,24,32,0.1 \
+    --clusterArgSets 10000,16,24,0.2 --plain
+
+<span class="t-head">ANALYSIS OVERVIEW</span>
+<span class="t-dim">────────────────────────────────────────────</span>
+Total Requests:  <span class="t-num">2,345,057</span>
+Parse Rate:      <span class="t-num">4,388,769</span> requests/sec
+Duration:        <span class="t-num">570</span> ms
+
+<span class="t-head">CLUSTERING RESULTS</span> (2 sets)
+<span class="t-dim">────────────────────────────────────────────</span>
+Set 1: min_size=1000, depth=24-32, threshold=0.10
+  <span class="t-hot">192.0.2.86/32</span>        1,574 requests  (  0.07%)
+  <span class="t-hot">198.51.100.192/26</span>    3,083 requests  (  0.13%)
+
+Set 2: min_size=10000, depth=16-24, threshold=0.20
+  <span class="t-hot">203.0.113.0/24</span>      52,868 requests  (  2.25%)
+  <span class="t-hot">198.51.100.0/24</span>     28,812 requests  (  1.23%)</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ PIPELINE -->
+  <section class="cx-pipeline">
+    <div class="cx-shell">
+      <p class="cx-section-kicker">01 / HOW IT WORKS</p>
+      <h2 class="cx-section-title">Five stages, one pass</h2>
+      <ol class="cx-pipe">
+        <li class="cx-pipe-step">
+          <span class="cx-pipe-idx">1</span>
+          <h3>Parse</h3>
+          <p>Configurable format strings read Apache, Nginx, or custom logs. An IP-only fast path skips every field the analysis doesn&rsquo;t need.</p>
+          {{ with site.GetPage "/docs/reference/log-formats" }}<a href="{{ .RelPermalink }}">Log formats</a>{{ end }}
+        </li>
+        <li class="cx-pipe-step">
+          <span class="cx-pipe-idx">2</span>
+          <h3>Filter</h3>
+          <p>Time windows, whitelist/blacklist files, and regex filters on User-Agent and endpoint - with a literal prefilter so the regex engine rarely runs.</p>
+          {{ with site.GetPage "/docs/reference/filtering" }}<a href="{{ .RelPermalink }}">Filtering</a>{{ end }}
+        </li>
+        <li class="cx-pipe-step">
+          <span class="cx-pipe-idx">3</span>
+          <h3>Build trie</h3>
+          <p>Every surviving IP is inserted into a binary trie - on the reference dataset, clustering then runs in microseconds per arg set.</p>
+          {{ with site.GetPage "/docs/architecture/internals" }}<a href="{{ .RelPermalink }}">Internals</a>{{ end }}
+        </li>
+        <li class="cx-pipe-step">
+          <span class="cx-pipe-idx">4</span>
+          <h3>Detect clusters</h3>
+          <p>Configurable depth ranges and thresholds walk the trie and emit the CIDR ranges where traffic concentrates.</p>
+          {{ with site.GetPage "/docs/reference/clustering" }}<a href="{{ .RelPermalink }}">Clustering</a>{{ end }}
+        </li>
+        <li class="cx-pipe-step">
+          <span class="cx-pipe-idx">5</span>
+          <h3>Jail</h3>
+          <p>Detected ranges land in a persistent jail - the state your firewall automation reads to ban and unban.</p>
+          {{ with site.GetPage "/docs/architecture/internals" }}<a href="{{ .RelPermalink }}#jail-system">Jail system</a>{{ end }}
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ============================================================ MODES -->
+  <section class="cx-modes">
+    <div class="cx-shell">
+      <p class="cx-section-kicker">02 / TWO MODES</p>
+      <h2 class="cx-section-title">Analyze logs after the fact, or watch them live</h2>
+      <div class="cx-modes-grid">
+        <article class="cx-mode-card">
+          <div class="cx-mode-head">
+            <span class="cx-mode-chip">cidrx static</span>
+            <h3>Static analysis</h3>
+          </div>
+          <p>Analyze historical log files. Slice by time window, query specific CIDR ranges, and - when the use case calls for it - generate a ban-candidate list from what actually happened.</p>
+          <ul>
+            <li>Multi-tier detection with several cluster arg sets per run</li>
+            <li>Time-window filtering for forensic slices</li>
+            <li>JSON, compact JSON, plain text, or interactive TUI</li>
+          </ul>
+          {{ with site.GetPage "/docs/guides/static-analysis" }}<a class="cx-inline-link" href="{{ .RelPermalink }}">Static analysis guide &rarr;</a>{{ end }}
+        </article>
+        <article class="cx-mode-card cx-mode-card-live">
+          <div class="cx-mode-head">
+            <span class="cx-mode-chip cx-mode-chip-live"><span class="cx-live-dot" aria-hidden="true"></span>cidrx live</span>
+            <h3>Live protection</h3>
+          </div>
+          <p>Continuous monitoring over the Lumberjack protocol (Filebeat-compatible). Sliding windows watch traffic in real time; detected ranges are banned automatically.</p>
+          <ul>
+            <li>Bounded memory via <code>slidingWindowMaxSize</code></li>
+            <li>Persistent jail state with escalating ban stages</li>
+            <li>HTTP <code>/stats</code>, <code>/bans</code> and Prometheus <code>/metrics</code> endpoints</li>
+            <li>{{ with site.GetPage "/docs/guides/docker-testing" }}<a href="{{ .RelPermalink }}">Docker demo stack</a>{{ end }} - closed-loop firewall with a Grafana dashboard</li>
+          </ul>
+          {{ with site.GetPage "/docs/guides/live-protection" }}<a class="cx-inline-link" href="{{ .RelPermalink }}">Live protection guide &rarr;</a>{{ end }}
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ FEATURES -->
+  <section class="cx-features">
+    <div class="cx-shell">
+      <p class="cx-section-kicker">03 / FEATURES</p>
+      <h2 class="cx-section-title">What&rsquo;s in the box</h2>
+      <div class="cx-feature-grid">
+        <article class="cx-feature">
+          <span class="cx-feature-idx">/01</span>
+          <h3>Automatic clustering</h3>
+          <p>IPs group into CIDR ranges without manual configuration - you tune size, depth, and threshold, the trie does the rest.</p>
+        </article>
+        <article class="cx-feature">
+          <span class="cx-feature-idx">/02</span>
+          <h3>Multi-trie detection</h3>
+          <p>Run several detection configurations simultaneously in one pass - one log read, many perspectives.</p>
+        </article>
+        <article class="cx-feature">
+          <span class="cx-feature-idx">/03</span>
+          <h3>Flexible filtering</h3>
+          <p>Whitelist and blacklist files, regex on User-Agent and endpoint, and time-based windows - combined freely.</p>
+        </article>
+        <article class="cx-feature">
+          <span class="cx-feature-idx">/04</span>
+          <h3>Block list generation</h3>
+          <p>Inspired by fail2ban: the output is a list of CIDR ranges with request counts - a ready-made candidate list for bans or rate limits.</p>
+        </article>
+        <article class="cx-feature">
+          <span class="cx-feature-idx">/05</span>
+          <h3>Four output formats</h3>
+          <p>JSON for pipelines, compact JSON for storage, plain text for humans, and an interactive TUI for exploration.</p>
+        </article>
+        <article class="cx-feature">
+          <span class="cx-feature-idx">/06</span>
+          <h3>Speed as a feature</h3>
+          <p>Zero-copy chunked I/O, an IP-only parse path, regex literal prefiltering, memory pools - the performance work is documented and benchmarked.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ DOCS MAP -->
+  <section class="cx-docsmap">
+    <div class="cx-shell">
+      <p class="cx-section-kicker">04 / THE DOCS</p>
+      <h2 class="cx-section-title">Pick your entry point</h2>
+      <div class="cx-docsmap-grid">
+        {{ $i := 0 }}
+        {{ range (site.GetPage "/docs").Sections.ByWeight }}
+        {{ $i = add $i 1 }}
+        <a class="cx-docsmap-card" href="{{ .RelPermalink }}">
+          <span class="cx-docsmap-idx">{{ printf "%02d" $i }}</span>
+          <h3>{{ .Title }}</h3>
+          <p>{{ .Summary | plainify }}</p>
+          <span class="cx-docsmap-go" aria-hidden="true">&rarr;</span>
+        </a>
+        {{ end }}
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ SCOPE -->
+  <section class="cx-scope">
+    <div class="cx-shell">
+      <div class="cx-scope-inner">
+        <h2>Scope, stated plainly</h2>
+        <ul>
+          <li><strong>IPv4 only.</strong> IPv6 is not implemented yet.</li>
+          <li><strong>Live mode ingests via Lumberjack.</strong> HTTP/JSON API support is planned.</li>
+          <li><strong>One <code>%h</code> field per log format.</strong> Multiple IP fields are not supported.</li>
+          <li><strong>No duplicate field specifiers</strong> in a log format string.</li>
+        </ul>
+        {{ with site.GetPage "/docs/getting-started/introduction" }}<a class="cx-inline-link" href="{{ .RelPermalink }}#limitations">Full limitations &rarr;</a>{{ end }}
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ CTA -->
+  <section class="cx-cta">
+    <div class="cx-shell">
+      <div class="cx-cta-inner">
+        <p class="cx-cta-mono" aria-hidden="true">203.0.113.0/24 &nbsp;&middot;&nbsp; 52,868 requests &nbsp;(2.25%)</p>
+        <h2>Cluster your first log<br>in five minutes.</h2>
+        <div class="cx-hero-actions cx-cta-actions">
+          {{ with site.GetPage "/docs/getting-started/quick-start" }}
+          <a class="cx-btn cx-btn-primary cx-btn-lg" href="{{ .RelPermalink }}">Quick start<span class="cx-btn-arrow" aria-hidden="true">&rarr;</span></a>
+          {{ end }}
+          <a class="cx-btn cx-btn-ghost cx-btn-lg" href="https://github.com/ChristianF88/cidrx">View on GitHub</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
 {{ end }}
 
-{{ define "sidebar-footer" }}
-{{ if site.Params.doks.sectionFooter -}}
-<section class="section section-md container-fluid bg-light">
-  <div class="row justify-content-center text-center">
-    <div class="col-lg-7">
-      <h2 class="mt-2">Start building with Doks today</h2>
-      {{ with site.GetPage "/docs/getting-started/introduction" }}<a class="btn btn-primary rounded-pill px-4 my-2" href="{{ .Permalink }}" role="button">{{ i18n "get-started" }}</a>{{ end }}
-    </div>
-  </div>
-</section>
-{{ end -}}
-{{ end }}
+{{ define "sidebar-prefooter" }}{{ end }}
+{{ define "sidebar-footer" }}{{ end }}

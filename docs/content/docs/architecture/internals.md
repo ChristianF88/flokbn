@@ -119,11 +119,11 @@ Log Files → Parser → Filter → Trie → Cluster Detector → Jail → Ban F
 ```
 
 **Characteristics**:
-- Continuous operation
-- Multiple independent windows
+- Continuous operation; waits for the first shipper connection at startup
+- Multiple windows with independent filters and bounds, driven by one detection loop (the loop sleeps for the largest `sleepBetweenIterations` across windows)
 - Bounded memory (sliding windows)
-- Real-time detection
-- Automatic jail updates
+- Automatic jail updates and atomic ban-file writes
+- Optional HTTP stats server (`GET /stats`, `/bans`, `/metrics`) publishing an immutable snapshot per iteration
 
 ## Data Structures
 
@@ -133,7 +133,7 @@ Each log entry is parsed into a cache-line-optimized struct:
 
 ```go
 type Request struct {
-    // Hot fields -- first cache line (accessed by trie insertion, filtering, clustering)
+    // Hot fields - first cache line (accessed by trie insertion, filtering, clustering)
     IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation
     Status    uint16     // Smaller type for status code
     Method    HTTPMethod // 1 byte enum
@@ -141,13 +141,14 @@ type Request struct {
     Bytes     uint32
     Timestamp time.Time  // Needed for time-range filtering
 
-    // Cold fields -- second cache line (only accessed during output or string filtering)
+    // Cold fields - second cache line (only accessed during output or string filtering)
     URI       string
     UserAgent string
+    IP        net.IP // Legacy: set only by the live TCP ingestor; nil from the log parser
 }
 ```
 
-IPs are stored as `uint32` -- no string allocation per IP, no `net.IP` overhead.
+IPs are stored as `uint32` - no string allocation per IP, no `net.IP` overhead. The struct also carries a legacy `net.IP` field that only the live ingestor path populates (the static log parser leaves it nil); non-hot-path code derives `net.IP` from `IPUint32` on demand.
 
 ### Binary Trie
 
@@ -188,7 +189,7 @@ type TrieNode struct {
 
 ### Cluster Detection Algorithm
 
-The detector performs depth-first traversal of the trie. A node is reported as a cluster when its two subtrees are *balanced* -- evenly loaded children mean the traffic is spread across the subnet rather than coming from one deeper source:
+The detector performs depth-first traversal of the trie. A node is reported as a cluster when its two subtrees are *balanced* - evenly loaded children mean the traffic is spread across the subnet rather than coming from one deeper source:
 
 ```
 For each trie node, descending from the root:
@@ -218,7 +219,7 @@ func detectClusters(node *TrieNode, depth int, params ClusterParams) []Cluster {
         diff := absDiff(left.Count, right.Count)
         if 2*diff < uint64(params.Threshold*float64(node.Count)) &&
             node.Count >= params.MinSize {
-            // Balanced subtree -- report and don't recurse into children
+            // Balanced subtree - report and don't recurse into children
             return []Cluster{{CIDR: nodeToCIDR(node, depth), Count: node.Count}}
         }
     }
@@ -235,7 +236,7 @@ func detectClusters(node *TrieNode, depth int, params ClusterParams) []Cluster {
 }
 ```
 
-(The real implementation does this iteratively with integer-only math; see `trie/trie.go`.)
+(The real implementation does this recursively with integer-only math; see `trie/trie.go`.)
 
 **Complexity**:
 - **Time**: O(N) where N = unique IPs (worst case)
@@ -307,40 +308,41 @@ The jail file (`--jailFile`) persists detection state as JSON. It is read on sta
 2. For each line:
    a. Parse to Request
    b. Apply time filter (if configured)
-   c. Apply IP whitelist (if configured)
-   d. Apply IP blacklist (if configured)
-   e. Apply User-Agent filters (if configured)
-   f. Apply endpoint filter (if configured)
-   g. If passed all filters, add to request list
+   c. Apply User-Agent / endpoint regex filters (if configured)
+   d. Apply User-Agent whitelist/blacklist lists (if configured)
+   e. If passed all filters, keep for this trie
 3. Build trie from filtered requests
 4. For each cluster arg set:
    a. Traverse trie
-   b. Detect clusters
-   c. Add to results
-5. Merge all detected clusters
-6. Update jail file
-7. Write ban file
-8. Output results (JSON/Plain/TUI)
+   b. Detect clusters, merge overlapping ranges
+5. Jail processing (only when jailFile AND banFile are configured):
+   a. Collect merged ranges from sets with useForJail = true
+   b. Remove anything covered by the IP whitelist
+   c. Update jail, write jail file
+   d. Write ban file (active bans + manual blacklist, minus whitelist)
+6. Output results (JSON/Plain/TUI)
 ```
+
+The IP whitelist/blacklist act in the **ban pipeline** (step 5), not on the per-line analysis - whitelisted traffic still appears in the statistics.
 
 ### Live Mode
 
 ```
-1. Start Lumberjack server on port
-2. Initialize sliding windows
-3. For each incoming log entry:
-   a. Parse to Request
-   b. Add to all windows
-4. For each window (on timer):
-   a. Expire old requests
-   b. Apply filters
-   c. Build trie
-   d. Detect clusters
-   e. Update jail
-5. On jail update:
-   a. Write ban file
-   b. Log detection event
-6. Repeat from step 3
+1. Start Lumberjack server on [live] port; wait for a shipper to connect
+2. Initialize one sliding window per [live.NAME] section
+3. Loop:
+   a. Read one batch from the ingestor
+   b. Classify User-Agents against the UA lists (whitelisted-UA requests
+      never enter any window; blacklisted-UA IPs are marked for force-jail)
+   c. For each window: apply that window's regex filters, append the
+      surviving requests, expire entries beyond the time/size bounds
+   d. For each window and each cluster arg set: detect clusters
+   e. Merge all jail-eligible detections, remove whitelisted ranges,
+      append force-jailed /32s
+   f. Update jail, write jail file, write ban file (atomic)
+   g. Publish the stats snapshot (if statsListen is set), log one
+      iteration summary line
+   h. Sleep max(sleepBetweenIterations) across windows; repeat
 ```
 
 ## Sliding Window
@@ -351,7 +353,7 @@ Live mode uses sliding windows to bound memory usage:
 - **Size-bounded**: Capped at `slidingWindowMaxSize` to prevent unbounded growth
 - **Lazy cleanup**: Cleanup runs on the detection timer, not per-request
 
-Multiple windows can run concurrently with different parameters. See [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}) for configuration.
+Multiple windows with different parameters are all updated by the single detection loop (which paces itself at the largest `sleepBetweenIterations`). See [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}) for configuration.
 
 ## Lumberjack Protocol
 
@@ -361,25 +363,25 @@ cidrx implements the Lumberjack protocol (Beats protocol) for receiving logs fro
 Client (Filebeat) → [Lumberjack Protocol] → cidrx Server
 ```
 
-**Protocol features**: compressed transport (zlib/gzip), acknowledgments, windowing for flow control, reliable delivery.
+**Protocol features** (Lumberjack v2): zlib-compressed batches, acknowledgments, windowed flow control, reliable delivery.
 
 ## Optimization Techniques
 
 ### Memory Pools
 
-Pre-allocated object pools reduce GC pressure (~10% faster parsing, stable memory usage).
+Pre-allocated object pools (trie nodes, scratch slices) reduce allocation and GC pressure.
 
-### Regex Caching
+### Regex Compilation and Prefiltering
 
-Compiled regex patterns are cached -- same pattern used across tries is compiled once (5x faster User-Agent filtering).
+Regex patterns are compiled once at startup, per trie/window. On top of that, cidrx derives each pattern's *required literals* (e.g. `bot` from `.*bot.*`) and screens every input with fast substring checks before the regex engine runs - see [Filtering]({{< relref "/docs/reference/filtering/" >}}).
 
 ### Adaptive Filtering
 
-Filtering automatically switches between sequential (<10k requests) and concurrent (>10k requests) processing.
+Static mode switches from sequential to concurrent filtering when the dataset exceeds 50,000 requests *and* filters are active; small or filter-free runs stay sequential (less overhead). Filter-free runs additionally take an IP-only parse path that never materializes full request structs.
 
 ### Buffered I/O
 
-File reading uses 256KB buffers, reducing syscalls (~10% faster parsing on large files).
+File reading uses 256KB buffers and zero-copy chunked reads, reducing syscalls on large files.
 
 See [Performance]({{< relref "/docs/architecture/performance/" >}}) for benchmarks and tuning.
 

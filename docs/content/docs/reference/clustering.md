@@ -38,7 +38,7 @@ clusterArgSets = [[minSize, minDepth, maxDepth, threshold]]
 | `maxDepth` | integer | Largest CIDR prefix (narrowest range) | 24-32 |
 | `threshold` | float | Subtree balance threshold (0.0-1.0) | 0.05-0.3 |
 
-## minSize -- Minimum Cluster Size
+## minSize - Minimum Cluster Size
 
 Minimum number of requests required for a cluster to be flagged.
 
@@ -49,7 +49,7 @@ Minimum number of requests required for a cluster to be flagged.
 | 100k-1M req/day | 1000-5000 | Focus on significant clusters |
 | > 1M req/day | 5000+ | Only major clusters |
 
-## minDepth / maxDepth -- CIDR Depth Range
+## minDepth / maxDepth - CIDR Depth Range
 
 Controls which CIDR prefix lengths the algorithm considers.
 
@@ -82,7 +82,7 @@ Controls which CIDR prefix lengths the algorithm considers.
 | Include small clusters | 28-30 | Catch coordinated groups |
 | Include single IPs | 32 | Maximum granularity |
 
-## threshold -- Subnet Balance Threshold
+## threshold - Subnet Balance Threshold
 
 Controls where in the trie a cluster boundary is drawn (0.0-1.0).
 
@@ -92,7 +92,7 @@ A trie node between minDepth and maxDepth is reported as a cluster only when **b
 2 * |a - b| < threshold * (a + b)
 ```
 
-Lower values demand near-perfect balance and yield fewer, denser clusters; higher values tolerate lopsided subtrees and yield broader detections. A node with only one populated child is never reported at that depth -- the search descends into the populated side instead. At maxDepth the balance check no longer applies: any node still holding at least minSize requests is reported. This is why detections land on the *balanced subtree* of an attack (e.g. a /27 inside a /24), not on the enclosing network.
+Lower values demand near-perfect balance and yield fewer, denser clusters; higher values tolerate lopsided subtrees and yield broader detections. A node with only one populated child is never reported at that depth - the search descends into the populated side instead. At maxDepth the balance check no longer applies: any node still holding at least minSize requests is reported. This is why detections land on the *balanced subtree* of an attack (e.g. a /27 inside a /24), not on the enclosing network.
 
 Common presets: **Strict** 0.05-0.1 (only tightly balanced clusters, fewest false positives), **Balanced** 0.1-0.2 (good default), **Loose** 0.3+ (tolerates lopsided subtrees, broader detections).
 
@@ -156,7 +156,7 @@ clusterArgSets = [[100, 28, 32, 0.05]]
 
 ## Performance
 
-Clustering is extremely fast -- typically <1ms even with multiple sets.
+Clustering is extremely fast - typically <1ms even with multiple sets (measured on one machine, varies with hardware and traffic shape):
 
 | Cluster Sets | Typical Time (1M requests, 500k unique IPs) |
 |---|---|
@@ -168,7 +168,7 @@ Narrower depth ranges and higher minSize values are slightly faster.
 
 ## Common Mistakes
 
-**Threshold too low** (`0.001`): Demands near-perfect balance between subtree halves -- you will detect almost nothing. Start at 0.05+.
+**Threshold too low** (`0.001`): Demands near-perfect balance between subtree halves - you will detect almost nothing. Start at 0.05+.
 
 **minSize too small for high traffic** (`10` on a 1M req/day site): Too much noise. Scale minSize with traffic volume.
 
@@ -185,8 +185,8 @@ Detected Threat Ranges:
   203.0.113.91/32           1,308 requests  (  0.12%)
 ```
 
-- `/26` = 64 IPs, with 3,083 requests -- a cluster of IPs in a single subnet
-- `/32` = 1 IP, with 1,308 requests -- a single high-volume IP
+- `/26` = 64 IPs, with 3,083 requests - a cluster of IPs in a single subnet
+- `/32` = 1 IP, with 1,308 requests - a single high-volume IP
 - The percentage shows each range's share of total requests after filtering
 
 ## Validation and Testing

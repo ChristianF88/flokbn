@@ -1,21 +1,28 @@
 ---
 title: "Output Formats"
-description: "JSON, plain text, compact JSON, and TUI output modes"
-summary: "Complete reference for all cidrx output formats with schemas and examples"
+description: "Static report formats (JSON, plain text, TUI) and live mode outputs (ban file, jail file, HTTP endpoints)"
+summary: "Complete reference for cidrx output: static analysis reports and the files and HTTP endpoints live mode produces"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-06-12T10:00:00+00:00
 draft: false
 weight: 260
 slug: "output-formats"
 toc: true
 seo:
   title: "cidrx Output Formats"
-  description: "Learn about cidrx output formats including JSON, plain text, and interactive TUI"
+  description: "Learn about cidrx output formats including JSON, plain text, TUI, and the live mode ban file and HTTP endpoints"
   canonical: ""
   noindex: false
 ---
 
-## Overview
+cidrx's two modes produce fundamentally different output, and this page is split accordingly:
+
+- **[Static mode](#static-mode-output)** runs once and writes an analysis **report to stdout** - JSON, compact JSON, plain text, or an interactive TUI.
+- **[Live mode](#live-mode-output)** runs forever and writes **no report at all**. Its output is the continuously updated jail and ban files, leveled log lines on stderr, and three HTTP endpoints (`/stats`, `/bans`, `/metrics`).
+
+The [ban file](#ban-file-format) and [jail file](#jail-file-format) formats at the end apply to both modes.
+
+## Static Mode Output
 
 | Format | Flag | Best For |
 |--------|------|----------|
@@ -24,83 +31,98 @@ seo:
 | Plain Text | `--plain` | Terminal reading, reports, email |
 | TUI | `--tui` | Interactive exploration, demos |
 
-## JSON (Default)
+### JSON (Default)
 
 ```bash
 ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1
 ```
 
-### Schema
+#### Schema
+
+The top level contains `metadata`, `general`, one entry per trie under `tries`, and `warnings`/`errors` arrays:
 
 ```json
 {
   "metadata": {
-    "log_file": "string",
-    "analysis_type": "static|live",
     "generated_at": "RFC3339 timestamp",
+    "analysis_type": "static",
+    "version": "string",
     "duration_ms": "number"
   },
-  "parsing": {
+  "general": {
+    "log_file": "string",
     "total_requests": "number",
-    "parse_time_ms": "number",
-    "parse_rate": "number (requests/sec)",
-    "log_format": "string"
-  },
-  "trie": {
-    "name": "string",
-    "requests_after_filtering": "number",
     "unique_ips": "number",
-    "build_time_ms": "number",
-    "active_filters": ["string"]
+    "parsing": {
+      "duration_ms": "number",
+      "rate_per_second": "number",
+      "format": "string"
+    }
   },
-  "cidr_ranges": [
+  "tries": [
     {
-      "cidr": "string",
-      "count": "number",
-      "percentage": "number"
+      "name": "string (e.g. cli_trie, or the [static.NAME] label)",
+      "parameters": {
+        "useragent_regex": "string (omitted if unset)",
+        "endpoint_regex": "string (omitted if unset)",
+        "time_range": { "start": "...", "end": "..." },
+        "cidr_ranges": ["string"],
+        "use_for_jail": ["bool"]
+      },
+      "stats": {
+        "total_requests_after_filtering": "number",
+        "unique_ips": "number",
+        "skipped_invalid_ips": "number (present only when lines with invalid/missing IPs were skipped)",
+        "insert_time_ms": "number",
+        "cidr_analysis": [
+          { "cidr": "string", "requests": "number", "percentage": "number" }
+        ]
+      },
+      "data": [
+        {
+          "parameters": {
+            "min_cluster_size": "number",
+            "min_depth": "number",
+            "max_depth": "number",
+            "mean_subnet_difference": "number"
+          },
+          "execution_time_us": "number",
+          "detected_ranges": [
+            { "cidr": "string", "requests": "number", "percentage": "number" }
+          ],
+          "merged_ranges": [
+            { "cidr": "string", "requests": "number", "percentage": "number" }
+          ]
+        }
+      ]
     }
   ],
-  "clustering": [
-    {
-      "set_number": "number",
-      "parameters": {
-        "min_size": "number",
-        "min_depth": "number",
-        "max_depth": "number",
-        "threshold": "number"
-      },
-      "execution_time_us": "number",
-      "detected_ranges": [
-        {
-          "cidr": "string",
-          "count": "number",
-          "percentage": "number"
-        }
-      ],
-      "total_count": "number",
-      "total_percentage": "number"
-    }
-  ]
+  "warnings": [ { "type": "string", "message": "string", "count": "number" } ],
+  "errors":   [ { "type": "string", "message": "string", "count": "number" } ],
+  "useragent_whitelist_ips": ["string (present only when a User-Agent whitelist matched)"],
+  "useragent_blacklist_ips": ["string (present only when a User-Agent blacklist matched)"]
 }
 ```
 
-### Processing with jq
+`tries[].data` holds one entry per cluster arg set. `detected_ranges` are the raw per-set detections; `merged_ranges` are the same detections after overlapping/adjacent CIDRs are merged - the merged list is what feeds the jail. Empty/optional fields are omitted (`omitempty`).
+
+#### Processing with jq
 
 ```bash
-# Extract all detected CIDRs
+# Extract all merged CIDRs from every trie and cluster set
 ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
-  jq -r '.clustering[].detected_ranges[].cidr'
+  jq -r '.tries[].data[].merged_ranges[].cidr'
 
 # Get CIDRs with > 1000 requests
 ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
-  jq -r '.clustering[].detected_ranges[] | select(.count > 1000) | .cidr'
+  jq -r '.tries[].data[].merged_ranges[] | select(.requests > 1000) | .cidr'
 
-# Total flagged requests
+# Total requests parsed
 ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
-  jq '.clustering[].total_count'
+  jq '.general.total_requests'
 ```
 
-### Python Processing
+#### Python Processing
 
 ```python
 import json, subprocess
@@ -112,12 +134,13 @@ result = subprocess.run(
 )
 
 data = json.loads(result.stdout)
-for cluster_set in data['clustering']:
-    for detected in cluster_set['detected_ranges']:
-        print(f"Block: {detected['cidr']} ({detected['count']} requests)")
+for trie in data['tries']:
+    for cluster_set in trie['data']:
+        for detected in cluster_set['merged_ranges']:
+            print(f"Block: {detected['cidr']} ({detected['requests']} requests)")
 ```
 
-## Compact JSON
+### Compact JSON
 
 Single-line minified JSON, same schema as above.
 
@@ -138,7 +161,7 @@ Useful for SIEM ingestion, message queues, and log aggregation:
   /var/log/cidrx/detections.log
 ```
 
-## Plain Text
+### Plain Text
 
 Human-readable formatted output with box-drawing characters and aligned columns.
 
@@ -146,7 +169,7 @@ Human-readable formatted output with box-drawing characters and aligned columns.
 ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain
 ```
 
-Example output:
+Example output (illustrative; RFC 5737 ranges):
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
@@ -169,9 +192,9 @@ Parse Rate:      4,388,769 requests/sec
 🎯 TRIE: cli_trie
 ────────────────────────────────────────────────────────────────────────────────
 Requests After Filtering: 1,230,755
-Unique IPs:              1,230,755
+Unique IPs:              1,201,344
 Trie Build Time:         47 ms
-Active Filters:          None
+Active Filters:          useragent regex
 
 🔍 CLUSTERING RESULTS (1 set)
 ...............................................................................
@@ -199,89 +222,119 @@ Useful for terminal display, reports, and email alerts:
   mail -s "cidrx Report" admin@example.com
 ```
 
-## TUI (Interactive)
+### TUI (Interactive)
 
-Terminal user interface with heatmaps, interactive tables, and real-time updates.
+Terminal user interface that runs the analysis and presents the results in scrollable panels, plus an address-space visualization of the detected clusters.
 
 ```bash
 ./cidrx static --config cidrx.toml --tui
 ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --tui
 ```
 
-**Navigation**: Arrow keys to navigate, Tab to switch panels, Enter to drill down, Q to quit.
+**Views**: a results view with four panels - Summary, Clustering, CIDR Analysis, Diagnostics - and a visualization view showing where detections sit in the address space.
 
-**Panels**: Overview (summary stats), Detection (detected ranges), Detail (selected range info), Timeline (temporal distribution).
+**Keys**: `Tab`/`Shift+Tab` switch panels, arrow keys scroll, `t` cycles tries (multi-trie configs), `v` opens the visualization (`←`/`→` change cluster set, `l` toggles linear/sqrt/log scale), `r` returns to results, `p` shows progress, `q` quits.
 
 Works both with `--config` and CLI-only parameters. Available in static mode only (not live mode).
 
-## Ban File Format
-
-When `--banFile` is specified, cidrx writes one CIDR per line:
-
-```
-198.51.100.192/26
-203.0.113.91/32
-192.0.2.2/32
-```
-
-This can be consumed directly by iptables, nginx deny directives, or cloud firewall rules:
-
-```bash
-# iptables
-while read cidr; do
-  iptables -I INPUT -s "$cidr" -j DROP
-done < /tmp/ban.txt
-
-# nginx format
-sed 's/^/deny /; s/$/;/' /tmp/ban.txt > /etc/nginx/cidrx-bans.conf
-```
-
-## Jail File Format
-
-The jail file (`--jailFile`) persists detection state as JSON. See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the full jail structure.
-
-## Generating Firewall Rules from JSON
+### Generating Firewall Rules from JSON
 
 ```bash
 # iptables rules
 ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
-  jq -r '.clustering[].detected_ranges[].cidr' | \
+  jq -r '.tries[].data[].merged_ranges[].cidr' | \
   sed 's/^/iptables -A INPUT -s /; s/$/ -j DROP/' > rules.sh
 
 # nginx deny directives
 ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
-  jq -r '.clustering[].detected_ranges[].cidr' | \
+  jq -r '.tries[].data[].merged_ranges[].cidr' | \
   sed 's/^/deny /; s/$/;/' > nginx-deny.conf
 ```
 
-## Performance Impact
+### Performance Impact
 
-| Format | Speed | Notes |
-|--------|-------|-------|
-| JSON | Fast | Minimal formatting overhead |
-| Compact JSON | Fast | Same as JSON, less whitespace |
-| Plain Text | Medium | Box drawing and alignment |
-| TUI | Slow | Full terminal rendering |
+Format choice barely affects runtime - use `--compact` for automated pipelines, `--plain` for human consumption, and avoid the TUI for very large datasets (full terminal rendering is the slowest path).
 
-Use `--compact` for automated pipelines. Use `--plain` for human consumption. Avoid TUI for very large datasets.
+### Error Output
 
-## Error Output
+Fatal errors (missing log file, invalid flags, bad config) are printed as a plain message and the process exits with code 1 - no JSON is produced. Non-fatal problems during an analysis (a failed heatmap, jail-processing errors, whitelist notices) land in the JSON `warnings` and `errors` arrays:
 
-On error, JSON output includes:
 ```json
 {
-  "error": true,
-  "message": "Failed to open log file: /var/log/nginx/access.log",
-  "code": "FILE_NOT_FOUND"
+  "warnings": [
+    { "type": "whitelist_applied", "message": "Whitelist filtering prevented 2 CIDRs from being added to jail" }
+  ],
+  "errors": [
+    { "type": "jail_processing", "message": "failed to process jail with whitelist/blacklist: ...", "count": 1 }
+  ]
 }
 ```
 
-Check exit code in scripts:
+Check the exit code in scripts:
 ```bash
-if ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 > output.json 2>&1; then
-    jq -r '.clustering[].detected_ranges[].cidr' output.json > blocklist.txt
+if ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 > output.json; then
+    jq -r '.tries[].data[].merged_ranges[].cidr' output.json > blocklist.txt
 else
     echo "Analysis failed"
     exit 1
 fi
 ```
+
+## Live Mode Output
+
+Live mode produces **no stdout report** - `--plain`, `--compact`, and `--tui` are static-only flags, and the live command rejects them with an error. Its output consists of:
+
+1. **The jail and ban files**, rewritten after every detection iteration (formats [below](#ban-file-format)).
+2. **Leveled log lines on stderr** - one summary line per iteration (window size, batch size, detected/merged/jailed counts, timings) plus warnings and errors. Configured via the `[log]` section or `--logLevel`.
+3. **HTTP endpoints**, when `statsListen` is set in the `[live]` config section (config file only - there is no CLI flag for it).
+
+### HTTP Endpoints
+
+```toml
+[live]
+port = "8080"
+statsListen = "127.0.0.1:8666"
+topTalkers = 5   # optional: top-N IPs per window in /stats
+```
+
+| Endpoint | Content |
+|----------|---------|
+| `GET /stats` | JSON snapshot of the last iteration: `ingest` (connection, queue, totals, parse errors), `windows` (size, accepted/rejected counts, per-set detections and timings, optional `top_talkers`), `jail` (active bans per stage with start/expiry), `lists`, `loop` |
+| `GET /bans` | The ban file content last written to disk, verbatim (`text/plain`) - what enforcement tooling should poll |
+| `GET /metrics` | Prometheus exposition format; all metrics are prefixed `cidrx_` (ingest, window, cluster, jail, ban-file, and loop families) |
+
+All three return `503` with a `Retry-After` header until the loop has completed its first iteration. The snapshot updates once per iteration, not per request. Bind to localhost unless you have a reason not to.
+
+See the [Live Protection guide]({{< relref "/docs/guides/live-protection/" >}}) for deployment and the [Docker demo]({{< relref "/docs/guides/docker-testing/" >}}) for a working closed-loop example that polls `/bans`.
+
+## Ban File Format
+
+Written when both `--jailFile` and `--banFile` are specified (static: once at the end of the run; live: after every iteration). The file contains a timestamp header, the active jail bans, and - when a manual blacklist is configured - a blacklist section. Comment lines start with `#`:
+
+```
+# This file was generated automatically. Last modification 2026-06-11 10:15:23 
+# Active jail bans:
+198.51.100.192/26
+203.0.113.91/32
+# Manual blacklist entries:
+192.0.2.2/32
+# End of manual blacklist
+```
+
+The file is written atomically, so readers never observe a partial file. **Filter out the `#` comment lines** before feeding it to a firewall:
+
+```bash
+# iptables
+grep -v '^#' /tmp/ban.txt | while read -r cidr; do
+  [ -n "$cidr" ] && iptables -I INPUT -s "$cidr" -j DROP
+done
+
+# nginx format
+grep -v '^#' /tmp/ban.txt | sed 's/^/deny /; s/$/;/' > /etc/nginx/cidrx-bans.conf
+```
+
+In live mode the same content is served over HTTP as `GET /bans`, which avoids file-distribution entirely - poll the endpoint instead of shipping the file.
+
+## Jail File Format
+
+The jail file (`--jailFile`) persists detection state as JSON. It is only created once at least one range has actually been jailed - a run with no detections leaves no jail file behind (the ban file, in contrast, is always written, header-only if nothing is banned). See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the full jail structure.

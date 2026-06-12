@@ -18,7 +18,7 @@ cidrx processes millions of log entries per second on commodity hardware.
 
 ## Benchmarks
 
-Measured on a 2.3M-request real-world dataset on a single Linux workstation -- your numbers will vary with hardware and log shape:
+Measured on a 2.3M-request real-world dataset on a single Linux workstation - your numbers will vary with hardware and log shape:
 
 | Metric | Measured | Notes |
 |--------|----------|-------|
@@ -57,7 +57,7 @@ Optimizations applied: zero-copy chunked file reading, an IP-only parse path tha
 
 **Bottleneck**: Regex matching
 
-Optimizations applied: compiled regex caching, a required-literal prefilter that screens lines with fast substring checks before the regex engine runs, adaptive concurrent/sequential filtering, O(1) exact-match User-Agent lists.
+Optimizations applied: regexes compiled once at startup, a required-literal prefilter that screens lines with fast substring checks before the regex engine runs, adaptive concurrent/sequential filtering, O(1) exact-match User-Agent lists.
 
 Typical per-request cost:
 - User-Agent list lookup: <1μs
@@ -84,7 +84,7 @@ Typical: <1ms for most datasets, scales linearly with unique IPs.
 
 ### Avoid Unneeded Fields
 
-If the analysis only clusters IPs (no UA/endpoint/time filters, no status breakdown), cidrx parses just the IP from each line -- the fastest path by far. Every filter that needs another field forces the full parse.
+If the analysis only clusters IPs (no UA/endpoint/time filters, no status breakdown), cidrx parses just the IP from each line - the fastest path by far. Every filter that needs another field forces the full parse.
 
 ### Regex Patterns
 
@@ -117,7 +117,7 @@ Fewer sets = faster. Start with 2-3 cluster arg sets. Higher `minSize` and narro
 
 ### Reducing Memory
 
-For large log files (>10M requests):
+If memory usage is higher than expected (the usual causes are very many unique IPs or large sliding windows in live mode), or for large log files (>10M requests):
 
 1. Use live mode with sliding windows instead of static mode
 2. Split files and analyze time ranges separately
@@ -143,22 +143,12 @@ cd cidrx/src
 
 go test -bench=. ./...              # Run all benchmarks
 go test -bench=. -benchmem ./...    # With memory stats
-go test -bench=BenchmarkIsAllowed -benchtime=1ms ./...  # Specific benchmark
+go test -bench=BenchmarkStaticPipeline ./...  # Specific benchmark
 ```
 
 ### Real-World Benchmarking
 
-```bash
-# Single run
-time ./cidrx static --logfile access.log \
-  --clusterArgSets 1000,24,32,0.1 --plain
-
-# Multiple runs for average
-for i in {1..5}; do
-  time ./cidrx static --logfile access.log \
-    --clusterArgSets 1000,24,32,0.1 --plain > /dev/null
-done
-```
+For timing full runs against a real log file, use the recipe in the [Developer Guide]({{< relref "/docs/contributing/developer-guide/#real-world-performance-test" >}}).
 
 ## Scaling
 
@@ -188,7 +178,7 @@ Diminishing returns: >4 cores provides minimal benefit (most operations single-t
 
 ### Live Mode Scaling
 
-Use multiple windows with staggered intervals for different detection speeds. See [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}) for window configuration.
+Use multiple windows with different lengths, filters, and thresholds to cover different traffic patterns. Note that one detection loop drives all windows and paces itself at the **largest** `sleepBetweenIterations` - windows differ in what they look at, not in how often they run. See [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}) for window configuration.
 
 ## Troubleshooting
 
@@ -202,10 +192,6 @@ Debug by testing without filters first:
 time ./cidrx static --logfile access.log \
   --clusterArgSets 10000,24,32,0.5 --plain
 ```
-
-### High Memory (>2GB for 1M requests)
-
-Possible causes: too many unique IPs, large sliding windows in live mode.
 
 ### Slow Clustering (>100ms)
 
