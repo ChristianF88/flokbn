@@ -19,7 +19,7 @@ func BenchmarkFullPipelineProfile(b *testing.B) {
 	tempFile, cleanup := testutil.GenerateTestLogFile(&testing.T{}, 500000)
 	defer cleanup()
 
-	parser, err := logparser.NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
+	parser, err := logparser.NewParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func BenchmarkParseOnly(b *testing.B) {
 	tempFile, cleanup := testutil.GenerateTestLogFile(&testing.T{}, 500000)
 	defer cleanup()
 
-	parser, err := logparser.NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
+	parser, err := logparser.NewParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
 	if err != nil {
 		b.Fatal(err)
 	}

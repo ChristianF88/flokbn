@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func FuzzParallelParser(f *testing.F) {
+func FuzzParser(f *testing.F) {
 	// Seed with real Apache Combined Log lines
 	seeds := []string{
 		`198.51.10.21 - - [06/Jul/2025:19:57:26 +0000] "GET /dataset/?test HTTP/1.0" 200 13984 "-" "Mozilla/5.0" "14.191.169.89"`,
@@ -35,7 +35,7 @@ func FuzzParallelParser(f *testing.F) {
 	}
 
 	format := `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
-	parser, err := NewParallelParser(format)
+	parser, err := NewParser(format)
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func FuzzLogFormatParsing(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, format string) {
 		// Creating parser with arbitrary format should not panic
-		parser, err := NewParallelParser(format)
+		parser, err := NewParser(format)
 		if err != nil {
 			return // Invalid format is fine
 		}

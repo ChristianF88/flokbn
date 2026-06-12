@@ -19,14 +19,14 @@ func BenchmarkFileIO(b *testing.B) {
 
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("ParseConcurrent_%d_lines", size), func(b *testing.B) {
-			parser, err := NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
+			parser, err := NewParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
 			if err != nil {
 				b.Fatal(err)
 			}
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _ = parser.ParseFileParallelChunked(tempFile)
+				_, _ = parser.ParseFile(tempFile)
 			}
 		})
 	}
@@ -72,7 +72,7 @@ func BenchmarkChunkProcessing(b *testing.B) {
 	tempFile, cleanup := testutil.GenerateTestLogFile(&testing.T{}, 100000) // 100K lines
 	defer cleanup()
 
-	parser, err := NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
+	parser, err := NewParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func BenchmarkChunkProcessing(b *testing.B) {
 	b.Run("ChunkProcessing", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _ = parser.ParseFileParallelChunked(tempFile)
+			_, _ = parser.ParseFile(tempFile)
 		}
 	})
 }
@@ -90,7 +90,7 @@ func BenchmarkChunkProcessing(b *testing.B) {
 // (parseLineReuseOpt), isolating per-line allocation costs. It replaces the
 // removed root-package BenchmarkParseLineIsolated with the same corpus/format.
 func BenchmarkParseLineReuseOpt(b *testing.B) {
-	parser, err := NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
+	parser, err := NewParser("%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"")
 	if err != nil {
 		b.Fatal(err)
 	}

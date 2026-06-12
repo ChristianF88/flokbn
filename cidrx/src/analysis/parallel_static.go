@@ -46,7 +46,7 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 	}
 
 	// Create parser
-	parser, err := logparser.NewParallelParser(logFormat)
+	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
 		jsonOutput.AddError("parser_init", fmt.Sprintf("failed to create parallel parser: %v", err), 1)
 		return jsonOutput, nil, err
@@ -73,7 +73,7 @@ func ParallelStaticFromConfigWithRequests(cfg *config.Config) (*output.JSONOutpu
 	parser.SkipNonIPFields = !needsNonIPFields
 
 	parseStart := time.Now()
-	requests, err := parser.ParseFileParallelChunked(cfg.Static.LogFile)
+	requests, err := parser.ParseFile(cfg.Static.LogFile)
 	parseDuration := time.Since(parseStart)
 	if err != nil {
 		jsonOutput.AddError("parse_file", fmt.Sprintf("failed to parse log file %s: %v", cfg.Static.LogFile, err), 1)
@@ -449,7 +449,7 @@ func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput,
 		logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
 	}
 
-	parser, err := logparser.NewParallelParser(logFormat)
+	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
 		jsonOutput.AddError("parser_init", fmt.Sprintf("failed to create parallel parser: %v", err), 1)
 		return jsonOutput, err

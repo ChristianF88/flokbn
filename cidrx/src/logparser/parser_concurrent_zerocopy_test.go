@@ -150,7 +150,7 @@ func sortReqKeys(ks []reqKey) {
 
 // parseConcurrentFull drives the concurrent path directly with an overridden
 // chunkSize so the >=500MB gate is bypassed and small files produce many chunks.
-func parseConcurrentFull(t *testing.T, pp *ParallelParser, path string, chunkSize int64) []ingestor.Request {
+func parseConcurrentFull(t *testing.T, pp *Parser, path string, chunkSize int64) []ingestor.Request {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
@@ -168,7 +168,7 @@ func parseConcurrentFull(t *testing.T, pp *ParallelParser, path string, chunkSiz
 	return reqs
 }
 
-func parseConcurrentIPs(t *testing.T, pp *ParallelParser, path string, chunkSize int64) ([]uint32, int) {
+func parseConcurrentIPs(t *testing.T, pp *Parser, path string, chunkSize int64) ([]uint32, int) {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
@@ -201,9 +201,9 @@ func TestConcurrentZeroCopy_DiffFullMode(t *testing.T) {
 		content := genConcurrentTestLog(nLines, trailing)
 		path := writeTempLog(t, content)
 
-		pp, err := NewParallelParser(concurrentZeroCopyFormat)
+		pp, err := NewParser(concurrentZeroCopyFormat)
 		if err != nil {
-			t.Fatalf("NewParallelParser: %v", err)
+			t.Fatalf("NewParser: %v", err)
 		}
 
 		streamReqs, err := pp.parseFileWithStreamingIO(path)
@@ -254,9 +254,9 @@ func TestConcurrentZeroCopy_DiffIPMode(t *testing.T) {
 		content := genConcurrentTestLog(nLines, trailing)
 		path := writeTempLog(t, content)
 
-		pp, err := NewParallelParser(concurrentZeroCopyFormat)
+		pp, err := NewParser(concurrentZeroCopyFormat)
 		if err != nil {
-			t.Fatalf("NewParallelParser: %v", err)
+			t.Fatalf("NewParser: %v", err)
 		}
 		pp.SkipNonIPFields = true
 
@@ -315,9 +315,9 @@ func TestConcurrentCRLF_ParityWithStreaming(t *testing.T) {
 		t.Run(v.name, func(t *testing.T) {
 			path := writeTempLog(t, v.content)
 
-			pp, err := NewParallelParser(concurrentZeroCopyFormat)
+			pp, err := NewParser(concurrentZeroCopyFormat)
 			if err != nil {
-				t.Fatalf("NewParallelParser: %v", err)
+				t.Fatalf("NewParser: %v", err)
 			}
 
 			streamReqs, err := pp.parseFileWithStreamingIO(path)
@@ -377,9 +377,9 @@ func TestConcurrentCRLF_IPModeParity(t *testing.T) {
 		content := genConcurrentTestLogLE(nLines, trailing, "\r\n")
 		path := writeTempLog(t, content)
 
-		pp, err := NewParallelParser(concurrentZeroCopyFormat)
+		pp, err := NewParser(concurrentZeroCopyFormat)
 		if err != nil {
-			t.Fatalf("NewParallelParser: %v", err)
+			t.Fatalf("NewParser: %v", err)
 		}
 		pp.SkipNonIPFields = true
 
@@ -423,9 +423,9 @@ func TestConcurrentCRLF_IPModeParity(t *testing.T) {
 func BenchmarkConcurrentZeroCopy_Full(b *testing.B) {
 	content := genConcurrentTestLog(50000, true)
 	path := writeTempLog(b, content)
-	pp, err := NewParallelParser(concurrentZeroCopyFormat)
+	pp, err := NewParser(concurrentZeroCopyFormat)
 	if err != nil {
-		b.Fatalf("NewParallelParser: %v", err)
+		b.Fatalf("NewParser: %v", err)
 	}
 	const chunkSize = 64 * 1024
 
@@ -456,9 +456,9 @@ func BenchmarkConcurrentZeroCopy_Full(b *testing.B) {
 func BenchmarkConcurrentZeroCopy_IPOnly(b *testing.B) {
 	content := genConcurrentTestLog(50000, true)
 	path := writeTempLog(b, content)
-	pp, err := NewParallelParser(concurrentZeroCopyFormat)
+	pp, err := NewParser(concurrentZeroCopyFormat)
 	if err != nil {
-		b.Fatalf("NewParallelParser: %v", err)
+		b.Fatalf("NewParser: %v", err)
 	}
 	pp.SkipNonIPFields = true
 	const chunkSize = 64 * 1024

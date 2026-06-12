@@ -1562,12 +1562,12 @@ func TestAnalyzeDuplicates(t *testing.T) {
 	defer cleanup()
 
 	logFormat := "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
-	parser, err := logparser.NewParallelParser(logFormat)
+	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
 		t.Fatalf("Could not create parser: %v", err)
 	}
 
-	requests, err := parser.ParseFileParallelChunked(testFile)
+	requests, err := parser.ParseFile(testFile)
 	if err != nil {
 		t.Fatalf("Could not parse log file: %v", err)
 	}
