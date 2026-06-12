@@ -301,6 +301,10 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	// Track invalid IPs for warning
 	var invalidIPCount int
 
+	// True unique-IP count, derived from the sorted insert slice in a single
+	// linear pass — keeps the trie insert hot path untouched.
+	var uniqueIPs int
+
 	// Fast path for unfiltered data: use sorted insertion optimization
 	if !hasFilters {
 		// Use IPUint32 directly — no conversion needed (parsed directly to uint32)
@@ -317,6 +321,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 
 		// Radix sort: O(n) vs sort.Slice O(n log n) — 10-15x faster for large arrays
 		iputils.RadixSortUint32(ipUints)
+		uniqueIPs = iputils.CountDistinctSorted(ipUints)
 
 		// Use the seq prefix-stack build (bit-identical to BatchInsertSortedUint32
 		// for ascending-sorted input, ~2x faster).
@@ -349,6 +354,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 		// Radix sort + batch sorted insert — same optimization as unfiltered fast path
 		if len(ipsToInsertUint32) > 0 {
 			iputils.RadixSortUint32(ipsToInsertUint32)
+			uniqueIPs = iputils.CountDistinctSorted(ipsToInsertUint32)
 			trieInstance.BuildSortedUint32(ipsToInsertUint32)
 		}
 	}
@@ -365,7 +371,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	// Set trie stats
 	trieResult.Stats = output.TrieStats{
 		TotalRequestsAfterFiltering: len(filteredRequests),
-		UniqueIPs:                   int(trieInstance.ParallelCountAll()),
+		UniqueIPs:                   uniqueIPs,
 		SkippedInvalidIPs:           invalidIPCount,
 		InsertTimeMS:                insertDuration.Milliseconds(),
 	}
@@ -506,6 +512,10 @@ func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput,
 	// Sort the IPs ONCE — shared across all tries (an extra win vs per-trie sort).
 	iputils.RadixSortUint32(ips)
 
+	// True unique-IP count, computed once from the shared sorted slice (single
+	// linear pass) and reused by every trie.
+	uniqueIPs := iputils.CountDistinctSorted(ips)
+
 	// Process tries in parallel, mirroring ParallelStaticFromConfigWithRequests.
 	var trieWG sync.WaitGroup
 	var triesMutex sync.Mutex
@@ -528,7 +538,7 @@ func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput,
 		go func() {
 			defer trieWG.Done()
 			for work := range trieWorkChan {
-				result := processTrieFromSortedIPs(work.name, work.config, ips, totalRequests, invalidCount, jsonOutput)
+				result := processTrieFromSortedIPs(work.name, work.config, ips, totalRequests, invalidCount, uniqueIPs, jsonOutput)
 				triesMutex.Lock()
 				trieResults = append(trieResults, result)
 				triesMutex.Unlock()
@@ -577,8 +587,10 @@ func ParallelStaticFromConfigNoRequests(cfg *config.Config) (*output.JSONOutput,
 // tries; it must not be mutated. totalRequests is the full-path TotalRequests
 // (len(ips)+invalidCount) used as the denominator for the invalid-IP warning;
 // invalidCount is the number of zero-IP lines skipped during parsing.
+// uniqueIPs is the number of distinct values in sortedIPs, computed once by the
+// caller (the slice is shared across tries, so per-trie recounting would waste work).
 func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, sortedIPs []uint32,
-	totalRequests, invalidCount int, jsonOutput *output.JSONOutput) output.TrieResult {
+	totalRequests, invalidCount, uniqueIPs int, jsonOutput *output.JSONOutput) output.TrieResult {
 
 	insertStart := time.Now()
 
@@ -635,7 +647,7 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 	// nonzero IPs inserted == len(sortedIPs); SkippedInvalidIPs == invalidCount.
 	trieResult.Stats = output.TrieStats{
 		TotalRequestsAfterFiltering: len(sortedIPs),
-		UniqueIPs:                   int(trieInstance.ParallelCountAll()),
+		UniqueIPs:                   uniqueIPs,
 		SkippedInvalidIPs:           invalidCount,
 		InsertTimeMS:                insertDuration.Milliseconds(),
 	}
@@ -900,7 +912,9 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 
 		// Parse CIDRs once for reuse across operations
 		var cidrIPNets []*net.IPNet
-		totalUniqueIPs := float64(trieInstance.CountAll())
+		// CountAll counts every insertion (duplicate IPs included), so this is
+		// the request total — percentages below are percent-of-requests.
+		totalRequests := float64(trieInstance.CountAll())
 
 		for _, cidrStr := range cidrs {
 			_, ipNet, err := net.ParseCIDR(cidrStr)
@@ -914,8 +928,8 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 			// Use IPNet-native count function for speed
 			count := trieInstance.CountInRangeIPNet(ipNet)
 			var percentage float64
-			if totalUniqueIPs > 0 {
-				percentage = float64(count) / totalUniqueIPs * 100
+			if totalRequests > 0 {
+				percentage = float64(count) / totalRequests * 100
 			}
 
 			clusterResult.DetectedRanges = append(clusterResult.DetectedRanges, output.CIDRRange{
@@ -930,8 +944,8 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 		for _, mergedIPNet := range mergedIPNets {
 			count := trieInstance.CountInRangeIPNet(mergedIPNet)
 			var percentage float64
-			if totalUniqueIPs > 0 {
-				percentage = float64(count) / totalUniqueIPs * 100
+			if totalRequests > 0 {
+				percentage = float64(count) / totalRequests * 100
 			}
 
 			clusterResult.MergedRanges = append(clusterResult.MergedRanges, output.CIDRRange{

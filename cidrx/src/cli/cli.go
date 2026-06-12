@@ -237,7 +237,7 @@ func handleLiveCommand(c *cli.Context) error {
 // handleLiveConfigMode handles live command when using config file
 func handleLiveConfigMode(c *cli.Context, configPath string) error {
 	// Validate only allowed flags in config mode
-	if err := validateConfigModeFlags(c, []string{"compact", "plain", "logLevel"}); err != nil {
+	if err := validateConfigModeFlags(c, []string{"logLevel"}); err != nil {
 		return err
 	}
 
@@ -426,6 +426,11 @@ func handleStaticFlagsMode(c *cli.Context) error {
 		return err
 	}
 	trieConfig.ClusterArgSets = clusterArgs
+	// CLI-provided cluster sets default to jailing (parity with live flags
+	// mode); TOML configs keep explicit per-set control via useForJail.
+	for range clusterArgs {
+		trieConfig.UseForJail = append(trieConfig.UseForJail, true)
+	}
 
 	// Validate CIDR ranges
 	if err := validateCIDRRanges(c); err != nil {
@@ -464,11 +469,6 @@ var App = &cli.App{
 				// Filtering flags
 				useragentRegexFlag,
 				endpointRegexFlag,
-				rangesCidrFlag,
-				// Output flags
-				plotPathFlag,
-				compactFlag,
-				plainFlag,
 				// Jail and ban management
 				jailFileFlag,
 				banFileFlag,
