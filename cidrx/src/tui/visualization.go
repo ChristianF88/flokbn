@@ -29,7 +29,7 @@ type VisualizationView struct {
 	blockScale        int // /16 bins per display-cell side (0 → default 8)
 	scaleMode         int // brightness mapping: scaleLinear, scaleSqrt or scaleLog
 
-	// Legacy caching for performance (kept for compatibility)
+	// Per-view caching (used in no-config mode)
 	cachedTrafficData map[int][256][256]uint32 // Cache traffic data per trie
 	cachedMaxTraffic  map[int]uint32           // Cache max traffic per trie
 	cachedRenderText  map[renderKey]string     // Cache rendered visualization text per (trie, set, scale mode)
@@ -61,10 +61,10 @@ func (a *App) NewVisualizationView() *VisualizationView {
 	return v
 }
 
-// PreCacheAllTries processes and caches traffic data for all tries to eliminate switching delays (legacy)
+// PreCacheAllTries processes and caches traffic data for all tries to eliminate switching delays
 func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 	if v.app.cfg == nil || v.app.multiTrieResult == nil {
-		// Legacy mode - cache single trie
+		// No-config mode - cache single trie
 		v.ProcessTrafficData(requests)
 		v.cachedTrafficData[0] = v.trafficData
 		v.cachedMaxTraffic[0] = v.maxTraffic
@@ -89,7 +89,7 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 		v.app.currentTrie = trieIndex
 
 		// Update to this trie's data
-		v.app.jsonResult = v.app.convertTrieToLegacy(trieIndex)
+		v.app.jsonResult = v.app.singleTrieOutput(trieIndex)
 		v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
 
 		// Process traffic data for this trie
@@ -110,7 +110,7 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 
 	// Restore original state
 	v.app.currentTrie = originalTrie
-	v.app.jsonResult = v.app.convertTrieToLegacy(originalTrie)
+	v.app.jsonResult = v.app.singleTrieOutput(originalTrie)
 	v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
 	v.currentClusterSet = 0
 	v.requests = originalRequests
@@ -145,13 +145,13 @@ func (v *VisualizationView) getCurrentClusterSet() *output.ClusterResult {
 		v.currentClusterSet = 0 // Reset to first cluster set
 	}
 
-	// Always use jsonResult.Clustering.Data since we convert multi-trie to legacy format
+	// Always use jsonResult.Clustering.Data since we convert multi-trie to single-trie output
 	return &v.app.jsonResult.Clustering.Data[v.currentClusterSet]
 }
 
 // updateForCurrentTrie updates the visualization for the current trie
 func (v *VisualizationView) updateForCurrentTrie() {
-	// Update cluster set count from current jsonResult (legacy format)
+	// Update cluster set count from current jsonResult
 	if v.app.jsonResult != nil {
 		v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
 		v.currentClusterSet = 0 // Reset to first cluster set
@@ -160,7 +160,7 @@ func (v *VisualizationView) updateForCurrentTrie() {
 		if v.app.cfg != nil && len(v.requests) > 0 {
 			v.updateTrafficDataCached()
 		} else if len(v.requests) > 0 {
-			// Legacy mode - no caching
+			// No-config mode - no caching
 			v.ProcessTrafficData(v.requests)
 		}
 
@@ -294,7 +294,7 @@ func (v *VisualizationView) ensureClusteredData() {
 
 // RenderCached generates the 2D visualization using optimized cache when possible
 func (v *VisualizationView) RenderCached() {
-	// Use legacy caching
+	// Use per-view caching
 	if v.app.cfg != nil {
 		currentTrie := v.app.currentTrie
 		cacheKey := v.renderCacheKey(currentTrie, v.currentClusterSet)
@@ -310,7 +310,7 @@ func (v *VisualizationView) RenderCached() {
 		v.cachedRenderText[cacheKey] = renderText
 		v.view.SetText(renderText)
 	} else {
-		// Legacy mode - no caching
+		// No-config mode - no caching
 		v.Render()
 	}
 }
@@ -503,7 +503,7 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 				// Multi-trie mode - use current trie's unique IPs
 				uniqueIPs = v.app.jsonResult.Tries[v.app.currentTrie].Stats.UniqueIPs
 			} else {
-				// Legacy mode
+				// No-config mode
 				uniqueIPs = v.app.jsonResult.General.UniqueIPs
 			}
 

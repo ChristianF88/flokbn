@@ -754,11 +754,11 @@ func TestTrafficMatrixIsGroundTruth(t *testing.T) {
 		reqFor("45.40.50.200"), reqFor("8.8.8.8"), reqFor("203.0.113.5"),
 	}
 
-	ftc := NewFastTrieCache()
+	ftc := NewTrieCache()
 	trieA := output.TrieResult{Name: "a", Data: []output.ClusterResult{*newClusterSet("14.169.0.0/16")}}
 	trieB := output.TrieResult{Name: "b", Data: []output.ClusterResult{*newClusterSet("45.40.0.0/16")}}
-	ftc.preProcessTrafficData(0, reqs, trieA)
-	ftc.preProcessTrafficData(1, reqs, trieB)
+	ftc.cacheTrafficData(0, reqs, trieA)
+	ftc.cacheTrafficData(1, reqs, trieB)
 
 	mA, maxA, okA := ftc.GetTrafficData(0)
 	mB, maxB, okB := ftc.GetTrafficData(1)
