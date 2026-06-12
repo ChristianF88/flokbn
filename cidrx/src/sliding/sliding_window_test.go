@@ -483,7 +483,7 @@ func TestSlidingWindowTrieMaxLengthAndTimeLimitAreEnforced(t *testing.T) {
 		})
 	}
 }
-func TestInsertIntoHaxmap(t *testing.T) {
+func TestAddIPStat(t *testing.T) {
 	now := time.Now()
 	ip1 := net.ParseIP("192.168.1.1")
 	ip2 := net.ParseIP("192.168.1.2")
@@ -494,7 +494,7 @@ func TestInsertIntoHaxmap(t *testing.T) {
 			IP:   ip1,
 			Time: now,
 		}
-		insertIntoHaxmap(m, ip1, ti)
+		addIPStat(m, ip1, ti)
 		ipUint32 := iputils.IPToUint32(ip1)
 		stat, exists := m.Get(ipUint32)
 		if !exists {
@@ -521,8 +521,8 @@ func TestInsertIntoHaxmap(t *testing.T) {
 			IP:   ip1,
 			Time: now.Add(2 * time.Second),
 		}
-		insertIntoHaxmap(m, ip1, ti1)
-		insertIntoHaxmap(m, ip1, ti2)
+		addIPStat(m, ip1, ti1)
+		addIPStat(m, ip1, ti2)
 		ipUint32 := iputils.IPToUint32(ip1)
 		stat, exists := m.Get(ipUint32)
 		if !exists {
@@ -548,8 +548,8 @@ func TestInsertIntoHaxmap(t *testing.T) {
 			IP:   ip2,
 			Time: now.Add(1 * time.Second),
 		}
-		insertIntoHaxmap(m, ip1, ti1)
-		insertIntoHaxmap(m, ip2, ti2)
+		addIPStat(m, ip1, ti1)
+		addIPStat(m, ip2, ti2)
 		if _, exists := m.Get(iputils.IPToUint32(ip1)); !exists {
 			t.Errorf("Expected ip1 to exist in map")
 		}
@@ -564,21 +564,21 @@ func TestInsertIntoHaxmap(t *testing.T) {
 			IP:   ip1,
 			Time: now,
 		}
-		insertIntoHaxmap(m, ip1, ti)
+		addIPStat(m, ip1, ti)
 		stat, _ := m.Get(iputils.IPToUint32(ip1))
 		if len(stat.DeltaT) != 0 {
 			t.Errorf("Expected DeltaT to be empty for first insert, got %v", stat.DeltaT)
 		}
 	})
 }
-func TestDeleteFromHaxmap(t *testing.T) {
+func TestRemoveIPStat(t *testing.T) {
 	now := time.Now()
 	ip1 := net.ParseIP("192.168.1.1")
 	ip2 := net.ParseIP("192.168.1.2")
 
 	t.Run("Delete from empty map does nothing", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
-		deleteFromHaxmap(m, ip1)
+		removeIPStat(m, ip1)
 		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
 			t.Errorf("Expected ip1 to not exist in map")
 		}
@@ -592,7 +592,7 @@ func TestDeleteFromHaxmap(t *testing.T) {
 			Count:  1,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
-		deleteFromHaxmap(m, ip1)
+		removeIPStat(m, ip1)
 		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
 			t.Errorf("Expected ip1 to be deleted from map")
 		}
@@ -606,7 +606,7 @@ func TestDeleteFromHaxmap(t *testing.T) {
 			Count:  3,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
-		deleteFromHaxmap(m, ip1)
+		removeIPStat(m, ip1)
 		got, exists := m.Get(iputils.IPToUint32(ip1))
 		if !exists {
 			t.Fatalf("Expected ip1 to still exist in map")
@@ -627,7 +627,7 @@ func TestDeleteFromHaxmap(t *testing.T) {
 			Count:  1,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
-		deleteFromHaxmap(m, ip1)
+		removeIPStat(m, ip1)
 		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
 			t.Errorf("Expected ip1 to be deleted from map")
 		}
@@ -647,7 +647,7 @@ func TestDeleteFromHaxmap(t *testing.T) {
 		}
 		m.Set(iputils.IPToUint32(ip1), stat1)
 		m.Set(iputils.IPToUint32(ip2), stat2)
-		deleteFromHaxmap(m, ip1)
+		removeIPStat(m, ip1)
 		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
 			t.Errorf("Expected ip1 to be deleted from map")
 		}
@@ -656,8 +656,8 @@ func TestDeleteFromHaxmap(t *testing.T) {
 		}
 	})
 }
-func TestDeleteFromHaxmap_EmptyDeltaTNoPanic(t *testing.T) {
-	// Verify that deleteFromHaxmap doesn't panic when DeltaT is empty
+func TestRemoveIPStat_EmptyDeltaTNoPanic(t *testing.T) {
+	// Verify that removeIPStat doesn't panic when DeltaT is empty
 	// (previously it would index the empty slice without bounds checking)
 	m := haxmap.New[uint32, IPStat](8)
 	ip := net.ParseIP("10.0.0.1")
@@ -672,7 +672,7 @@ func TestDeleteFromHaxmap_EmptyDeltaTNoPanic(t *testing.T) {
 	m.Set(ipUint32, stat)
 
 	// This should not panic
-	deleteFromHaxmap(m, ip)
+	removeIPStat(m, ip)
 
 	got, exists := m.Get(ipUint32)
 	if !exists {
