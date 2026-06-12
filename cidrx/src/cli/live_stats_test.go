@@ -37,7 +37,7 @@ func TestBuildSnapshot_ActiveBansCappedAt500(t *testing.T) {
 	st := newLiveStatsState(cfg, nil, nil)
 	j := jailWithActivePrisoners(600, time.Now())
 
-	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, 5*time.Millisecond, 0)
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, 5*time.Millisecond, 0, false)
 
 	if snap.Jail.TotalActive != 600 {
 		t.Errorf("jail.total_active = %d, want 600 (always the full count)", snap.Jail.TotalActive)
@@ -60,7 +60,7 @@ func TestBuildSnapshot_ListCIDRsCappedAt1000(t *testing.T) {
 	st := newLiveStatsState(cfg, wl, bl)
 	j := jail.NewJail()
 
-	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, time.Millisecond, 0)
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, time.Millisecond, 0, false)
 
 	if snap.Lists.Whitelist.Entries != 1500 {
 		t.Errorf("whitelist.entries = %d, want 1500 (exact count)", snap.Lists.Whitelist.Entries)
@@ -85,7 +85,7 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 	windows := []slidingWindowInstance{{name: "w", window: w, config: &config.SlidingTrieConfig{}}}
 
 	// Iteration 1 computes top talkers.
-	snap := buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0)
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0, false)
 	if snap.Loop.Iterations != 1 {
 		t.Errorf("iterations = %d, want 1", snap.Loop.Iterations)
 	}
@@ -96,12 +96,12 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 
 	// Iterations 2..5 serve the cached slice; iteration 6 recomputes.
 	for i := 2; i <= 5; i++ {
-		snap = buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0)
+		snap = buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0, false)
 		if got := snap.Windows[0].TopTalkers; len(got) != 1 || &got[0] != &first[0] {
 			t.Errorf("iteration %d: top talkers recomputed, want cached slice reused", i)
 		}
 	}
-	snap = buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0)
+	snap = buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0, false)
 	if got := snap.Windows[0].TopTalkers; len(got) != 1 || &got[0] == &first[0] {
 		t.Error("iteration 6: top talkers not recomputed, want fresh slice")
 	}
@@ -158,6 +158,6 @@ func BenchmarkBuildSnapshot(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		srv.publish(buildSnapshot(st, ing, cfg, windows, winClusterStats, &j, time.Millisecond, 1))
+		srv.publish(buildSnapshot(st, ing, cfg, windows, winClusterStats, &j, time.Millisecond, 1, false))
 	}
 }

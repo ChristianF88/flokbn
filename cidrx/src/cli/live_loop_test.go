@@ -174,10 +174,10 @@ func newLiveConfig(t *testing.T, windows map[string]*config.SlidingTrieConfig) *
 // Harness
 // ============================================================================
 
-// logEvent is one captured slog record. For "iteration" records snap holds
-// the snapshot published just before the log call (the loop publishes before
-// logging, and the handler runs synchronously on the loop goroutine, so this
-// pairing is race-free and exact).
+// logEvent is one captured slog record. For "iteration" and "heartbeat"
+// records snap holds the snapshot published just before the log call (the
+// loop publishes before logging, and the handler runs synchronously on the
+// loop goroutine, so this pairing is race-free and exact).
 type logEvent struct {
 	rec  slog.Record
 	snap *statsSnapshot
@@ -196,7 +196,7 @@ func (h *chanHandler) Handle(_ context.Context, r slog.Record) error {
 	rec := r.Clone()
 	rec.AddAttrs(h.attrs...)
 	ev := logEvent{rec: rec}
-	if r.Message == "iteration" {
+	if r.Message == "iteration" || r.Message == "heartbeat" {
 		ev.snap = h.srv.snap.Load()
 	}
 	h.ch <- ev
@@ -267,6 +267,34 @@ func parseIteration(t *testing.T, r slog.Record) iterStats {
 		BanFileWritten: written.Bool(),
 		LoopMS:         getInt("loop_ms"),
 		ClusterMS:      getInt("cluster_ms"),
+	}
+}
+
+// hbStats is the parsed attribute set of one "heartbeat" log record.
+type hbStats struct {
+	Expired        int
+	ActiveBans     int
+	BanFileWritten bool
+}
+
+func parseHeartbeat(t *testing.T, r slog.Record) hbStats {
+	t.Helper()
+	m := recordAttrs(r)
+	getInt := func(key string) int64 {
+		v, ok := m[key]
+		if !ok {
+			t.Fatalf("heartbeat record missing attr %q (attrs: %v)", key, m)
+		}
+		return v.Int64()
+	}
+	written, ok := m["ban_file_written"]
+	if !ok {
+		t.Fatalf("heartbeat record missing attr ban_file_written (attrs: %v)", m)
+	}
+	return hbStats{
+		Expired:        int(getInt("expired")),
+		ActiveBans:     int(getInt("active_bans")),
+		BanFileWritten: written.Bool(),
 	}
 }
 
@@ -342,6 +370,26 @@ func (h *loopHarness) nextIteration() (iterStats, *statsSnapshot) {
 		case <-deadline:
 			h.t.Fatal("timed out waiting for iteration log record")
 			return iterStats{}, nil
+		}
+	}
+}
+
+// nextHeartbeat returns the next "heartbeat" log record (parsed) together
+// with the snapshot published for exactly that heartbeat. Heartbeats fire
+// roughly once per second on an idle loop, so the deadline is a failure
+// bound, not a synchronization sleep.
+func (h *loopHarness) nextHeartbeat() (hbStats, *statsSnapshot) {
+	h.t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev := <-h.events:
+			if ev.rec.Message == "heartbeat" {
+				return parseHeartbeat(h.t, ev.rec), ev.snap
+			}
+		case <-deadline:
+			h.t.Fatal("timed out waiting for heartbeat log record")
+			return hbStats{}, nil
 		}
 	}
 }
@@ -799,5 +847,129 @@ func TestRunLiveLoop_NoLiveTriesErrors(t *testing.T) {
 	}
 	if got := fake.acceptCallCount(); got != 0 {
 		t.Errorf("Accept calls = %d, want 0", got)
+	}
+}
+
+// TestRunLiveLoop_HeartbeatAdvancesSnapshotWhenIdle: with zero traffic the
+// loop must keep publishing snapshots via heartbeats — time advances, no
+// iteration ever runs, and the heartbeat counter grows. Exact heartbeat
+// counts are timing-dependent and deliberately not asserted.
+func TestRunLiveLoop_HeartbeatAdvancesSnapshotWhenIdle(t *testing.T) {
+	fake := &fakeIngestor{} // no batches, stays open
+	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
+		"w": newWindowConfig(t, "", true),
+	})
+
+	h := startLoop(t, fake, cfg)
+
+	_, snap1 := h.nextHeartbeat()
+	_, snap2 := h.nextHeartbeat()
+
+	if !snap2.GeneratedAt.After(snap1.GeneratedAt) {
+		t.Errorf("snapshot GeneratedAt did not advance: first %v, second %v",
+			snap1.GeneratedAt, snap2.GeneratedAt)
+	}
+	if snap2.UptimeS < snap1.UptimeS {
+		t.Errorf("UptimeS decreased: first %d, second %d", snap1.UptimeS, snap2.UptimeS)
+	}
+	if snap1.Loop.Iterations != 0 || snap2.Loop.Iterations != 0 {
+		t.Errorf("Loop.Iterations = %d/%d, want 0/0 (no traffic, no iterations)",
+			snap1.Loop.Iterations, snap2.Loop.Iterations)
+	}
+	if snap2.Loop.HeartbeatsTotal <= snap1.Loop.HeartbeatsTotal {
+		t.Errorf("Loop.HeartbeatsTotal did not increase: first %d, second %d",
+			snap1.Loop.HeartbeatsTotal, snap2.Loop.HeartbeatsTotal)
+	}
+}
+
+// TestRunLiveLoop_HeartbeatExpiresBansWithZeroTraffic is the lockout
+// regression test: a ban whose duration elapsed must expire and leave the
+// ban file even when no traffic arrives at all (before the heartbeat, ban
+// expiry only ran on non-empty batches, so a banned client that could no
+// longer reach the server stayed banned forever).
+func TestRunLiveLoop_HeartbeatExpiresBansWithZeroTraffic(t *testing.T) {
+	now := time.Now()
+	fake := &fakeIngestor{} // no batches, stays open
+	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
+		"w": newWindowConfig(t, "", true),
+	})
+
+	// Seed the jail: 10.5.5.0/24 in cell 1 (10min duration) with a ban that
+	// started 1h ago — already overdue for expiry.
+	seeded := jail.NewJail()
+	seeded.Cells[0].Prisoners = append(seeded.Cells[0].Prisoners, jail.Prisoner{
+		CIDR:      "10.5.5.0/24",
+		BanStart:  now.Add(-time.Hour),
+		BanActive: true,
+	})
+	seeded.AllCIDRs = append(seeded.AllCIDRs, "10.5.5.0/24")
+	if err := jail.JailToFile(seeded, cfg.GetJailFile()); err != nil {
+		t.Fatalf("seeding jail file: %v", err)
+	}
+	// Pre-write a stale ban file still containing the CIDR.
+	if err := jail.WriteBanFile(cfg.GetBanFile(), []string{"10.5.5.0/24"}); err != nil {
+		t.Fatalf("seeding ban file: %v", err)
+	}
+
+	h := startLoop(t, fake, cfg)
+
+	hb, snap := h.nextHeartbeat()
+	if hb.Expired != 1 {
+		t.Errorf("heartbeat expired = %d, want 1", hb.Expired)
+	}
+	if snap.Jail.TotalActive != 0 {
+		t.Errorf("jail.total_active = %d, want 0 (ban expired)", snap.Jail.TotalActive)
+	}
+	if bans := banCIDRs(t, cfg.GetBanFile()); len(bans) != 0 {
+		t.Errorf("ban file CIDRs = %v, want empty (stale ban removed)", bans)
+	}
+	_, active, found := findPrisoner(t, cfg.GetJailFile(), "10.5.5.0/24")
+	if !found {
+		t.Fatal("10.5.5.0/24 not found in jail file")
+	}
+	if active {
+		t.Error("prisoner BanActive = true on disk, want false after heartbeat expiry")
+	}
+}
+
+// TestRunLiveLoop_HeartbeatWritesBanFileOnlyOnChange: the first heartbeat
+// performs a one-time sync write (the loop has not yet validated the ban
+// file on disk); subsequent heartbeats with unchanged ban lists must not
+// rewrite the file.
+func TestRunLiveLoop_HeartbeatWritesBanFileOnlyOnChange(t *testing.T) {
+	fake := &fakeIngestor{} // no batches, stays open
+	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
+		"w": newWindowConfig(t, "", true),
+	})
+
+	h := startLoop(t, fake, cfg)
+
+	hb1, snap1 := h.nextHeartbeat()
+	if !hb1.BanFileWritten {
+		t.Error("first heartbeat ban_file_written = false, want true (one-time sync write)")
+	}
+	lastWritten := snap1.Lists.BanFile.LastWritten
+	fi, err := os.Stat(cfg.GetBanFile())
+	if err != nil {
+		t.Fatalf("stat ban file: %v", err)
+	}
+	modTime := fi.ModTime()
+
+	for i := 2; i <= 3; i++ {
+		hb, snap := h.nextHeartbeat()
+		if hb.BanFileWritten {
+			t.Errorf("heartbeat %d ban_file_written = true, want false (no change)", i)
+		}
+		if !snap.Lists.BanFile.LastWritten.Equal(lastWritten) {
+			t.Errorf("heartbeat %d lists.ban_file.last_written = %v, want unchanged %v",
+				i, snap.Lists.BanFile.LastWritten, lastWritten)
+		}
+	}
+	fi, err = os.Stat(cfg.GetBanFile())
+	if err != nil {
+		t.Fatalf("stat ban file: %v", err)
+	}
+	if !fi.ModTime().Equal(modTime) {
+		t.Errorf("ban file mtime changed from %v to %v, want unchanged", modTime, fi.ModTime())
 	}
 }
