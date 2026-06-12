@@ -75,9 +75,6 @@ func (ftc *FastTrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOut
 
 			// 3. Pre-process traffic data for visualization
 			ftc.preProcessTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
-
-			// 4. Pre-render visualization for all cluster sets (disabled for now to avoid nil pointer issues)
-			// ftc.preRenderVisualization(trieIndex, legacyData, app)
 		}
 	}
 
@@ -224,6 +221,17 @@ func (ftc *FastTrieCache) GetPreRenderedTexts(trieIndex int) (summary, clusterin
 
 	exists = summaryExists && clusteringExists && cidrExists && diagnosticsExists
 	return summary, clustering, cidr, diagnostics, exists
+}
+
+// SetPreRenderedTexts stores all four pre-rendered panel texts for a trie.
+func (ftc *FastTrieCache) SetPreRenderedTexts(trieIndex int, summary, clustering, cidr, diagnostics string) {
+	ftc.mu.Lock()
+	defer ftc.mu.Unlock()
+
+	ftc.summaryTexts[trieIndex] = summary
+	ftc.clusterTexts[trieIndex] = clustering
+	ftc.cidrTexts[trieIndex] = cidr
+	ftc.diagnosticTexts[trieIndex] = diagnostics
 }
 
 // GetTrafficData returns cached traffic data for instant visualization

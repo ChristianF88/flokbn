@@ -54,12 +54,6 @@ type App struct {
 
 	// Performance optimization components
 	fastCache *FastTrieCache // RAM-based cache for instant trie switching
-
-	// UI caching for performance
-	cachedSummaryTexts    map[int]string // Cache summary text per trie
-	cachedClusteringTexts map[int]string // Cache clustering text per trie
-	cachedCidrTexts       map[int]string // Cache CIDR analysis text per trie
-	cachedDiagnosticTexts map[int]string // Cache diagnostics text per trie
 }
 
 // NewAppFromConfig creates a new TUI application from config file
@@ -73,11 +67,6 @@ func NewAppFromConfig(cfg *config.Config, configPath string) *App {
 		plotPath:      cfg.Static.PlotPath,
 		currentTrie:   0,
 		requestsReady: make(chan struct{}),
-		// Initialize cache maps (legacy)
-		cachedSummaryTexts:    make(map[int]string),
-		cachedClusteringTexts: make(map[int]string),
-		cachedCidrTexts:       make(map[int]string),
-		cachedDiagnosticTexts: make(map[int]string),
 	}
 
 	// Initialize performance optimization components
@@ -176,11 +165,8 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 	// Signal that requests are available
 	close(a.requestsReady)
 
-	// Now that we have both analysis results and raw requests,
-	// we can efficiently cache everything for instant trie switching
 	if a.fastCache != nil && a.multiTrieResult != nil {
 		go func() {
-			// Cache all tries efficiently since we have complete analysis results
 			a.fastCache.PreCacheAllTries(a, a.multiTrieResult, requests)
 		}()
 	}
@@ -405,11 +391,6 @@ func (a *App) Run() error {
 	// Just start the progress animation until results arrive
 	go a.animateProgress()
 
-	// Set up cleanup on exit
-	defer func() {
-		// Cleanup logic if needed
-	}()
-
 	// Run the TUI
 	return a.app.Run()
 }
@@ -580,47 +561,21 @@ func (a *App) displayLegacyResults() {
 	}
 }
 
-// displayCachedResults shows cached results for multi-trie analysis
+// displayCachedResults shows pre-rendered results for multi-trie analysis,
+// building and caching all four panels on first display.
 func (a *App) displayCachedResults() {
-	// Check cache for summary text
-	if summaryText, exists := a.cachedSummaryTexts[a.currentTrie]; exists {
-		a.summary.SetText(summaryText)
-	} else {
-		// Generate and cache summary text
-		summaryText := a.buildSummaryText()
-		a.cachedSummaryTexts[a.currentTrie] = summaryText
-		a.summary.SetText(summaryText)
+	summary, clustering, cidr, diagnostics, ok := a.fastCache.GetPreRenderedTexts(a.currentTrie)
+	if !ok {
+		summary = a.buildSummaryText()
+		clustering = a.buildClusteringText()
+		cidr = a.buildCidrAnalysisText()
+		diagnostics = a.buildDiagnosticsText()
+		a.fastCache.SetPreRenderedTexts(a.currentTrie, summary, clustering, cidr, diagnostics)
 	}
-
-	// Check cache for clustering text
-	if clusteringText, exists := a.cachedClusteringTexts[a.currentTrie]; exists {
-		a.clustering.SetText(clusteringText)
-	} else {
-		// Generate and cache clustering text
-		clusteringText := a.buildClusteringText()
-		a.cachedClusteringTexts[a.currentTrie] = clusteringText
-		a.clustering.SetText(clusteringText)
-	}
-
-	// Check cache for CIDR analysis text
-	if cidrText, exists := a.cachedCidrTexts[a.currentTrie]; exists {
-		a.cidrAnalysis.SetText(cidrText)
-	} else {
-		// Generate and cache CIDR text
-		cidrText := a.buildCidrAnalysisText()
-		a.cachedCidrTexts[a.currentTrie] = cidrText
-		a.cidrAnalysis.SetText(cidrText)
-	}
-
-	// Check cache for diagnostics text
-	if diagText, exists := a.cachedDiagnosticTexts[a.currentTrie]; exists {
-		a.diagnostics.SetText(diagText)
-	} else {
-		// Generate and cache diagnostics text
-		diagText := a.buildDiagnosticsText()
-		a.cachedDiagnosticTexts[a.currentTrie] = diagText
-		a.diagnostics.SetText(diagText)
-	}
+	a.summary.SetText(summary)
+	a.clustering.SetText(clustering)
+	a.cidrAnalysis.SetText(cidr)
+	a.diagnostics.SetText(diagnostics)
 }
 
 // displayLegacyResultsUncached shows results without caching (for legacy mode)
