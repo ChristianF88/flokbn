@@ -1,6 +1,6 @@
 # Build artifacts
 bin/
-
+fake-logs/
 
 # Test/temporary files
 access.json
