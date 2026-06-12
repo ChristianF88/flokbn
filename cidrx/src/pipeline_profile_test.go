@@ -45,7 +45,7 @@ func BenchmarkFullPipelineProfile(b *testing.B) {
 
 		// Phase 4: Trie insertion
 		tr := trie.NewTrie()
-		tr.BatchInsertSortedUint32(ipUints)
+		tr.InsertSorted(ipUints)
 
 		// Phase 5: Clustering
 		_ = tr.CollectCIDRsNumeric(1000, 16, 24, 0.1)
@@ -130,7 +130,7 @@ func BenchmarkTrieInsertionOnly(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				tr := trie.NewTrie()
-				tr.BatchInsertSortedUint32(ipUints)
+				tr.InsertSorted(ipUints)
 			}
 		})
 

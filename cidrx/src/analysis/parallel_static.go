@@ -238,9 +238,9 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	trieResult.Parameters.CIDRRanges = trieConfig.CIDRRanges
 
 	// Create parallel trie backed by the seq allocator: this trie is built by a
-	// single goroutine via BuildSortedUint32 (one of the radix-sorted branches
+	// single goroutine via BuildSorted (one of the radix-sorted branches
 	// below), so the lock-free sequential allocator is safe here.
-	trieInstance := trie.NewParallelTrieSeq()
+	trieInstance := trie.NewLockedTrieSeq()
 
 	// Apply filtering and collect IPs for parallel insertion
 	var startTime, endTime time.Time
@@ -323,9 +323,9 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 		iputils.RadixSortUint32(ipUints)
 		uniqueIPs = iputils.CountDistinctSorted(ipUints)
 
-		// Use the seq prefix-stack build (bit-identical to BatchInsertSortedUint32
+		// Use the seq prefix-stack build (bit-identical to InsertSorted
 		// for ascending-sorted input, ~2x faster).
-		trieInstance.BuildSortedUint32(ipUints)
+		trieInstance.BuildSorted(ipUints)
 	} else {
 		// Adaptive filtering: use concurrent processing only when complex patterns justify overhead
 		usesConcurrency := len(requests) > 50000 && hasFilters
@@ -355,7 +355,7 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 		if len(ipsToInsertUint32) > 0 {
 			iputils.RadixSortUint32(ipsToInsertUint32)
 			uniqueIPs = iputils.CountDistinctSorted(ipsToInsertUint32)
-			trieInstance.BuildSortedUint32(ipsToInsertUint32)
+			trieInstance.BuildSorted(ipsToInsertUint32)
 		}
 	}
 
@@ -394,15 +394,15 @@ func processTrieParallel(trieName string, trieConfig *config.TrieConfig, request
 	// CIDR range analysis (same as original but with parallel trie)
 	if len(trieConfig.CIDRRanges) > 0 {
 		for _, cidrRange := range trieConfig.CIDRRanges {
-			count, err := trieInstance.ParallelCountInRange(cidrRange)
+			count, err := trieInstance.CountInRange(cidrRange)
 			if err != nil {
 				jsonOutput.AddWarning("invalid_cidr", fmt.Sprintf("Invalid CIDR range '%s': %v", cidrRange, err), 1)
 				continue
 			}
 
 			var percentage float64
-			if trieInstance.ParallelCountAll() > 0 {
-				percentage = float64(count) / float64(trieInstance.ParallelCountAll()) * 100
+			if trieInstance.CountAll() > 0 {
+				percentage = float64(count) / float64(trieInstance.CountAll()) * 100
 			}
 			trieResult.Stats.CIDRAnalysis = append(trieResult.Stats.CIDRAnalysis, output.CIDRRange{
 				CIDR:       cidrRange,
@@ -630,8 +630,8 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 	}
 
 	// Build the trie from the shared sorted IPs using the seq prefix-stack build.
-	trieInstance := trie.NewParallelTrieSeq()
-	trieInstance.BuildSortedUint32(sortedIPs)
+	trieInstance := trie.NewLockedTrieSeq()
+	trieInstance.BuildSorted(sortedIPs)
 
 	insertDuration := time.Since(insertStart)
 
@@ -655,14 +655,14 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 	// CIDR range analysis (identical to processTrieParallel).
 	if len(trieConfig.CIDRRanges) > 0 {
 		for _, cidrRange := range trieConfig.CIDRRanges {
-			count, err := trieInstance.ParallelCountInRange(cidrRange)
+			count, err := trieInstance.CountInRange(cidrRange)
 			if err != nil {
 				jsonOutput.AddWarning("invalid_cidr", fmt.Sprintf("Invalid CIDR range '%s': %v", cidrRange, err), 1)
 				continue
 			}
 			var percentage float64
-			if trieInstance.ParallelCountAll() > 0 {
-				percentage = float64(count) / float64(trieInstance.ParallelCountAll()) * 100
+			if trieInstance.CountAll() > 0 {
+				percentage = float64(count) / float64(trieInstance.CountAll()) * 100
 			}
 			trieResult.Stats.CIDRAnalysis = append(trieResult.Stats.CIDRAnalysis, output.CIDRRange{
 				CIDR:       cidrRange,

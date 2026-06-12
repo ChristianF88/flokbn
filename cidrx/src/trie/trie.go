@@ -32,17 +32,17 @@ func NewTrie() *Trie {
 
 // NewTrieSeq creates a binary trie backed by a lock-free sequential bump
 // allocator (single-thread use only). Intended to be paired with
-// BuildSortedUint32 for the fastest possible sorted build.
+// BuildSorted for the fastest possible sorted build.
 func NewTrieSeq() *Trie {
 	a := pools.NewSeqNodeAllocator()
 	return &Trie{Root: a.GetNode(), seqAlloc: a}
 }
 
-// BuildSortedUint32 builds the trie from an ASCENDING-sorted slice of uint32
+// BuildSorted builds the trie from an ASCENDING-sorted slice of uint32
 // IPs using a deferred-count prefix-stack algorithm. It REQUIRES a trie created
 // by NewTrieSeq (t.seqAlloc != nil) and ascending-sorted input.
 //
-// The produced trie is bit-identical to BatchInsertSortedUint32 (same node
+// The produced trie is bit-identical to InsertSorted (same node
 // structure, same per-node Count, Root.Count left at 0) but avoids
 // re-descending shared prefixes and writes each node's Count exactly once.
 //
@@ -51,7 +51,7 @@ func NewTrieSeq() *Trie {
 // the currently-open node at path[d], not yet flushed into its .Count. Because
 // the input is sorted, all IPs sharing a prefix are contiguous, so the node for
 // that prefix stays open across exactly those runs and is flushed once on close.
-func (t *Trie) BuildSortedUint32(ips []uint32) {
+func (t *Trie) BuildSorted(ips []uint32) {
 	if len(ips) == 0 {
 		return
 	}
@@ -140,15 +140,15 @@ func (t *Trie) InsertUint32(val uint32) {
 	}
 }
 
-// BatchInsertSortedUint32 efficiently inserts sorted uint32 IPs with optimized traversal
+// InsertSorted efficiently inserts sorted uint32 IPs with optimized traversal
 // This method takes advantage of:
 // 1. Batching identical IPs (only one traversal, but increment count by batch size)
 // 2. Reusing common prefixes between consecutive IPs
 // 3. Caching traversal state to avoid re-traversing from root
 //
-// Kept as the structural test oracle for the production BuildSortedUint32:
+// Kept as the structural test oracle for the production BuildSorted:
 // build_sorted_test.go asserts both produce bit-identical tries.
-func (t *Trie) BatchInsertSortedUint32(ips []uint32) {
+func (t *Trie) InsertSorted(ips []uint32) {
 	if len(ips) == 0 {
 		return
 	}
@@ -278,11 +278,11 @@ func (t *Trie) CountInRangeIPNet(ipNet *net.IPNet) uint32 {
 	rangeSize := uint32(1) << (32 - maskBits)
 	rangeEnd := rangeStart + rangeSize - 1
 
-	return t.countInRangeOptimized(t.Root, rangeStart, rangeEnd, 0, 0)
+	return t.countInRange(t.Root, rangeStart, rangeEnd, 0, 0)
 }
 
-// countInRangeOptimized traverses the trie efficiently using proper range intersection
-func (t *Trie) countInRangeOptimized(node *TrieNode, rangeStart, rangeEnd uint32, currentPrefix, depth uint32) uint32 {
+// countInRange traverses the trie efficiently using proper range intersection
+func (t *Trie) countInRange(node *TrieNode, rangeStart, rangeEnd uint32, currentPrefix, depth uint32) uint32 {
 	if node == nil {
 		return 0
 	}
@@ -321,20 +321,20 @@ func (t *Trie) countInRangeOptimized(node *TrieNode, rangeStart, rangeEnd uint32
 	// Check left child (bit 0)
 	if node.Children[0] != nil {
 		leftPrefix := currentPrefix
-		count += t.countInRangeOptimized(node.Children[0], rangeStart, rangeEnd, leftPrefix, depth+1)
+		count += t.countInRange(node.Children[0], rangeStart, rangeEnd, leftPrefix, depth+1)
 	}
 
 	// Check right child (bit 1)
 	if node.Children[1] != nil {
 		rightPrefix := currentPrefix | (uint32(1) << (31 - depth))
-		count += t.countInRangeOptimized(node.Children[1], rangeStart, rangeEnd, rightPrefix, depth+1)
+		count += t.countInRange(node.Children[1], rangeStart, rangeEnd, rightPrefix, depth+1)
 	}
 
 	return count
 }
 
-// CollectCIDRsCoreSequentialNumeric - Sequential version returning numeric CIDRs
-func (t *Trie) CollectCIDRsCoreSequentialNumeric(node *TrieNode, prefix uint32, depth uint32, results *[]cidr.NumericCIDR, minClusterSize, minDepth, maxDepth uint32, threshold uint32) {
+// collectCIDRsNode - Sequential version returning numeric CIDRs
+func (t *Trie) collectCIDRsNode(node *TrieNode, prefix uint32, depth uint32, results *[]cidr.NumericCIDR, minClusterSize, minDepth, maxDepth uint32, threshold uint32) {
 	// Check for nil node
 	if node == nil {
 		return
@@ -392,20 +392,20 @@ func (t *Trie) CollectCIDRsCoreSequentialNumeric(node *TrieNode, prefix uint32, 
 		// Only process children that meet minimum cluster size requirement
 		if leftCount <= rightCount {
 			if leftCount >= minClusterSize {
-				t.CollectCIDRsCoreSequentialNumeric(node.Children[0], prefix, depth+1,
+				t.collectCIDRsNode(node.Children[0], prefix, depth+1,
 					results, minClusterSize, minDepth, maxDepth, threshold)
 			}
 			if rightCount >= minClusterSize {
-				t.CollectCIDRsCoreSequentialNumeric(node.Children[1], prefix|(1<<(31-depth)), depth+1,
+				t.collectCIDRsNode(node.Children[1], prefix|(1<<(31-depth)), depth+1,
 					results, minClusterSize, minDepth, maxDepth, threshold)
 			}
 		} else {
 			if rightCount >= minClusterSize {
-				t.CollectCIDRsCoreSequentialNumeric(node.Children[1], prefix|(1<<(31-depth)), depth+1,
+				t.collectCIDRsNode(node.Children[1], prefix|(1<<(31-depth)), depth+1,
 					results, minClusterSize, minDepth, maxDepth, threshold)
 			}
 			if leftCount >= minClusterSize {
-				t.CollectCIDRsCoreSequentialNumeric(node.Children[0], prefix, depth+1,
+				t.collectCIDRsNode(node.Children[0], prefix, depth+1,
 					results, minClusterSize, minDepth, maxDepth, threshold)
 			}
 		}
@@ -414,10 +414,10 @@ func (t *Trie) CollectCIDRsCoreSequentialNumeric(node *TrieNode, prefix uint32, 
 
 	// Recursively traverse the left and right children with early exit optimization
 	if hasLeft && node.Children[0].Count >= minClusterSize {
-		t.CollectCIDRsCoreSequentialNumeric(node.Children[0], prefix, depth+1, results, minClusterSize, minDepth, maxDepth, threshold)
+		t.collectCIDRsNode(node.Children[0], prefix, depth+1, results, minClusterSize, minDepth, maxDepth, threshold)
 	}
 	if hasRight && node.Children[1].Count >= minClusterSize {
-		t.CollectCIDRsCoreSequentialNumeric(node.Children[1], prefix|(1<<(31-depth)), depth+1, results, minClusterSize, minDepth, maxDepth, threshold)
+		t.collectCIDRsNode(node.Children[1], prefix|(1<<(31-depth)), depth+1, results, minClusterSize, minDepth, maxDepth, threshold)
 	}
 }
 
@@ -453,12 +453,17 @@ func (t *Trie) CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth uint32, me
 		return []cidr.NumericCIDR{}
 	}
 
-	return t.collectCIDRsSequentialNumeric(minClusterSize, minDepth, maxDepth, threshold)
+	// Fixed starting capacity for the result slice; clusters are sparse relative
+	// to the input so this is a reasonable prealloc that grows if needed.
+	estimatedCapacity := uint32(128)
+
+	results := make([]cidr.NumericCIDR, 0, estimatedCapacity)
+	t.collectCIDRsNode(t.Root, 0, 0, &results, minClusterSize, minDepth, maxDepth, threshold)
+	return results
 }
 
 // CollectCIDRs runs sequential CIDR clustering and returns the results as
-// strings. Legacy string-based wrapper around CollectCIDRsNumeric for backward
-// compatibility.
+// strings. String-returning wrapper around CollectCIDRsNumeric.
 func (t *Trie) CollectCIDRs(minClusterSize, minDepth, maxDepth uint32, meanSubnetDifference float64) []string {
 	// Use the numeric version and convert to strings only at the end
 	numericResults := t.CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth, meanSubnetDifference)
@@ -467,16 +472,4 @@ func (t *Trie) CollectCIDRs(minClusterSize, minDepth, maxDepth uint32, meanSubne
 		result[i] = nc.String()
 	}
 	return result
-}
-
-// collectCIDRsSequentialNumeric collects clustered CIDRs via a single
-// sequential trie walk, returning numeric CIDRs.
-func (t *Trie) collectCIDRsSequentialNumeric(minClusterSize, minDepth, maxDepth, threshold uint32) []cidr.NumericCIDR {
-	// Fixed starting capacity for the result slice; clusters are sparse relative
-	// to the input so this is a reasonable prealloc that grows if needed.
-	estimatedCapacity := uint32(128)
-
-	results := make([]cidr.NumericCIDR, 0, estimatedCapacity)
-	t.CollectCIDRsCoreSequentialNumeric(t.Root, 0, 0, &results, minClusterSize, minDepth, maxDepth, threshold)
-	return results
 }

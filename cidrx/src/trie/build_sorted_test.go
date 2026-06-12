@@ -11,14 +11,14 @@ import (
 // buildOld builds a trie via the existing mutex-allocator sorted batch path.
 func buildOld(sortedIPs []uint32) *Trie {
 	t := NewTrie()
-	t.BatchInsertSortedUint32(sortedIPs)
+	t.InsertSorted(sortedIPs)
 	return t
 }
 
 // buildNew builds a trie via the new lock-free deferred-count sorted path.
 func buildNew(sortedIPs []uint32) *Trie {
 	t := NewTrieSeq()
-	t.BuildSortedUint32(sortedIPs)
+	t.BuildSorted(sortedIPs)
 	return t
 }
 

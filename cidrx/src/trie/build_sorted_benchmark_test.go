@@ -45,8 +45,8 @@ func genClusteredSorted(n int, seed int64) []uint32 {
 }
 
 // BenchmarkBuildSorted compares the old mutex-allocator sorted batch build
-// (BatchInsertSortedUint32) against the new lock-free deferred-count build
-// (BuildSortedUint32) on uniform-random and clustered sorted data.
+// (InsertSorted) against the new lock-free deferred-count build
+// (BuildSorted) on uniform-random and clustered sorted data.
 func BenchmarkBuildSorted(b *testing.B) {
 	sizes := []int{100000, 500000, 1000000}
 	dists := []struct {
@@ -65,7 +65,7 @@ func BenchmarkBuildSorted(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
 					t := NewTrie()
-					t.BatchInsertSortedUint32(data)
+					t.InsertSorted(data)
 				}
 			})
 
@@ -73,7 +73,7 @@ func BenchmarkBuildSorted(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
 					t := NewTrieSeq()
-					t.BuildSortedUint32(data)
+					t.BuildSorted(data)
 				}
 			})
 		}
