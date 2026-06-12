@@ -461,11 +461,11 @@ func TestCLIConfigEquivalence(t *testing.T) {
 	cliCfg := buildCLIConfig(t, logFile)
 
 	// 3. Run analysis on both
-	tomlResult, tomlRequests, err := ParallelStaticFromConfigWithRequests(tomlCfg)
+	tomlResult, tomlRequests, err := StaticWithRequests(tomlCfg)
 	if err != nil {
 		t.Fatalf("TOML analysis failed: %v", err)
 	}
-	cliResult, cliRequests, err := ParallelStaticFromConfigWithRequests(cliCfg)
+	cliResult, cliRequests, err := StaticWithRequests(cliCfg)
 	if err != nil {
 		t.Fatalf("CLI analysis failed: %v", err)
 	}
@@ -740,8 +740,8 @@ func TestInvalidLogFileParity(t *testing.T) {
 		},
 	}
 
-	resultA, _, errA := ParallelStaticFromConfigWithRequests(cfgA)
-	resultB, _, errB := ParallelStaticFromConfigWithRequests(cfgB)
+	resultA, _, errA := StaticWithRequests(cfgA)
+	resultB, _, errB := StaticWithRequests(cfgB)
 
 	// Both should fail
 	if errA == nil {
@@ -802,7 +802,7 @@ func TestInvalidClusterArgsParity(t *testing.T) {
 		},
 	}
 
-	result, _, err := ParallelStaticFromConfigWithRequests(cfg)
+	result, _, err := StaticWithRequests(cfg)
 	if err != nil {
 		t.Fatalf("Expected analysis to succeed (error goes into result.Errors): %v", err)
 	}
@@ -863,8 +863,8 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 		},
 	}
 
-	tomlResult, _, _ := ParallelStaticFromConfigWithRequests(tomlCfg)
-	cliResult, _, _ := ParallelStaticFromConfigWithRequests(cliCfg)
+	tomlResult, _, _ := StaticWithRequests(tomlCfg)
+	cliResult, _, _ := StaticWithRequests(cliCfg)
 
 	// Both should have 0 requests
 	if tomlResult.General.TotalRequests != 0 {

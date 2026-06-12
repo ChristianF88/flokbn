@@ -14,7 +14,7 @@ import (
 //	go run main.go static --config $CIDRX_BENCH_CONFIG
 //
 // It drives the exact same entrypoint the CLI uses
-// (analysis.ParallelStaticFromConfigNoRequests, see cli/api.go), so parse +
+// (analysis.Static, see cli/api.go), so parse +
 // IP-extract + sort + trie-build + clustering are all measured end to end
 // against a real log file referenced by the config.
 //
@@ -40,7 +40,7 @@ func BenchmarkRealWorldStaticFromConfig(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if _, err := analysis.ParallelStaticFromConfigNoRequests(cfg); err != nil {
+		if _, err := analysis.Static(cfg); err != nil {
 			b.Fatalf("static analysis: %v", err)
 		}
 	}

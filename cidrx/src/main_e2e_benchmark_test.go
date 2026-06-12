@@ -57,18 +57,18 @@ func BenchmarkEndToEndOptimization(b *testing.B) {
 			}
 		})
 
-		b.Run(fmt.Sprintf("OptimizedRequest_%d_IPs", size), func(b *testing.B) {
+		b.Run(fmt.Sprintf("NumericRequest_%d_IPs", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				// Simulate parsing log entries directly to OptimizedRequest
-				requests := make([]ingestor.OptimizedRequest, len(uint32IPs))
+				// Simulate parsing log entries directly to NumericRequest
+				requests := make([]ingestor.NumericRequest, len(uint32IPs))
 				for j, ip := range uint32IPs {
-					requests[j] = ingestor.OptimizedRequest{
+					requests[j] = ingestor.NumericRequest{
 						IP: ip, // Direct uint32 assignment - no conversion!
 					}
 				}
 
-				// Insert directly from OptimizedRequest
+				// Insert directly from NumericRequest
 				tr := trie.NewTrie()
 				for _, req := range requests {
 					tr.InsertUint32(req.IP) // Direct uint32 insertion

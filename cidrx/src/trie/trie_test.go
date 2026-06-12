@@ -607,7 +607,7 @@ func TestCollectCIDRs(t *testing.T) {
 
 // TestCollectCIDRsThresholdBoundaries pins the exact semantics of the
 // meanSubnetDifference -> uint32 threshold conversion and the integer
-// cross-multiplication test in CollectCIDRsCoreSequentialNumeric:
+// cross-multiplication test in collectCIDRsNode:
 // appendCluster = (2000*diff) < (threshold*count), strict less-than.
 func TestCollectCIDRsThresholdBoundaries(t *testing.T) {
 	// insertIPs maps dotted IP -> insert count.
@@ -672,7 +672,7 @@ func TestCollectCIDRsThresholdBoundaries(t *testing.T) {
 			// children 2 vs 1 passes 2000*1 < 1e9*3 and is emitted as
 			// 0.0.0.0/1. Note 0.0.0.0/0 itself is unreachable here: Insert
 			// never increments Root.Count (left at 0 by design, see
-			// BuildSortedUint32 docs), so the depth-0 emission check
+			// BuildSorted docs), so the depth-0 emission check
 			// node.Count >= minClusterSize can never pass for mcs > 0.
 			name:           "threshold_huge",
 			insertIPs:      map[string]int{"0.0.0.1": 2, "64.0.0.1": 1},
@@ -1562,12 +1562,12 @@ func TestAnalyzeDuplicates(t *testing.T) {
 	defer cleanup()
 
 	logFormat := "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
-	parser, err := logparser.NewParallelParser(logFormat)
+	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
 		t.Fatalf("Could not create parser: %v", err)
 	}
 
-	requests, err := parser.ParseFileParallelChunked(testFile)
+	requests, err := parser.ParseFile(testFile)
 	if err != nil {
 		t.Fatalf("Could not parse log file: %v", err)
 	}

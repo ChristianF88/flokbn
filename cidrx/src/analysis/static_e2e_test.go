@@ -47,7 +47,7 @@ func TestStaticPipeline_ClusterDetection(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestStaticPipeline_CIDRRangeAnalysis(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -168,11 +168,11 @@ func TestStaticPipeline_DeterministicResults(t *testing.T) {
 		}
 	}
 
-	result1, _, err := ParallelStaticFromConfigWithRequests(buildCfg())
+	result1, _, err := StaticWithRequests(buildCfg())
 	if err != nil {
 		t.Fatalf("First run failed: %v", err)
 	}
-	result2, _, err := ParallelStaticFromConfigWithRequests(buildCfg())
+	result2, _, err := StaticWithRequests(buildCfg())
 	if err != nil {
 		t.Fatalf("Second run failed: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestStaticPipeline_MalformedLines(t *testing.T) {
 		},
 	}
 
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("StaticFromConfig failed: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestStaticPipeline_MalformedLines(t *testing.T) {
 
 // TestStaticPipeline_NilConfig verifies nil config returns error without panic.
 func TestStaticPipeline_NilConfig(t *testing.T) {
-	result, err := ParallelStaticFromConfigNoRequests(nil)
+	result, err := Static(nil)
 	if err == nil {
 		t.Error("Expected error for nil config")
 	}
@@ -245,7 +245,7 @@ func TestStaticPipeline_NilStaticSection(t *testing.T) {
 	cfg := &config.Config{
 		Global: &config.GlobalConfig{},
 	}
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err == nil {
 		t.Error("Expected error for nil static section")
 	}
@@ -280,7 +280,7 @@ func TestStaticPipeline_UniqueIPsCountsDistinct(t *testing.T) {
 	}{
 		// Unfiltered: exercises the IP-only fast path (processTrieFromSortedIPs).
 		{"unfiltered fast path", &config.TrieConfig{}},
-		// Filtered: a User-Agent regex forces the full path (processTrieParallel).
+		// Filtered: a User-Agent regex forces the full path (processTrie).
 		{"filtered full path", &config.TrieConfig{UserAgentRegex: "test"}},
 	}
 
@@ -298,7 +298,7 @@ func TestStaticPipeline_UniqueIPsCountsDistinct(t *testing.T) {
 				StaticTries: map[string]*config.TrieConfig{"t": tc.trie},
 			}
 
-			result, err := ParallelStaticFromConfigNoRequests(cfg)
+			result, err := Static(cfg)
 			if err != nil {
 				t.Fatalf("static analysis failed: %v", err)
 			}

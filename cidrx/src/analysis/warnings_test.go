@@ -54,7 +54,7 @@ func TestInvalidTimeFormatGeneratesWarning(t *testing.T) {
 	}
 
 	// Run analysis
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -125,7 +125,7 @@ endTime = "2025-01-01T00:00:00Z"
 	}
 
 	// Run analysis
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -197,7 +197,7 @@ endTime = "2025-11-13T06:00:00Z"
 	}
 
 	// Run analysis
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestMalformedFieldGeneratesWarning(t *testing.T) {
 
 	// With time filter: status/bytes parsed -> warnings expected.
 	cfg := loadMalformedFieldConfig(t, logFile, jailFile, banFile, true)
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestMalformedFieldGeneratesWarning(t *testing.T) {
 	// Without any filter: IP-only fast path never scans status/bytes, so the
 	// warning must NOT appear (counters are structurally zero).
 	cfgNoFilter := loadMalformedFieldConfig(t, logFile, jailFile, banFile, false)
-	resultNoFilter, err := ParallelStaticFromConfigNoRequests(cfgNoFilter)
+	resultNoFilter, err := Static(cfgNoFilter)
 	if err != nil {
 		t.Fatalf("Analysis (no filter) failed: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestCleanLogNoMalformedFieldWarning(t *testing.T) {
 	}
 
 	cfg := loadMalformedFieldConfig(t, logFile, jailFile, banFile, true)
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
@@ -421,7 +421,7 @@ startTime = "2025-01-01T00:00:00Z"
 	}
 
 	// Run analysis
-	result, err := ParallelStaticFromConfigNoRequests(cfg)
+	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}

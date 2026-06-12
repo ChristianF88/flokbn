@@ -66,7 +66,7 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 	// No heatmap requested: take the IP-only fast path that never materialises
 	// the []ingestor.Request slice (the requests would otherwise be discarded).
 	if cfg.Static == nil || cfg.Static.PlotPath == "" {
-		result, err := analysis.ParallelStaticFromConfigNoRequests(cfg)
+		result, err := analysis.Static(cfg)
 		if err != nil {
 			outputResult(result, outputConfig) // Output with errors
 			return fmt.Errorf("static analysis: %w", err)
@@ -76,7 +76,7 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 	}
 
 	// Heatmap requested: keep the full path so we can reuse the parsed requests.
-	result, requests, err := analysis.ParallelStaticFromConfigWithRequests(cfg)
+	result, requests, err := analysis.StaticWithRequests(cfg)
 	if err != nil {
 		outputResult(result, outputConfig) // Output with errors
 		return fmt.Errorf("static analysis: %w", err)
@@ -104,7 +104,7 @@ func executeTUI(cfg *config.Config) error {
 	// Run the complete analysis first (like non-TUI mode), then pass results to TUI
 	go func() {
 		// Do the same complete analysis as non-TUI mode
-		multiTrieResult, requests, err := analysis.ParallelStaticFromConfigWithRequests(cfg)
+		multiTrieResult, requests, err := analysis.StaticWithRequests(cfg)
 		if err != nil {
 			// Show error in TUI instead of silent failure
 			app.ShowError(fmt.Sprintf("Analysis failed: %v", err))

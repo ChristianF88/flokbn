@@ -10,7 +10,7 @@ import (
 )
 
 // newCacheTestApp builds a headless multi-trie App wired the way
-// NewAppFromConfig wires it: cfg set, fastCache present, panels created,
+// NewAppFromConfig wires it: cfg set, trieCache present, panels created,
 // jsonResult pointing at the current trie's converted output.
 func newCacheTestApp(t *testing.T) *App {
 	t.Helper()
@@ -25,32 +25,32 @@ func newCacheTestApp(t *testing.T) *App {
 	a := &App{
 		cfg:             &config.Config{},
 		multiTrieResult: multi,
-		fastCache:       NewFastTrieCache(),
+		trieCache:       NewTrieCache(),
 		currentTrie:     0,
 		summary:         tview.NewTextView(),
 		clustering:      tview.NewTextView(),
 		cidrAnalysis:    tview.NewTextView(),
 		diagnostics:     tview.NewTextView(),
 	}
-	a.jsonResult = a.convertTrieToLegacy(0)
+	a.jsonResult = a.singleTrieOutput(0)
 	if a.jsonResult == nil {
-		t.Fatal("convertTrieToLegacy(0) returned nil")
+		t.Fatal("singleTrieOutput(0) returned nil")
 	}
 	return a
 }
 
 // TestDisplayCachedResultsSeedsCache verifies the miss path builds all four
-// panel texts, stores them in the shared FastTrieCache, and displays them.
+// panel texts, stores them in the shared TrieCache, and displays them.
 func TestDisplayCachedResultsSeedsCache(t *testing.T) {
 	a := newCacheTestApp(t)
 
-	if _, _, _, _, ok := a.fastCache.GetPreRenderedTexts(0); ok {
+	if _, _, _, _, ok := a.trieCache.GetPreRenderedTexts(0); ok {
 		t.Fatal("cache unexpectedly populated before first display")
 	}
 
 	a.displayCachedResults()
 
-	summary, clustering, cidr, diagnostics, ok := a.fastCache.GetPreRenderedTexts(0)
+	summary, clustering, cidr, diagnostics, ok := a.trieCache.GetPreRenderedTexts(0)
 	if !ok {
 		t.Fatal("displayCachedResults did not seed the cache")
 	}
@@ -76,7 +76,7 @@ func TestDisplayCachedResultsSeedsCache(t *testing.T) {
 func TestDisplayCachedResultsHitWinsOverRebuild(t *testing.T) {
 	a := newCacheTestApp(t)
 
-	a.fastCache.SetPreRenderedTexts(0, "S-sentinel", "C-sentinel", "R-sentinel", "D-sentinel")
+	a.trieCache.SetPreRenderedTexts(0, "S-sentinel", "C-sentinel", "R-sentinel", "D-sentinel")
 	a.displayCachedResults()
 
 	got := []struct {
@@ -94,18 +94,18 @@ func TestDisplayCachedResultsHitWinsOverRebuild(t *testing.T) {
 	}
 }
 
-// TestFastAndCachedPathsAgree verifies displayResultsFast and
+// TestFastAndCachedPathsAgree verifies displayResultsFromTrieCache and
 // displayCachedResults render identical texts for every trie — the
 // regression test for the former divergent dual-cache design.
 func TestFastAndCachedPathsAgree(t *testing.T) {
 	a := newCacheTestApp(t)
-	a.fastCache.PreCacheAllTries(a, a.multiTrieResult, nil)
+	a.trieCache.PreCacheAllTries(a, a.multiTrieResult, nil)
 
 	for i := range a.multiTrieResult.Tries {
 		a.currentTrie = i
-		a.jsonResult = a.convertTrieToLegacy(i)
+		a.jsonResult = a.singleTrieOutput(i)
 
-		a.displayResultsFast(i)
+		a.displayResultsFromTrieCache(i)
 		fast := [4]string{
 			a.summary.GetText(true),
 			a.clustering.GetText(true),

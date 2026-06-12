@@ -24,7 +24,7 @@ func ipStringToUint32(s string) uint32 {
 // parseLineForTest parses a single line into a fresh Request via the same
 // compiled-format path the production file workers use (parseLineReuseOpt).
 // It replaces the removed public ParseLine API for test purposes.
-func parseLineForTest(p *ParallelParser, line []byte) (*ingestor.Request, error) {
+func parseLineForTest(p *Parser, line []byte) (*ingestor.Request, error) {
 	req := &ingestor.Request{}
 	if err := p.compiled.parseLineReuseOpt(line, req, p.SkipStringFields, p.SkipNonIPFields); err != nil {
 		return nil, err
@@ -51,8 +51,8 @@ var (
 	drupalLogFormat = "%h, %^ %^ %^ [%t] \"%^ %r %^\" %s %^ %b %^ %^ %^ %^ \"%u\" %^ %^ %^ %^ %^ #%^"
 )
 
-func TestParallelParser_BasicParsing(t *testing.T) {
-	parser, err := NewParallelParser(apacheCombinedFormat)
+func TestParser_BasicParsing(t *testing.T) {
+	parser, err := NewParser(apacheCombinedFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,8 +99,8 @@ func TestParallelParser_BasicParsing(t *testing.T) {
 	}
 }
 
-func TestParallelParser_CustomFormat(t *testing.T) {
-	parser, err := NewParallelParser(apacheCombinedFormat)
+func TestParser_CustomFormat(t *testing.T) {
+	parser, err := NewParser(apacheCombinedFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +131,8 @@ func TestParallelParser_CustomFormat(t *testing.T) {
 	}
 }
 
-func TestParallelParser_DelimiterParsing(t *testing.T) {
-	parser, err := NewParallelParser(drupalLogFormat)
+func TestParser_DelimiterParsing(t *testing.T) {
+	parser, err := NewParser(drupalLogFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,12 +172,12 @@ func TestParallelParser_DelimiterParsing(t *testing.T) {
 	}
 }
 
-func TestParallelParser_StandaloneURI(t *testing.T) {
+func TestParser_StandaloneURI(t *testing.T) {
 	// Test format with standalone URI field - "%m %U" should be equivalent to "%r"
 	standaloneFormat := "%h %^ %^ [%t] %m %U %^ %s %b \"%^\" \"%u\""
 	testLogLine := []byte(`192.168.1.100 - - [10/Jul/2025:14:30:45 +0000] GET /api/health/check HTTP/1.1 200 1234 "-" "Mozilla/5.0"`)
 
-	parser, err := NewParallelParser(standaloneFormat)
+	parser, err := NewParser(standaloneFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestParallelParser_StandaloneURI(t *testing.T) {
 	}
 }
 
-func TestParallelParser_ComprehensiveFormats(t *testing.T) {
+func TestParser_ComprehensiveFormats(t *testing.T) {
 	tests := []struct {
 		name           string
 		format         string
@@ -369,7 +369,7 @@ func TestParallelParser_ComprehensiveFormats(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parser, err := NewParallelParser(tt.format)
+			parser, err := NewParser(tt.format)
 			if err != nil {
 				t.Fatalf("Failed to create parser with format %q: %v", tt.format, err)
 			}
@@ -419,7 +419,7 @@ func TestParallelParser_ComprehensiveFormats(t *testing.T) {
 	}
 }
 
-func TestParallelParser_QuotedVsUnquotedParsing(t *testing.T) {
+func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 	// Test the key difference: %r works with quoted request lines, %m %U %^ works with unquoted separate fields
 	tests := []struct {
 		name           string
@@ -495,7 +495,7 @@ func TestParallelParser_QuotedVsUnquotedParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parser, err := NewParallelParser(tt.format)
+			parser, err := NewParser(tt.format)
 			if err != nil {
 				t.Fatalf("Failed to create parser with format %q: %v", tt.format, err)
 			}
@@ -559,7 +559,7 @@ func TestParallelParser_QuotedVsUnquotedParsing(t *testing.T) {
 	}
 }
 
-func TestParallelParser_InvalidFormats(t *testing.T) {
+func TestParser_InvalidFormats(t *testing.T) {
 	tests := []struct {
 		name       string
 		format     string
@@ -583,7 +583,7 @@ func TestParallelParser_InvalidFormats(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parser, err := NewParallelParser(tt.format)
+			parser, err := NewParser(tt.format)
 			if tt.shouldFail {
 				if err == nil {
 					t.Errorf("Expected format validation to fail for '%s', but it succeeded", tt.format)
@@ -605,7 +605,7 @@ func TestParallelParser_InvalidFormats(t *testing.T) {
 	}
 }
 
-func TestParallelParser_VariousLogFormats(t *testing.T) {
+func TestParser_VariousLogFormats(t *testing.T) {
 	tests := []struct {
 		name     string
 		format   string
@@ -703,7 +703,7 @@ func TestParallelParser_VariousLogFormats(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parser, err := NewParallelParser(tt.format)
+			parser, err := NewParser(tt.format)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -741,7 +741,7 @@ func TestParallelParser_VariousLogFormats(t *testing.T) {
 	}
 }
 
-func TestParallelParser_EdgeCases(t *testing.T) {
+func TestParser_EdgeCases(t *testing.T) {
 	tests := []struct {
 		name        string
 		format      string
@@ -788,7 +788,7 @@ func TestParallelParser_EdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parser, err := NewParallelParser(tt.format)
+			parser, err := NewParser(tt.format)
 			if err != nil && tt.shouldPass {
 				t.Fatal(err)
 			}
@@ -807,12 +807,12 @@ func TestParallelParser_EdgeCases(t *testing.T) {
 	}
 }
 
-func TestParallelParser_FileProcessing(t *testing.T) {
+func TestParser_FileProcessing(t *testing.T) {
 	// Generate test log file with at least 1000 lines
 	testFile, cleanup := testutil.GenerateTestLogFile(t, 1000)
 	defer cleanup()
 
-	parser, err := NewParallelParser(apacheCombinedFormat)
+	parser, err := NewParser(apacheCombinedFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -844,8 +844,8 @@ func TestParallelParser_FileProcessing(t *testing.T) {
 }
 
 // Benchmarks
-func BenchmarkParallelParser_SingleLine(b *testing.B) {
-	parser, _ := NewParallelParser(apacheCombinedFormat)
+func BenchmarkParser_SingleLine(b *testing.B) {
+	parser, _ := NewParser(apacheCombinedFormat)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -859,8 +859,8 @@ func BenchmarkParallelParser_SingleLine(b *testing.B) {
 	}
 }
 
-func BenchmarkParallelParser_CustomFormat(b *testing.B) {
-	parser, _ := NewParallelParser("%h %^ %^ [%t] \"%r\" %s %b \"%u\"")
+func BenchmarkParser_CustomFormat(b *testing.B) {
+	parser, _ := NewParser("%h %^ %^ [%t] \"%r\" %s %b \"%u\"")
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -874,8 +874,8 @@ func BenchmarkParallelParser_CustomFormat(b *testing.B) {
 	}
 }
 
-func BenchmarkParallelParser_ZeroAlloc(b *testing.B) {
-	parser, _ := NewParallelParser(apacheCombinedFormat)
+func BenchmarkParser_ZeroAlloc(b *testing.B) {
+	parser, _ := NewParser(apacheCombinedFormat)
 	req := &ingestor.Request{}
 
 	b.ResetTimer()
@@ -906,9 +906,9 @@ func BenchmarkStaticParser_Comparison(b *testing.B) {
 	}
 }
 
-func BenchmarkParallelParser_SkippedFields(b *testing.B) {
+func BenchmarkParser_SkippedFields(b *testing.B) {
 	// Only parse IP and status, skip everything else
-	parser, _ := NewParallelParser("%h %^ %^ %^ %^ %s %^ %^ %^")
+	parser, _ := NewParser("%h %^ %^ %^ %^ %s %^ %^ %^")
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -922,9 +922,9 @@ func BenchmarkParallelParser_SkippedFields(b *testing.B) {
 	}
 }
 
-func BenchmarkParallelParser_MinimalFields(b *testing.B) {
+func BenchmarkParser_MinimalFields(b *testing.B) {
 	// Only parse IP address
-	parser, _ := NewParallelParser("%h %^ %^ %^ %^ %^ %^ %^ %^")
+	parser, _ := NewParser("%h %^ %^ %^ %^ %^ %^ %^ %^")
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -938,7 +938,7 @@ func BenchmarkParallelParser_MinimalFields(b *testing.B) {
 	}
 }
 
-func BenchmarkParallelParser_VariousFormats(b *testing.B) {
+func BenchmarkParser_VariousFormats(b *testing.B) {
 	formats := []struct {
 		name   string
 		format string
@@ -952,7 +952,7 @@ func BenchmarkParallelParser_VariousFormats(b *testing.B) {
 
 	for _, f := range formats {
 		b.Run(f.name, func(b *testing.B) {
-			parser, _ := NewParallelParser(f.format)
+			parser, _ := NewParser(f.format)
 
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -968,12 +968,12 @@ func BenchmarkParallelParser_VariousFormats(b *testing.B) {
 	}
 }
 
-func BenchmarkParallelParser_FileProcessing(b *testing.B) {
+func BenchmarkParser_FileProcessing(b *testing.B) {
 	// Generate test log file with 100k lines for realistic benchmark
 	testFile, cleanup := testutil.GenerateTestLogFile(&testing.T{}, 100000)
 	defer cleanup()
 
-	parser, _ := NewParallelParser(apacheCombinedFormat)
+	parser, _ := NewParser(apacheCombinedFormat)
 
 	b.ResetTimer()
 
@@ -996,7 +996,7 @@ func TestParser_ZeroByteFile(t *testing.T) {
 	}
 	f.Close()
 
-	parser, err := NewParallelParser(apacheCombinedFormat)
+	parser, err := NewParser(apacheCombinedFormat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1021,7 +1021,7 @@ func TestParser_SingleLine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parser, err := NewParallelParser(apacheCombinedFormat)
+	parser, err := NewParser(apacheCombinedFormat)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -209,7 +209,7 @@ func BenchmarkCollectCIDRsSequential(b *testing.B) {
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				_ = trie.collectCIDRsSequentialNumeric(10, 8, 24, 500)
+				_ = trie.CollectCIDRsNumeric(10, 8, 24, 0.5)
 			}
 		})
 	}

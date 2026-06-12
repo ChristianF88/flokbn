@@ -53,7 +53,7 @@ type App struct {
 	configPath string
 
 	// Performance optimization components
-	fastCache *FastTrieCache // RAM-based cache for instant trie switching
+	trieCache *TrieCache // pre-rendered per-trie texts and visualization data
 }
 
 // NewAppFromConfig creates a new TUI application from config file
@@ -70,7 +70,7 @@ func NewAppFromConfig(cfg *config.Config, configPath string) *App {
 	}
 
 	// Initialize performance optimization components
-	app.fastCache = NewFastTrieCache()
+	app.trieCache = NewTrieCache()
 
 	app.setupUI()
 	return app
@@ -86,12 +86,12 @@ func (a *App) SetAnalysisResults(multiResult *output.JSONOutput) {
 	a.mu.Lock()
 	a.multiTrieResult = multiResult
 
-	// Convert first trie to legacy format for initial display
+	// Convert first trie to single-trie output for initial display
 	if len(multiResult.Tries) > 0 {
-		a.jsonResult = a.convertTrieToLegacy(0)
+		a.jsonResult = a.singleTrieOutput(0)
 		if a.jsonResult == nil {
 			a.mu.Unlock()
-			a.ShowError(fmt.Sprintf("Failed to convert trie 0 to legacy format. Tries available: %d", len(multiResult.Tries)))
+			a.ShowError(fmt.Sprintf("Failed to convert trie 0 to single-trie output. Tries available: %d", len(multiResult.Tries)))
 			return
 		}
 	} else {
@@ -165,16 +165,16 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 	// Signal that requests are available
 	close(a.requestsReady)
 
-	if a.fastCache != nil && a.multiTrieResult != nil {
+	if a.trieCache != nil && a.multiTrieResult != nil {
 		go func() {
-			a.fastCache.PreCacheAllTries(a, a.multiTrieResult, requests)
+			a.trieCache.PreCacheAllTries(a, a.multiTrieResult, requests)
 		}()
 	}
 
 	// Update visualization if it exists and pre-cache all tries for instant switching
 	a.app.QueueUpdateDraw(func() {
 		if a.visualizationView != nil {
-			// Use legacy pre-caching with complete results
+			// Pre-cache traffic data with complete results
 			a.visualizationView.PreCacheAllTries(a.requests)
 			a.visualizationView.RenderCached()
 		}
@@ -423,7 +423,7 @@ func (a *App) animateProgress() {
 				cidrRanges += len(trieConfig.CIDRRanges)
 			}
 		} else {
-			// Legacy mode
+			// No-config mode
 			clusterSets = len(a.clusterArgSets) / 4
 			cidrRanges = len(a.rangesCidr)
 		}
@@ -477,21 +477,21 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 	defer a.switchingTrie.Store(false)
 
 	// Try fast cache first for instant switching
-	if a.fastCache != nil {
-		legacyData, cacheHit := a.fastCache.GetLegacyData(newTrieIndex)
-		if cacheHit && legacyData != nil {
+	if a.trieCache != nil {
+		trieOutput, cacheHit := a.trieCache.GetTrieOutput(newTrieIndex)
+		if cacheHit && trieOutput != nil {
 			// INSTANT switching using cached data
 			a.app.QueueUpdateDraw(func() {
 				a.currentTrie = newTrieIndex
-				a.jsonResult = legacyData
+				a.jsonResult = trieOutput
 
 				// Use pre-rendered texts for instant display
-				a.displayResultsFast(newTrieIndex)
+				a.displayResultsFromTrieCache(newTrieIndex)
 				a.updateStatusBar()
 
 				// Update visualization with cached data
 				if a.visualizationView != nil {
-					a.updateVisualizationFast(newTrieIndex)
+					a.updateVisualizationFromCache(newTrieIndex)
 				}
 			})
 			return
@@ -499,16 +499,16 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 			// Try to quickly cache this specific trie if not already cached
 			if a.multiTrieResult != nil && newTrieIndex < len(a.multiTrieResult.Tries) {
 				go func() {
-					if a.fastCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requests) {
+					if a.trieCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requests) {
 						// Cache was successful, trigger a quick re-render if still on this trie
 						if a.currentTrie == newTrieIndex {
 							a.app.QueueUpdateDraw(func() {
 								// Re-try with newly cached data
-								if cachedData, hit := a.fastCache.GetLegacyData(newTrieIndex); hit && cachedData != nil {
+								if cachedData, hit := a.trieCache.GetTrieOutput(newTrieIndex); hit && cachedData != nil {
 									a.jsonResult = cachedData
-									a.displayResultsFast(newTrieIndex)
+									a.displayResultsFromTrieCache(newTrieIndex)
 									if a.visualizationView != nil {
-										a.updateVisualizationFast(newTrieIndex)
+										a.updateVisualizationFromCache(newTrieIndex)
 									}
 								}
 							})
@@ -522,7 +522,7 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 	// Last resort: Expensive synchronous processing (should rarely happen)
 	a.app.QueueUpdateDraw(func() {
 		a.currentTrie = newTrieIndex
-		newTrieData := a.convertTrieToLegacy(newTrieIndex)
+		newTrieData := a.singleTrieOutput(newTrieIndex)
 		if newTrieData != nil {
 			a.jsonResult = newTrieData
 			a.displayResults()
@@ -546,31 +546,23 @@ func (a *App) displayResults() {
 		return
 	}
 
-	// Always use legacy display format for simplicity
-	a.displayLegacyResults()
-}
-
-// displayLegacyResults shows results for legacy single-trie analysis
-func (a *App) displayLegacyResults() {
-	// Use cached results when possible
 	if a.cfg != nil && a.multiTrieResult != nil {
 		a.displayCachedResults()
 	} else {
-		// Legacy mode - no caching needed
-		a.displayLegacyResultsUncached()
+		a.displayResultsUncached()
 	}
 }
 
 // displayCachedResults shows pre-rendered results for multi-trie analysis,
 // building and caching all four panels on first display.
 func (a *App) displayCachedResults() {
-	summary, clustering, cidr, diagnostics, ok := a.fastCache.GetPreRenderedTexts(a.currentTrie)
+	summary, clustering, cidr, diagnostics, ok := a.trieCache.GetPreRenderedTexts(a.currentTrie)
 	if !ok {
 		summary = a.buildSummaryText()
 		clustering = a.buildClusteringText()
 		cidr = a.buildCidrAnalysisText()
 		diagnostics = a.buildDiagnosticsText()
-		a.fastCache.SetPreRenderedTexts(a.currentTrie, summary, clustering, cidr, diagnostics)
+		a.trieCache.SetPreRenderedTexts(a.currentTrie, summary, clustering, cidr, diagnostics)
 	}
 	a.summary.SetText(summary)
 	a.clustering.SetText(clustering)
@@ -578,8 +570,8 @@ func (a *App) displayCachedResults() {
 	a.diagnostics.SetText(diagnostics)
 }
 
-// displayLegacyResultsUncached shows results without caching (for legacy mode)
-func (a *App) displayLegacyResultsUncached() {
+// displayResultsUncached shows results without caching (no-config mode)
+func (a *App) displayResultsUncached() {
 	// Populate summary with fixed stats and trie-specific stats
 	summaryText := a.buildSummaryText()
 	a.summary.SetText(summaryText)
@@ -772,7 +764,7 @@ func (a *App) buildSummaryText() string {
 		totalIPsRead = a.multiTrieResult.General.TotalRequests
 		parsingTime = a.multiTrieResult.General.Parsing.DurationMS
 	} else {
-		// Legacy mode - use jsonResult data
+		// No-config mode - use jsonResult data
 		parseRate = a.jsonResult.General.Parsing.RatePerSecond
 		totalIPsRead = a.jsonResult.General.TotalRequests
 		parsingTime = a.jsonResult.General.Parsing.DurationMS
@@ -789,7 +781,7 @@ func (a *App) buildSummaryText() string {
 	// Always use multiTrieResult directly for accurate Parameters and Stats
 	if a.cfg != nil && a.multiTrieResult != nil && a.currentTrie < len(a.multiTrieResult.Tries) {
 		// Always use multiTrieResult directly - it has the accurate Parameters and Stats
-		// The legacy format conversion loses this information, so we bypass it here
+		// The single-trie output conversion loses this information, so we bypass it here
 		trieData := a.multiTrieResult.Tries[a.currentTrie]
 
 		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", trieData.Name))
@@ -830,7 +822,7 @@ func (a *App) buildSummaryText() string {
 		}
 
 	} else {
-		// Legacy CLI mode
+		// No-config CLI mode
 		summaryText.WriteString("[white::b]Legacy Analysis[white::-]\n")
 		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", a.jsonResult.General.LogFile))
 		summaryText.WriteString(fmt.Sprintf("[dim]Unique IPs:[white] %s\n",
@@ -955,7 +947,7 @@ func (a *App) updateStatusBar() {
 				a.statusBar.SetText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
 			}
 		} else {
-			// Legacy CLI mode
+			// No-config CLI mode
 			a.statusBar.SetText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: switch panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
 		}
 	}
@@ -987,8 +979,8 @@ func (a *App) showVisualization() {
 	a.updateStatusBar()
 }
 
-// convertTrieToLegacy converts a specific trie to legacy JSON format
-func (a *App) convertTrieToLegacy(trieIndex int) *output.JSONOutput {
+// singleTrieOutput converts a specific trie to a single-trie JSONOutput
+func (a *App) singleTrieOutput(trieIndex int) *output.JSONOutput {
 	if a.multiTrieResult == nil {
 		return nil
 	}
@@ -998,41 +990,41 @@ func (a *App) convertTrieToLegacy(trieIndex int) *output.JSONOutput {
 
 	trieResult := a.multiTrieResult.Tries[trieIndex]
 
-	// Create a legacy format result for this trie
-	legacyResult := output.NewJSONOutput("static", time.Now())
+	// Create a single-trie result
+	trieOutput := output.NewJSONOutput("static", time.Now())
 
 	// Copy general info but customize for this trie
-	legacyResult.General = a.multiTrieResult.General
-	legacyResult.General.UniqueIPs = trieResult.Stats.UniqueIPs
+	trieOutput.General = a.multiTrieResult.General
+	trieOutput.General.UniqueIPs = trieResult.Stats.UniqueIPs
 	// Keep TotalRequests as the original parsed amount (don't overwrite with filtered amount)
 
 	// Add trie-specific info to log file name
-	legacyResult.General.LogFile = fmt.Sprintf("%s [Trie: %s]", a.multiTrieResult.General.LogFile, trieResult.Name)
+	trieOutput.General.LogFile = fmt.Sprintf("%s [Trie: %s]", a.multiTrieResult.General.LogFile, trieResult.Name)
 
 	// Convert clustering data
-	legacyResult.Clustering.Data = trieResult.Data
-	legacyResult.Clustering.Metadata.TotalClusters = len(trieResult.Data)
+	trieOutput.Clustering.Data = trieResult.Data
+	trieOutput.Clustering.Metadata.TotalClusters = len(trieResult.Data)
 
 	// Convert CIDR analysis
-	legacyResult.CIDRAnalysis.Data = trieResult.Stats.CIDRAnalysis
+	trieOutput.CIDRAnalysis.Data = trieResult.Stats.CIDRAnalysis
 
 	// Copy warnings and errors
-	legacyResult.Warnings = a.multiTrieResult.Warnings
-	legacyResult.Errors = a.multiTrieResult.Errors
+	trieOutput.Warnings = a.multiTrieResult.Warnings
+	trieOutput.Errors = a.multiTrieResult.Errors
 
-	return legacyResult
+	return trieOutput
 }
 
-// displayResultsFast uses pre-rendered texts from FastTrieCache for instant display
-func (a *App) displayResultsFast(trieIndex int) {
-	if a.fastCache == nil {
+// displayResultsFromTrieCache uses pre-rendered texts from TrieCache for instant display
+func (a *App) displayResultsFromTrieCache(trieIndex int) {
+	if a.trieCache == nil {
 		// Fallback to normal display
 		a.displayResults()
 		return
 	}
 
 	// Get pre-rendered texts from cache
-	summaryText, clusteringText, cidrText, diagnosticsText, exists := a.fastCache.GetPreRenderedTexts(trieIndex)
+	summaryText, clusteringText, cidrText, diagnosticsText, exists := a.trieCache.GetPreRenderedTexts(trieIndex)
 	if !exists {
 		// Fallback to normal display if cache miss
 		a.displayResults()
@@ -1046,18 +1038,18 @@ func (a *App) displayResultsFast(trieIndex int) {
 	a.diagnostics.SetText(diagnosticsText)
 }
 
-// updateVisualizationFast uses cached traffic data for instant visualization updates
-func (a *App) updateVisualizationFast(trieIndex int) {
-	if a.fastCache == nil || a.visualizationView == nil {
-		// Fallback to legacy visualization update
+// updateVisualizationFromCache uses cached traffic data for instant visualization updates
+func (a *App) updateVisualizationFromCache(trieIndex int) {
+	if a.trieCache == nil || a.visualizationView == nil {
+		// Fallback to uncached visualization update
 		a.visualizationView.updateForCurrentTrie()
 		return
 	}
 
 	// Get cached traffic data
-	trafficMatrix, maxTraffic, exists := a.fastCache.GetTrafficData(trieIndex)
+	trafficMatrix, maxTraffic, exists := a.trieCache.GetTrafficData(trieIndex)
 	if !exists {
-		// Cache not ready yet, fallback to legacy method
+		// Cache not ready yet, fall back to the uncached path
 		a.visualizationView.updateForCurrentTrie()
 		return
 	}
@@ -1068,7 +1060,7 @@ func (a *App) updateVisualizationFast(trieIndex int) {
 
 	// Seed the clustered-overlay grid from the fast cache so the heatmap render
 	// does not have to re-scan requests. Keyed by (trie, current cluster set).
-	if grid, ok := a.fastCache.GetClusteredData(trieIndex, a.visualizationView.currentClusterSet); ok {
+	if grid, ok := a.trieCache.GetClusteredData(trieIndex, a.visualizationView.currentClusterSet); ok {
 		a.visualizationView.clusteredData = grid
 		if a.visualizationView.cachedClusteredData != nil {
 			a.visualizationView.cachedClusteredData[clusterKey{trie: trieIndex, set: a.visualizationView.currentClusterSet}] = grid
@@ -1076,7 +1068,7 @@ func (a *App) updateVisualizationFast(trieIndex int) {
 	}
 
 	// Get current cluster set and render with cached visualization if available
-	if cachedRender, cacheHit := a.fastCache.GetVisualizationRender(trieIndex, a.visualizationView.currentClusterSet); cacheHit {
+	if cachedRender, cacheHit := a.trieCache.GetVisualizationRender(trieIndex, a.visualizationView.currentClusterSet); cacheHit {
 		// Use pre-rendered visualization
 		a.visualizationView.view.SetText(cachedRender)
 	} else {

@@ -8,19 +8,19 @@ import (
 	"github.com/ChristianF88/cidrx/output"
 )
 
-// FastTrieCache holds ALL trie data in RAM for instant switching
+// TrieCache holds all trie data in RAM so trie switching needs no recomputation
 // This eliminates any conversion or processing delays during trie switching
-type FastTrieCache struct {
+type TrieCache struct {
 	mu sync.RWMutex
 
-	// Pre-computed data for instant access
-	legacyData      map[int]*output.JSONOutput // Converted legacy format per trie
+	// Pre-computed data
+	trieOutput      map[int]*output.JSONOutput // Single-trie output per trie
 	summaryTexts    map[int]string             // Pre-rendered summary text per trie
 	clusterTexts    map[int]string             // Pre-rendered clustering text per trie
 	cidrTexts       map[int]string             // Pre-rendered CIDR text per trie
 	diagnosticTexts map[int]string             // Pre-rendered diagnostic text per trie
 
-	// Visualization data for instant switching
+	// Visualization data
 	trafficMatrixes map[int][256][256]uint32 // Traffic data per trie
 	maxTraffics     map[int]uint32           // Max traffic per trie
 	// Clustered-traffic grids per trie per cluster set. clusteredMatrixes[trie][set][a][b]
@@ -30,7 +30,7 @@ type FastTrieCache struct {
 	vizRenderCache    map[int]map[int]string // Visualization render cache per trie per cluster set
 
 	// Ground-truth traffic over ALL parsed requests, identical for every trie.
-	// Computed once on the first preProcessTrafficData call.
+	// Computed once on the first cacheTrafficData call.
 	globalTraffic      [256][256]uint32
 	globalMaxTraffic   uint32
 	globalTrafficReady bool
@@ -39,10 +39,10 @@ type FastTrieCache struct {
 	lastUpdated time.Time
 }
 
-// NewFastTrieCache creates a new fast trie cache
-func NewFastTrieCache() *FastTrieCache {
-	return &FastTrieCache{
-		legacyData:        make(map[int]*output.JSONOutput),
+// NewTrieCache creates a new fast trie cache
+func NewTrieCache() *TrieCache {
+	return &TrieCache{
+		trieOutput:        make(map[int]*output.JSONOutput),
 		summaryTexts:      make(map[int]string),
 		clusterTexts:      make(map[int]string),
 		cidrTexts:         make(map[int]string),
@@ -54,8 +54,8 @@ func NewFastTrieCache() *FastTrieCache {
 	}
 }
 
-// PreCacheAllTries processes and caches ALL trie data upfront for instant switching
-func (ftc *FastTrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOutput, requests []ingestor.Request) {
+// PreCacheAllTries processes and caches all trie data upfront
+func (ftc *TrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOutput, requests []ingestor.Request) {
 	if multiResult == nil || len(multiResult.Tries) == 0 {
 		return
 	}
@@ -65,16 +65,16 @@ func (ftc *FastTrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOut
 
 	// Process each trie and cache everything
 	for trieIndex := 0; trieIndex < len(multiResult.Tries); trieIndex++ {
-		// 1. Convert to legacy format and cache
-		legacyData := app.convertTrieToLegacy(trieIndex)
-		if legacyData != nil {
-			ftc.legacyData[trieIndex] = legacyData
+		// 1. Convert to single-trie output and cache
+		trieOutput := app.singleTrieOutput(trieIndex)
+		if trieOutput != nil {
+			ftc.trieOutput[trieIndex] = trieOutput
 
 			// 2. Pre-render all text components
-			ftc.preRenderTrieTexts(trieIndex, legacyData, app)
+			ftc.cacheTrieTexts(trieIndex, trieOutput, app)
 
 			// 3. Pre-process traffic data for visualization
-			ftc.preProcessTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
+			ftc.cacheTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
 		}
 	}
 
@@ -82,7 +82,7 @@ func (ftc *FastTrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOut
 }
 
 // PreCacheSingleTrie caches a specific trie with priority
-func (ftc *FastTrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResult *output.JSONOutput, requests []ingestor.Request) bool {
+func (ftc *TrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResult *output.JSONOutput, requests []ingestor.Request) bool {
 	if multiResult == nil || trieIndex >= len(multiResult.Tries) {
 		return false
 	}
@@ -90,30 +90,30 @@ func (ftc *FastTrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResul
 	ftc.mu.Lock()
 	defer ftc.mu.Unlock()
 
-	// Convert to legacy format and cache
-	legacyData := app.convertTrieToLegacy(trieIndex)
-	if legacyData != nil {
-		ftc.legacyData[trieIndex] = legacyData
+	// Convert to single-trie output and cache
+	trieOutput := app.singleTrieOutput(trieIndex)
+	if trieOutput != nil {
+		ftc.trieOutput[trieIndex] = trieOutput
 
 		// Pre-render all text components
-		ftc.preRenderTrieTexts(trieIndex, legacyData, app)
+		ftc.cacheTrieTexts(trieIndex, trieOutput, app)
 
 		// Pre-process traffic data for visualization
-		ftc.preProcessTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
+		ftc.cacheTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
 
 		return true
 	}
 	return false
 }
 
-// preRenderTrieTexts pre-renders all text components for a trie.
+// cacheTrieTexts pre-renders all text components for a trie.
 // Must hold ftc.mu (write lock) on entry. Acquires app.mu to safely
 // swap jsonResult/currentTrie during rendering.
-func (ftc *FastTrieCache) preRenderTrieTexts(trieIndex int, legacyData *output.JSONOutput, app *App) {
+func (ftc *TrieCache) cacheTrieTexts(trieIndex int, trieOutput *output.JSONOutput, app *App) {
 	app.mu.Lock()
 	originalResult := app.jsonResult
 	originalTrieIndex := app.currentTrie
-	app.jsonResult = legacyData
+	app.jsonResult = trieOutput
 	app.currentTrie = trieIndex
 
 	// Pre-render all text components while holding the lock
@@ -128,11 +128,11 @@ func (ftc *FastTrieCache) preRenderTrieTexts(trieIndex int, legacyData *output.J
 	app.mu.Unlock()
 }
 
-// preProcessTrafficData pre-processes traffic data for visualization.
+// cacheTrafficData pre-processes traffic data for visualization.
 // The traffic matrix is ground truth over ALL parsed requests — identical for
 // every trie — so it is computed once and reused. Only the clustered grids are
 // trie-specific (they depend on the trie's detected cluster ranges).
-func (ftc *FastTrieCache) preProcessTrafficData(trieIndex int, requests []ingestor.Request, trieResult output.TrieResult) {
+func (ftc *TrieCache) cacheTrafficData(trieIndex int, requests []ingestor.Request, trieResult output.TrieResult) {
 	if !ftc.globalTrafficReady {
 		var m [256][256]uint32
 		var maxTraffic uint32
@@ -190,7 +190,7 @@ func (ftc *FastTrieCache) preProcessTrafficData(trieIndex int, requests []ingest
 
 // GetClusteredData returns the cached clustered-traffic grid for a (trie,
 // cluster set) pair, if present.
-func (ftc *FastTrieCache) GetClusteredData(trieIndex, clusterSetIndex int) (grid [256][256]uint32, exists bool) {
+func (ftc *TrieCache) GetClusteredData(trieIndex, clusterSetIndex int) (grid [256][256]uint32, exists bool) {
 	ftc.mu.RLock()
 	defer ftc.mu.RUnlock()
 
@@ -200,17 +200,17 @@ func (ftc *FastTrieCache) GetClusteredData(trieIndex, clusterSetIndex int) (grid
 	return grid, exists
 }
 
-// GetLegacyData returns cached legacy data for instant access
-func (ftc *FastTrieCache) GetLegacyData(trieIndex int) (*output.JSONOutput, bool) {
+// GetTrieOutput returns the cached single-trie output
+func (ftc *TrieCache) GetTrieOutput(trieIndex int) (*output.JSONOutput, bool) {
 	ftc.mu.RLock()
 	defer ftc.mu.RUnlock()
 
-	data, exists := ftc.legacyData[trieIndex]
+	data, exists := ftc.trieOutput[trieIndex]
 	return data, exists
 }
 
-// GetPreRenderedTexts returns all pre-rendered texts for instant display
-func (ftc *FastTrieCache) GetPreRenderedTexts(trieIndex int) (summary, clustering, cidr, diagnostics string, exists bool) {
+// GetPreRenderedTexts returns all pre-rendered texts for a trie
+func (ftc *TrieCache) GetPreRenderedTexts(trieIndex int) (summary, clustering, cidr, diagnostics string, exists bool) {
 	ftc.mu.RLock()
 	defer ftc.mu.RUnlock()
 
@@ -224,7 +224,7 @@ func (ftc *FastTrieCache) GetPreRenderedTexts(trieIndex int) (summary, clusterin
 }
 
 // SetPreRenderedTexts stores all four pre-rendered panel texts for a trie.
-func (ftc *FastTrieCache) SetPreRenderedTexts(trieIndex int, summary, clustering, cidr, diagnostics string) {
+func (ftc *TrieCache) SetPreRenderedTexts(trieIndex int, summary, clustering, cidr, diagnostics string) {
 	ftc.mu.Lock()
 	defer ftc.mu.Unlock()
 
@@ -234,8 +234,8 @@ func (ftc *FastTrieCache) SetPreRenderedTexts(trieIndex int, summary, clustering
 	ftc.diagnosticTexts[trieIndex] = diagnostics
 }
 
-// GetTrafficData returns cached traffic data for instant visualization
-func (ftc *FastTrieCache) GetTrafficData(trieIndex int) (trafficMatrix [256][256]uint32, maxTraffic uint32, exists bool) {
+// GetTrafficData returns cached traffic data for visualization
+func (ftc *TrieCache) GetTrafficData(trieIndex int) (trafficMatrix [256][256]uint32, maxTraffic uint32, exists bool) {
 	ftc.mu.RLock()
 	defer ftc.mu.RUnlock()
 
@@ -247,7 +247,7 @@ func (ftc *FastTrieCache) GetTrafficData(trieIndex int) (trafficMatrix [256][256
 }
 
 // GetVisualizationRender returns pre-rendered visualization text
-func (ftc *FastTrieCache) GetVisualizationRender(trieIndex, clusterSetIndex int) (string, bool) {
+func (ftc *TrieCache) GetVisualizationRender(trieIndex, clusterSetIndex int) (string, bool) {
 	ftc.mu.RLock()
 	defer ftc.mu.RUnlock()
 

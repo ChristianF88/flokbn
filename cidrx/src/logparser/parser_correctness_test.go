@@ -46,9 +46,9 @@ func TestParseTimestamp_EOLBounds(t *testing.T) {
 			{"empty field", "", 0, 0, time.Time{}},
 		}
 		for _, tc := range cases {
-			got := parseTimestampUltraFast([]byte(tc.line), tc.start, tc.end)
+			got := parseTimestamp([]byte(tc.line), tc.start, tc.end)
 			if !got.Equal(tc.want) {
-				t.Errorf("%s: parseTimestampUltraFast(%q, %d, %d) = %v, want %v",
+				t.Errorf("%s: parseTimestamp(%q, %d, %d) = %v, want %v",
 					tc.name, tc.line, tc.start, tc.end, got, tc.want)
 			}
 		}
@@ -164,7 +164,7 @@ func TestParseBytes_Validation(t *testing.T) {
 		}
 	})
 
-	t.Run("direct parseBytesUltraFast", func(t *testing.T) {
+	t.Run("direct parseBytes", func(t *testing.T) {
 		cases := []struct {
 			input      string
 			start, end int
@@ -180,9 +180,9 @@ func TestParseBytes_Validation(t *testing.T) {
 			{"", 0, 0, 0, false}, // start >= end
 		}
 		for _, tc := range cases {
-			got, ok := parseBytesUltraFast([]byte(tc.input), tc.start, tc.end)
+			got, ok := parseBytes([]byte(tc.input), tc.start, tc.end)
 			if got != tc.want || ok != tc.wantOK {
-				t.Errorf("parseBytesUltraFast(%q, %d, %d) = (%d, %v), want (%d, %v)",
+				t.Errorf("parseBytes(%q, %d, %d) = (%d, %v), want (%d, %v)",
 					tc.input, tc.start, tc.end, got, ok, tc.want, tc.wantOK)
 			}
 		}

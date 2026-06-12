@@ -23,7 +23,7 @@ type FieldExtractor struct {
 	Brackets  bool // whether field is in brackets
 }
 
-// CompiledFormat represents a pre-compiled log format for ultra-fast parsing
+// CompiledFormat represents a pre-compiled log format for fast parsing
 type CompiledFormat struct {
 	extractors []FieldExtractor
 	pattern    string
@@ -46,7 +46,7 @@ type ParseStats struct {
 }
 
 // Parser provides high-performance log parsing with adaptive I/O strategies
-// Combines parallel processing, object pooling, and ultra-fast field extraction
+// Combines parallel processing, object pooling, and minimal-allocation field extraction
 type Parser struct {
 	format           string
 	compiled         *CompiledFormat
@@ -54,9 +54,6 @@ type Parser struct {
 	SkipStringFields bool // When true, skip URI and UserAgent string allocations
 	SkipNonIPFields  bool // When true, skip all non-IP field extraction (timestamp, method, status, bytes, strings)
 }
-
-// ParallelParser is an alias for Parser (backward compatibility)
-type ParallelParser = Parser
 
 // NewParser creates a high-performance log parser (recommended constructor)
 func NewParser(format string) (*Parser, error) {
@@ -94,16 +91,10 @@ func (pp *Parser) Stats() ParseStats {
 	}
 }
 
-// NewParallelParser creates a parser (backward compatibility - use NewParser instead)
-func NewParallelParser(format string) (*ParallelParser, error) {
-	parser, err := NewParser(format)
-	return (*ParallelParser)(parser), err
-}
-
 // ParseFile parses a log file using adaptive I/O strategy (primary interface)
 // Automatically chooses between streaming I/O (small files) and chunked I/O (large files)
 // This is the recommended method for all file parsing operations.
-func (pp *ParallelParser) ParseFile(filename string) ([]ingestor.Request, error) {
+func (pp *Parser) ParseFile(filename string) ([]ingestor.Request, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -139,7 +130,7 @@ func (pp *ParallelParser) ParseFile(filename string) ([]ingestor.Request, error)
 // nonzero IPs flow into the trie, zero IPs are counted invalid. Order is not
 // preserved (downstream radix-sorts), but the multiset of nonzero IPs and the
 // invalid count are identical to ParseFile's req.IPUint32 stream.
-func (pp *ParallelParser) ParseFileIPs(filename string) (ips []uint32, invalidCount int, err error) {
+func (pp *Parser) ParseFileIPs(filename string) (ips []uint32, invalidCount int, err error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, 0, err
@@ -168,7 +159,7 @@ type ipResult struct {
 
 // parseFileIPsStreamingIO mirrors parseFileWithStreamingIO but the worker stage
 // calls extractIPOnly and accumulates []uint32 (skipping/counting zero IPs).
-func (pp *ParallelParser) parseFileIPsStreamingIO(filename string) ([]uint32, int, error) {
+func (pp *Parser) parseFileIPsStreamingIO(filename string) ([]uint32, int, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, 0, err
@@ -268,7 +259,7 @@ func (pp *ParallelParser) parseFileIPsStreamingIO(filename string) ([]uint32, in
 
 // parseFileIPsConcurrentIO mirrors parseFileWithConcurrentIO but extracts only
 // IPs. It reuses readChunkBatched verbatim for the I/O stage.
-func (pp *ParallelParser) parseFileIPsConcurrentIO(file *os.File, fileSize int64) ([]uint32, int, error) {
+func (pp *Parser) parseFileIPsConcurrentIO(file *os.File, fileSize int64) ([]uint32, int, error) {
 	return pp.parseFileIPsConcurrentIOChunked(file, fileSize, defaultConcurrentChunkSize)
 }
 
@@ -281,7 +272,7 @@ const defaultConcurrentChunkSize = 64 * 1024 * 1024
 // parseFileIPsConcurrentIOChunked is the chunk-size-parameterized implementation
 // of parseFileIPsConcurrentIO. Production callers use defaultConcurrentChunkSize;
 // tests override chunkSize to exercise boundary handling on small files.
-func (pp *ParallelParser) parseFileIPsConcurrentIOChunked(file *os.File, fileSize int64, chunkSize int64) ([]uint32, int, error) {
+func (pp *Parser) parseFileIPsConcurrentIOChunked(file *os.File, fileSize int64, chunkSize int64) ([]uint32, int, error) {
 	numChunks := int(fileSize / chunkSize)
 	if fileSize%chunkSize != 0 {
 		numChunks++
@@ -372,7 +363,7 @@ func (pp *ParallelParser) parseFileIPsConcurrentIOChunked(file *os.File, fileSiz
 const parseBatchSize = 1024
 
 // parseFileWithStreamingIO uses streaming I/O with batched parallel parsing workers (internal method)
-func (pp *ParallelParser) parseFileWithStreamingIO(filename string) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileWithStreamingIO(filename string) ([]ingestor.Request, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -483,23 +474,17 @@ func (pp *ParallelParser) parseFileWithStreamingIO(filename string) ([]ingestor.
 	return results, nil
 }
 
-// ParseFileParallelChunked (deprecated: use ParseFile instead)
-// Backward compatibility alias - delegates to ParseFile for consistent behavior
-func (pp *ParallelParser) ParseFileParallelChunked(filename string) ([]ingestor.Request, error) {
-	return pp.ParseFile(filename)
-}
-
 // parseFileWithConcurrentIO implements concurrent chunked file reading.
 // Uses ReadAt for thread-safe parallel reads, batched channels matching the
 // streaming path, and per-worker Request reuse (no sync.Pool needed).
-func (pp *ParallelParser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]ingestor.Request, error) {
 	return pp.parseFileConcurrentIOChunked(file, fileSize, defaultConcurrentChunkSize)
 }
 
 // parseFileConcurrentIOChunked is the chunk-size-parameterized implementation of
 // parseFileWithConcurrentIO. Production callers use defaultConcurrentChunkSize
 // (64MB); tests override chunkSize to exercise the concurrent path on small files.
-func (pp *ParallelParser) parseFileConcurrentIOChunked(file *os.File, fileSize int64, chunkSize int64) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileConcurrentIOChunked(file *os.File, fileSize int64, chunkSize int64) ([]ingestor.Request, error) {
 	numChunks := int(fileSize / chunkSize)
 	if fileSize%chunkSize != 0 {
 		numChunks++
@@ -611,7 +596,7 @@ type chunkJob struct {
 // as unsafe.String views aliasing the line bytes; those strings keep `buffer`
 // reachable so the GC retains it as long as any Request lives. In IP-only mode
 // nothing aliases the bytes, so the buffer is freed once the chunk is parsed.
-func (pp *ParallelParser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, linesChan chan<- [][]byte) {
+func (pp *Parser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, linesChan chan<- [][]byte) {
 	chunkLen := job.end - job.start
 	if chunkLen <= 0 {
 		return
@@ -966,9 +951,9 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 
 				switch extractor.FieldType {
 				case 1: // Timestamp
-					req.Timestamp = parseTimestampUltraFast(line, start, pos)
+					req.Timestamp = parseTimestamp(line, start, pos)
 				case 2: // Method (standalone)
-					req.Method = parseMethodUltraFast(line, start, pos)
+					req.Method = parseMethod(line, start, pos)
 				case 3: // Request line (%r) - extracts METHOD and URI, ignores HTTP version
 					if extractor.Quoted {
 						// Parse "METHOD URI HTTP/VERSION" format efficiently
@@ -979,7 +964,7 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 
 						// Extract method if not already set and method field exists
 						if methodEnd > start && req.Method == 0 {
-							req.Method = parseMethodUltraFast(line, start, methodEnd)
+							req.Method = parseMethod(line, start, methodEnd)
 						}
 
 						// Extract URI only if strings are needed
@@ -1025,7 +1010,7 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 					}
 				case 5: // Bytes
 					if len(fieldData) > 0 && fieldData[0] != '-' {
-						b, ok := parseBytesUltraFast(line, start, pos)
+						b, ok := parseBytes(line, start, pos)
 						req.Bytes = b
 						if !ok {
 							cf.counters.malformedBytes.Add(1)
@@ -1252,7 +1237,7 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 	return result
 }
 
-// parseTimestampUltraFast extracts timestamp from Apache Common Log format with maximum performance
+// parseTimestamp extracts timestamp from Apache Common Log format with maximum performance
 //
 // Expected format: "06/Jul/2025:19:57:26 +0000" within line[start:end], where
 // end is the field's exclusive end (e.g. the position of the closing ']').
@@ -1261,13 +1246,13 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 //
 // Performance optimizations:
 //   - Direct byte-to-int conversion using bit masking: (b & 0x0F)
-//   - 3-byte month lookup using bitwise operations for ultra-fast comparison
+//   - 3-byte month lookup using bitwise operations
 //   - Hardcoded month codes eliminate string comparisons
 //   - Single bounds check, then direct array access for all fields
 //
 // Month encoding: ASCII bytes packed into uint32 for fast switch lookup
 // Example: "Jul" = 0x4A756C = uint32('J')<<16 | uint32('u')<<8 | uint32('l')
-func parseTimestampUltraFast(line []byte, start, end int) time.Time {
+func parseTimestamp(line []byte, start, end int) time.Time {
 	if end-start < 20 || end > len(line) { // fast path reads line[start..start+19]
 		return time.Time{}
 	}
@@ -1280,7 +1265,7 @@ func parseTimestampUltraFast(line []byte, start, end int) time.Time {
 	// Use bit operations for faster digit parsing
 	day := int(line[start]&0x0F)*10 + int(line[start+1]&0x0F)
 
-	// Ultra-fast month lookup using 3-byte comparison
+	// Month lookup using 3-byte comparison
 	var month time.Month
 	m1, m2, m3 := line[start+3], line[start+4], line[start+5]
 	monthCode := uint32(m1)<<16 | uint32(m2)<<8 | uint32(m3)
@@ -1322,7 +1307,7 @@ func parseTimestampUltraFast(line []byte, start, end int) time.Time {
 	return time.Date(year, month, day, hour, minute, second, 0, time.UTC)
 }
 
-// parseMethodUltraFast extracts HTTP method using first-character optimization
+// parseMethod extracts HTTP method using first-character optimization
 //
 // Performance optimizations:
 //   - First-byte lookup eliminates string comparisons
@@ -1331,12 +1316,12 @@ func parseTimestampUltraFast(line []byte, start, end int) time.Time {
 //   - Covers all common HTTP methods: GET, POST, PUT, DELETE, HEAD, OPTIONS
 //
 // Returns: HTTPMethod enum or UNKNOWN for unrecognized methods
-func parseMethodUltraFast(line []byte, start, end int) ingestor.HTTPMethod {
+func parseMethod(line []byte, start, end int) ingestor.HTTPMethod {
 	if end <= start {
 		return ingestor.UNKNOWN
 	}
 
-	// Use first byte for ultra-fast lookup
+	// Use first byte for lookup
 	switch line[start] {
 	case 'G':
 		return ingestor.GET
@@ -1361,7 +1346,7 @@ func parseMethodUltraFast(line []byte, start, end int) ingestor.HTTPMethod {
 	}
 }
 
-// parseBytesUltraFast extracts numeric byte count from line[start:end].
+// parseBytes extracts numeric byte count from line[start:end].
 //
 // Returns (value, true) when every byte in the field is an ASCII digit, or
 // (0, false) when any non-digit appears — the field is then malformed and the
@@ -1370,7 +1355,7 @@ func parseMethodUltraFast(line []byte, start, end int) ingestor.HTTPMethod {
 //
 // Known pre-existing limitation (intentionally unchanged): values with >=10
 // digits silently wrap around uint32.
-func parseBytesUltraFast(line []byte, start, end int) (uint32, bool) {
+func parseBytes(line []byte, start, end int) (uint32, bool) {
 	if start >= end {
 		return 0, false
 	}
