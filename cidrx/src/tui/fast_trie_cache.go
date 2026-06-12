@@ -223,6 +223,17 @@ func (ftc *FastTrieCache) GetPreRenderedTexts(trieIndex int) (summary, clusterin
 	return summary, clustering, cidr, diagnostics, exists
 }
 
+// SetPreRenderedTexts stores all four pre-rendered panel texts for a trie.
+func (ftc *FastTrieCache) SetPreRenderedTexts(trieIndex int, summary, clustering, cidr, diagnostics string) {
+	ftc.mu.Lock()
+	defer ftc.mu.Unlock()
+
+	ftc.summaryTexts[trieIndex] = summary
+	ftc.clusterTexts[trieIndex] = clustering
+	ftc.cidrTexts[trieIndex] = cidr
+	ftc.diagnosticTexts[trieIndex] = diagnostics
+}
+
 // GetTrafficData returns cached traffic data for instant visualization
 func (ftc *FastTrieCache) GetTrafficData(trieIndex int) (trafficMatrix [256][256]uint32, maxTraffic uint32, exists bool) {
 	ftc.mu.RLock()
