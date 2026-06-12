@@ -4,9 +4,9 @@ import (
 	"time"
 )
 
-// OptimizedRequest uses uint32 for IP addresses to eliminate conversions
+// NumericRequest uses uint32 for IP addresses to eliminate conversions
 // This version keeps everything in numeric format until final output
-type OptimizedRequest struct {
+type NumericRequest struct {
 	Timestamp time.Time // Use native time
 	IP        uint32    // Store IP as uint32 - NO MORE net.IP conversions!
 	URI       string
@@ -18,7 +18,7 @@ type OptimizedRequest struct {
 
 // Uint32ToIPString converts uint32 back to IP string for output
 func Uint32ToIPString(ip uint32) string {
-	// Use a pre-allocated byte buffer for ultra-fast conversion
+	// Use a pre-allocated byte buffer to avoid allocations
 	var buf [15]byte // Max IPv4 length: "255.255.255.255"
 
 	b1 := byte(ip >> 24)
