@@ -176,11 +176,8 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 	// Signal that requests are available
 	close(a.requestsReady)
 
-	// Now that we have both analysis results and raw requests,
-	// we can efficiently cache everything for instant trie switching
 	if a.fastCache != nil && a.multiTrieResult != nil {
 		go func() {
-			// Cache all tries efficiently since we have complete analysis results
 			a.fastCache.PreCacheAllTries(a, a.multiTrieResult, requests)
 		}()
 	}
@@ -404,11 +401,6 @@ func (a *App) Run() error {
 	// Analysis is now done in CLI layer before TUI starts
 	// Just start the progress animation until results arrive
 	go a.animateProgress()
-
-	// Set up cleanup on exit
-	defer func() {
-		// Cleanup logic if needed
-	}()
 
 	// Run the TUI
 	return a.app.Run()

@@ -42,20 +42,10 @@ type VisualizationView struct {
 
 // NewVisualizationView creates a new visualization view
 func (a *App) NewVisualizationView() *VisualizationView {
-	var totalClusterSets int
-	if a.cfg != nil && a.jsonResult != nil {
-		// Config mode - use legacy format (jsonResult has the current trie data)
-		totalClusterSets = len(a.jsonResult.Clustering.Data)
-	} else {
-		// Legacy mode
-		totalClusterSets = len(a.jsonResult.Clustering.Data)
-	}
-
 	v := &VisualizationView{
-		app:               a,
-		currentClusterSet: 0,
-		totalClusterSets:  totalClusterSets,
-		// Initialize legacy cache maps
+		app:                 a,
+		currentClusterSet:   0,
+		totalClusterSets:    len(a.jsonResult.Clustering.Data),
 		cachedTrafficData:   make(map[int][256][256]uint32),
 		cachedMaxTraffic:    make(map[int]uint32),
 		cachedRenderText:    make(map[renderKey]string),

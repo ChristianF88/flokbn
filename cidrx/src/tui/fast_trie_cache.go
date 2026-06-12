@@ -75,9 +75,6 @@ func (ftc *FastTrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOut
 
 			// 3. Pre-process traffic data for visualization
 			ftc.preProcessTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
-
-			// 4. Pre-render visualization for all cluster sets (disabled for now to avoid nil pointer issues)
-			// ftc.preRenderVisualization(trieIndex, legacyData, app)
 		}
 	}
 
