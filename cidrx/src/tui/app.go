@@ -640,12 +640,15 @@ func (a *App) displayLegacyResultsUncached() {
 		if len(cluster.MergedRanges) > 0 {
 			clusteringText.WriteString("[red]Merged Ranges:[white]\n")
 
-			// Calculate total for this cluster set
+			// Calculate total for this cluster set; sum the per-range
+			// percentages so the total shares their denominator
+			// (requests after filtering, not unique IPs)
 			var totalRequests uint32
+			var totalPercentage float64
 			for _, cidr := range cluster.MergedRanges {
 				totalRequests += cidr.Requests
+				totalPercentage += cidr.Percentage
 			}
-			totalPercentage := float64(totalRequests) / float64(a.jsonResult.General.UniqueIPs) * 100
 
 			for _, cidr := range cluster.MergedRanges {
 				clusteringText.WriteString(fmt.Sprintf("  • %s: [red]%s[white] requests (%.2f%%)\n",
@@ -721,12 +724,15 @@ func (a *App) buildClusteringText() string {
 		if len(cluster.MergedRanges) > 0 {
 			clusteringText.WriteString("[red]Merged Ranges:[white]\n")
 
-			// Calculate total for this cluster set
+			// Calculate total for this cluster set; sum the per-range
+			// percentages so the total shares their denominator
+			// (requests after filtering, not unique IPs)
 			var totalRequests uint32
+			var totalPercentage float64
 			for _, cidr := range cluster.MergedRanges {
 				totalRequests += cidr.Requests
+				totalPercentage += cidr.Percentage
 			}
-			totalPercentage := float64(totalRequests) / float64(a.jsonResult.General.UniqueIPs) * 100
 
 			for _, cidr := range cluster.MergedRanges {
 				clusteringText.WriteString(fmt.Sprintf("  • %s: [red]%s[white] requests (%.2f%%)\n",

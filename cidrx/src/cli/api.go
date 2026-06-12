@@ -711,7 +711,10 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 							threat.CIDR, output.FormatNumber(int(threat.Requests)), threat.Percentage)
 						totalThreats += threat.Requests
 					}
-					totalPercentage := float64(totalThreats) / float64(trieResult.Stats.UniqueIPs) * 100
+					// Percent-of-requests, matching the per-range percentages
+					// computed during clustering (denominator = inserted
+					// requests, not unique IPs).
+					totalPercentage := float64(totalThreats) / float64(trieResult.Stats.TotalRequestsAfterFiltering) * 100
 					fmt.Printf("    %-20s  %10s requests  (%6.2f%%) [TOTAL]\n",
 						"───────────────────", output.FormatNumber(int(totalThreats)), totalPercentage)
 				} else {

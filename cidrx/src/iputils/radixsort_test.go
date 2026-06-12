@@ -169,3 +169,54 @@ func BenchmarkRadixVsStdSort(b *testing.B) {
 		})
 	}
 }
+
+func TestCountDistinctSorted(t *testing.T) {
+	tests := []struct {
+		name string
+		data []uint32
+		want int
+	}{
+		{"empty", nil, 0},
+		{"single", []uint32{42}, 1},
+		{"all same", []uint32{7, 7, 7, 7}, 1},
+		{"all distinct", []uint32{1, 2, 3, 4, 5}, 5},
+		{"mixed runs", []uint32{1, 1, 2, 3, 3, 3, 4}, 4},
+		{"duplicates at ends", []uint32{0, 0, 5, 9, 9}, 3},
+		{"max values", []uint32{0, 4294967295, 4294967295}, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CountDistinctSorted(tt.data); got != tt.want {
+				t.Errorf("CountDistinctSorted(%v) = %d, want %d", tt.data, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCountDistinctSorted_MatchesMap(t *testing.T) {
+	rng := rand.New(rand.NewSource(99))
+	data := make([]uint32, 100000)
+	seen := make(map[uint32]bool)
+	for i := range data {
+		// Constrained range to force plenty of duplicates
+		data[i] = uint32(rng.Intn(30000))
+		seen[data[i]] = true
+	}
+	RadixSortUint32(data)
+	if got := CountDistinctSorted(data); got != len(seen) {
+		t.Errorf("CountDistinctSorted = %d, want %d", got, len(seen))
+	}
+}
+
+func BenchmarkCountDistinctSorted(b *testing.B) {
+	rng := rand.New(rand.NewSource(1))
+	data := make([]uint32, 1000000)
+	for i := range data {
+		data[i] = rng.Uint32() % 500000 // ~50% duplicates
+	}
+	RadixSortUint32(data)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = CountDistinctSorted(data)
+	}
+}

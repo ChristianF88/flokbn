@@ -253,3 +253,68 @@ func TestStaticPipeline_NilStaticSection(t *testing.T) {
 		t.Error("Expected non-nil result even for nil static section")
 	}
 }
+
+// TestStaticPipeline_UniqueIPsCountsDistinct verifies that Stats.UniqueIPs
+// reports the number of DISTINCT IPs, not the number of insertions. Regression
+// test for UniqueIPs being set from trie CountAll(), which counts duplicate
+// IPs and therefore equalled requests-after-filtering.
+func TestStaticPipeline_UniqueIPsCountsDistinct(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "dups.log")
+
+	// 300 requests from only 3 distinct IPs.
+	ips := []string{"10.1.1.1", "10.1.1.2", "10.1.1.3"}
+	var b strings.Builder
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&b, "%s - - [01/Feb/2025:00:00:00 +0000] \"GET / HTTP/1.1\" 200 100 \"-\" \"test\"\n", ips[i%3])
+	}
+	if err := os.WriteFile(logFile, []byte(b.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	logFormat := "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
+
+	cases := []struct {
+		name string
+		trie *config.TrieConfig
+	}{
+		// Unfiltered: exercises the IP-only fast path (processTrieFromSortedIPs).
+		{"unfiltered fast path", &config.TrieConfig{}},
+		// Filtered: a User-Agent regex forces the full path (processTrieParallel).
+		{"filtered full path", &config.TrieConfig{UserAgentRegex: "test"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.trie.CompileRegex(); err != nil {
+				t.Fatal(err)
+			}
+			cfg := &config.Config{
+				Global: &config.GlobalConfig{},
+				Static: &config.StaticConfig{
+					LogFile:   logFile,
+					LogFormat: logFormat,
+				},
+				StaticTries: map[string]*config.TrieConfig{"t": tc.trie},
+			}
+
+			result, err := ParallelStaticFromConfigNoRequests(cfg)
+			if err != nil {
+				t.Fatalf("static analysis failed: %v", err)
+			}
+			if len(result.Tries) != 1 {
+				t.Fatalf("expected 1 trie, got %d", len(result.Tries))
+			}
+			stats := result.Tries[0].Stats
+			if stats.TotalRequestsAfterFiltering != 300 {
+				t.Errorf("TotalRequestsAfterFiltering = %d, want 300", stats.TotalRequestsAfterFiltering)
+			}
+			if stats.UniqueIPs != 3 {
+				t.Errorf("UniqueIPs = %d, want 3 (must count distinct IPs, not insertions)", stats.UniqueIPs)
+			}
+			if result.General.UniqueIPs != 3 {
+				t.Errorf("General.UniqueIPs = %d, want 3", result.General.UniqueIPs)
+			}
+		})
+	}
+}

@@ -59,6 +59,25 @@ func radixPass(src, dst []uint32, shift uint) {
 	}
 }
 
+// CountDistinctSorted returns the number of distinct values in an
+// ASCENDING-sorted slice (e.g. the output of RadixSortUint32). It is a single
+// branch-predictable linear pass with zero allocations, so it can be used to
+// derive a true unique-IP count off the trie insert hot path.
+func CountDistinctSorted(data []uint32) int {
+	if len(data) == 0 {
+		return 0
+	}
+	distinct := 1
+	prev := data[0]
+	for _, v := range data[1:] {
+		if v != prev {
+			distinct++
+			prev = v
+		}
+	}
+	return distinct
+}
+
 // insertionSortUint32 for small slices where radix overhead isn't worthwhile
 func insertionSortUint32(data []uint32) {
 	for i := 1; i < len(data); i++ {
