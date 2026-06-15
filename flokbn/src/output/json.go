@@ -19,9 +19,28 @@ type JSONOutput struct {
 	Errors                []Error      `json:"errors"`
 	UserAgentWhitelistIPs []string     `json:"useragent_whitelist_ips,omitempty"`
 	UserAgentBlacklistIPs []string     `json:"useragent_blacklist_ips,omitempty"`
+	// GlobalFilters is ALWAYS present in the JSON output. This is a deliberate
+	// schema choice: the "global_filters" key is emitted on every run (it is not
+	// omitempty — a non-pointer struct cannot be, and we would not want it to be
+	// anyway), carrying zero counts when no whitelist is configured. Consumers can
+	// therefore rely on the key existing and need not special-case its absence.
+	GlobalFilters GlobalFilters `json:"global_filters"`
 
 	// Mutex for thread-safe warning/error appending
 	mu sync.Mutex `json:"-"`
+}
+
+// GlobalFilters records how many entries each globally-configured whitelist
+// holds. These whitelists drop requests from every trie regardless of the
+// per-trie TrieParameters, so they must be surfaced as active filters even on a
+// baseline trie that has no per-trie filters of its own. Only counts are kept
+// here (not the entries themselves) — the renderers report TYPE + COUNT.
+//
+// Blacklists are intentionally excluded: they do not filter trie membership
+// (they only affect the published ban list), so they are not "active filters".
+type GlobalFilters struct {
+	IPWhitelistCIDRs    int `json:"ip_whitelist_cidrs"`
+	UAWhitelistPatterns int `json:"ua_whitelist_patterns"`
 }
 
 // Metadata contains information about the analysis run
@@ -208,6 +227,60 @@ type LiveCIDR struct {
 // UpdateDuration updates the duration in metadata
 func (j *JSONOutput) UpdateDuration(startTime time.Time) {
 	j.Metadata.DurationMS = time.Since(startTime).Milliseconds()
+}
+
+// ActiveFilters returns the human-readable list of filters that are dropping
+// requests from a trie. It is the single source of truth shared by every
+// renderer (CLI plain output and the TUI summary) so the two never drift.
+//
+// The per-trie filters (User-Agent regex, endpoint regex, time range) come from
+// params; the global whitelists come from gf. The global whitelist entries are
+// appended AFTER the per-trie entries, and only when their count is > 0 — so a
+// baseline trie with no per-trie filters still reports the active IP/UA
+// whitelists instead of "None". Callers should print "None" only when the
+// returned slice is empty (i.e. zero per-trie filters AND both whitelist counts
+// are zero).
+func ActiveFilters(params TrieParameters, gf GlobalFilters) []string {
+	var filters []string
+
+	if params.UserAgentRegex != nil && *params.UserAgentRegex != "" {
+		filters = append(filters, fmt.Sprintf("User-Agent: %s", *params.UserAgentRegex))
+	}
+
+	if params.EndpointRegex != nil && *params.EndpointRegex != "" {
+		filters = append(filters, fmt.Sprintf("Endpoint: %s", *params.EndpointRegex))
+	}
+
+	if params.TimeRange != nil {
+		if !params.TimeRange.Start.IsZero() || !params.TimeRange.End.IsZero() {
+			timeFilter := "Time: "
+			if !params.TimeRange.Start.IsZero() {
+				timeFilter += params.TimeRange.Start.Format("2006-01-02 15:04")
+			} else {
+				timeFilter += "∞"
+			}
+			timeFilter += " → "
+			if !params.TimeRange.End.IsZero() {
+				timeFilter += params.TimeRange.End.Format("2006-01-02 15:04")
+			} else {
+				timeFilter += "∞"
+			}
+			filters = append(filters, timeFilter)
+		}
+	}
+
+	// Note: CIDRRanges are not filters - they are analysis targets, so we don't include them.
+
+	// Global whitelists drop requests from every trie; report TYPE + COUNT
+	// (never the entries themselves), appended after the per-trie filters.
+	if gf.IPWhitelistCIDRs > 0 {
+		filters = append(filters, fmt.Sprintf("IP whitelist (%d CIDRs)", gf.IPWhitelistCIDRs))
+	}
+	if gf.UAWhitelistPatterns > 0 {
+		filters = append(filters, fmt.Sprintf("UA whitelist (%d patterns)", gf.UAWhitelistPatterns))
+	}
+
+	return filters
 }
 
 // FormatNumber adds thousand separators to numbers

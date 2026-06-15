@@ -5,30 +5,33 @@
 # filter option: global IP/UA white- and blacklists, per-trie UA/endpoint/time
 # filters, CIDR-range analysis, multiple cluster parameter regimes, jail wiring.
 #
-# The easiest way to run it is to scaffold a self-contained copy with the
-# binary, generate the matching log into the same directory, and analyze it:
+# The easiest way to run it is to unpack a self-contained, ready-to-run demo
+# with the binary — this config, a matching 1,000,000-line synthetic log, and
+# all four list files, every path absolute and co-located — then analyze it:
 #
-#     flokbn example config --out ./demo
-#     flokbn example logs   --out ./demo/access.log --lines 10000000
+#     flokbn generate static-demo --out ./demo
 #     flokbn static --config ./demo/complex-static.toml --plain
 #
-# `flokbn example config` rewrites every path below to an absolute, co-located
-# path, so the scaffolded copy runs from any working directory. The paths in
-# THIS reference file are relative and resolve from the directory you run
-# flokbn in.
+# `flokbn generate static-demo` rewrites every path below to an absolute,
+# co-located path, so the generated copy runs from any working directory. The
+# cluster minimum sizes below are calibrated for that fixed 1,000,000-line log.
+# The paths in THIS reference file are relative — the list paths resolve when
+# run from flokbn/src, and logFile is a placeholder for your own access log.
+# For a copy that runs from anywhere, use `generate static-demo` (above).
 #
 # ...or point logFile at your own access log and adapt logFormat
 # (see docs: Reference -> Log Formats) and the per-trie filters/minimum sizes.
 
 [global]
 # Jail/ban output. Both must be set or no jail/ban processing happens.
-# Relative => written into the CWD (flokbn/src); both names are git-ignored.
+# Relative => written into the current working directory; both names are
+# git-ignored.
 # NOTE: the jail file persists across runs — delete it for a clean rerun.
 #
-# Heads-up: on very large, high-cardinality inputs like this 10M-line example
-# the jail/ban stage is currently slow. For a quick run, comment out
-# jailFile/banFile below to skip jail processing — the trie analysis, CIDR
-# range stats, and clustering are unaffected.
+# Heads-up: on very large, high-cardinality inputs (far larger than this
+# 1,000,000-line demo) the jail/ban stage is currently slow. For a quick run,
+# comment out jailFile/banFile below to skip jail processing — the trie
+# analysis, CIDR range stats, and clustering are unaffected.
 jailFile = "flokbn_jail.json"
 banFile  = "flokbn_ban.txt"
 
@@ -42,13 +45,13 @@ blacklist = "../../config_examples/blacklist.txt"
 # A whitelisted UA removes the request from EVERY trie below and shields the
 # IP from jailing; a blacklisted UA jails its IP immediately as a /32.
 # The example whitelist contains the exact Googlebot/bingbot strings present
-# in the fake data — that is why every trie below "loses" ~10% of requests,
+# in the fake data — that is why every trie below "loses" ~10.4% of requests,
 # including the unfiltered baseline. Deliberate: it demonstrates precedence.
 userAgentWhitelist = "../../config_examples/ua_whitelist.txt"
 userAgentBlacklist = "../../config_examples/ua_blacklist.txt"
 
 [static]
-logFile = "../../fake-logs/fake_nginx_10m.log"
+logFile = "access.log"
 # Combined log with the real client IP in the trailing quoted field (%h last).
 logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
 # 256x256 first-octet/second-octet request heatmap (git-ignored filename).
@@ -56,16 +59,16 @@ plotPath = "heatmap.html"
 
 # ------------------------------------------------------------------------------
 # Trie 1 — unfiltered baseline: all traffic (minus UA-whitelisted requests).
-# Expect ~8.95M requests. The ~10 hotspot /16s carry 77k-178k requests each;
-# a background /16 carries only ~116, so size thresholds separate them cleanly.
+# Expect ~896k requests. The ~10 hotspot /16s carry 7.5k-17.8k requests each;
+# a background /16 carries only ~12, so size thresholds separate them cleanly.
 # ------------------------------------------------------------------------------
 [static.t1_baseline]
 # CIDR-range analysis: one broad /8 and two narrow /16s matching real hotspots.
 cidrRanges = ["23.0.0.0/8", "23.253.0.0/16", "87.26.0.0/16"]
 clusterArgSets = [
-    [100000, 12, 18, 0.2],   # coarse sweep: only the heaviest hotspot cores
-    [50000,  16, 24, 0.15],  # standard sweep: the dominant hotspot ranges
-    [15000,  18, 26, 0.1],   # deeper minDepth: finer slices of each hotspot
+    [10000, 12, 18, 0.2],   # coarse sweep: only the heaviest hotspot cores
+    [5000,  16, 24, 0.15],  # standard sweep: the dominant hotspot ranges
+    [1500,  18, 26, 0.1],   # deeper minDepth: finer slices of each hotspot
 ]
 # Only the conservative coarse set feeds the jail; the finer sets are
 # exploratory. Mixed true/false is the point.
@@ -75,36 +78,36 @@ useForJail = [true, false, false]
 # Trie 2 — UA-filtered bot traffic.
 # The regex names all five fake bot UAs, but Googlebot/bingbot requests are
 # already removed by the exact-match UA whitelist above — whitelist wins.
-# What remains: curl + python-requests + Anubis ~= 1.96M requests; hotspot
-# /16s carry ~17k-39k of them.
+# What remains: curl + python-requests + Anubis ~= 196k requests; hotspot
+# /16s carry ~1.7k-3.9k of them.
 # ------------------------------------------------------------------------------
 [static.t2_bots]
 useragentRegex = "Googlebot|bingbot|python-requests|curl|Anubis"
 clusterArgSets = [
-    [20000, 12, 16, 0.2],    # top hotspot /16s within bot traffic
-    [10000, 16, 24, 0.15],   # dominant hotspot ranges
-    [3500,  18, 28, 0.1],    # finer slices of each hotspot
+    [2000, 12, 16, 0.2],    # top hotspot /16s within bot traffic
+    [1000, 16, 24, 0.15],   # dominant hotspot ranges
+    [350,  18, 28, 0.1],    # finer slices of each hotspot
 ]
 useForJail = [true, true, false]
 
 # ------------------------------------------------------------------------------
 # Trie 3 — endpoint-filtered: the nine hottest endpoints (~60% of traffic,
-# Zipf-distributed; /fake-endpoint-1 alone is ~23%). ~5.4M requests;
-# hotspot /16s carry ~47k-108k.
+# Zipf-distributed; /fake-endpoint-1 alone is ~23%). ~545k requests;
+# hotspot /16s carry ~4.5k-10.6k.
 # ------------------------------------------------------------------------------
 [static.t3_hot_endpoints]
 endpointRegex = "^/fake-endpoint-[1-9]$"
 clusterArgSets = [
-    [60000, 12, 18, 0.2],    # coarse sweep: only the heaviest hotspot cores
-    [30000, 16, 24, 0.15],   # dominant hotspot ranges
-    [10000, 18, 26, 0.1],    # finer slices of each hotspot
+    [6000, 12, 18, 0.2],    # coarse sweep: only the heaviest hotspot cores
+    [3000, 16, 24, 0.15],   # dominant hotspot ranges
+    [1000, 18, 26, 0.1],    # finer slices of each hotspot
 ]
 useForJail = [false, true, false]
 
 # ------------------------------------------------------------------------------
 # Trie 4 — everything combined: bot UAs + hot endpoints + a 24h window
 # (the log spans 2026-02-03T23:56Z to 2026-02-06T23:58Z; RFC3339 only).
-# ~0.4M requests survive all three filters; hotspot /16s carry ~3.4k-8k.
+# ~39k requests survive all three filters; hotspot /16s carry ~310-760.
 # ------------------------------------------------------------------------------
 [static.t4_targeted_window]
 useragentRegex = "python-requests|curl|Anubis"
@@ -113,8 +116,8 @@ startTime = "2026-02-04T12:00:00Z"
 endTime   = "2026-02-05T12:00:00Z"
 cidrRanges = ["23.0.0.0/8", "23.253.0.0/16"]
 clusterArgSets = [
-    [3000, 12, 16, 0.2],     # hotspot /16s despite triple filtering
-    [1500, 16, 24, 0.15],    # dominant hotspot ranges
-    [600,  18, 28, 0.1],     # finer slices of each hotspot
+    [300, 12, 16, 0.2],     # hotspot /16s despite triple filtering
+    [150, 16, 24, 0.15],    # dominant hotspot ranges
+    [60,  18, 28, 0.1],     # finer slices of each hotspot
 ]
 useForJail = [false, false, true]

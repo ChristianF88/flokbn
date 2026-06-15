@@ -19,6 +19,13 @@ type Prisoner struct {
 	CIDR      string `json:"Cidr"`
 	BanStart  time.Time
 	BanActive bool
+
+	// Cached IPv4 numeric bounds of CIDR, valid iff boundsOK. Unexported, so
+	// encoding/json never (de)serializes them. Set eagerly when a prisoner is
+	// added (ThrowPrisonerInCell) or loaded (RefreshBounds); the sub/parent
+	// range scans read them instead of calling net.ParseCIDR per prisoner.
+	startU, endU uint32
+	boundsOK     bool
 }
 
 type Jail struct {
@@ -98,9 +105,23 @@ func ThrowPrisonerInCell(jail *Jail, cellIndex int, prisoner Prisoner) {
 	}
 	prisoner.BanStart = time.Now()
 	prisoner.BanActive = true
+	prisoner.startU, prisoner.endU, prisoner.boundsOK = cidrBounds(prisoner.CIDR)
 	jail.Cells[cellIndex].Prisoners = append(
 		jail.Cells[cellIndex].Prisoners, prisoner,
 	)
+}
+
+// RefreshBounds populates each prisoner's cached numeric bounds. Call it after
+// loading a jail from disk so the sub/parent range scans avoid re-parsing every
+// prisoner CIDR. Prisoners added via ThrowPrisonerInCell already have bounds
+// set; this only matters for deserialized jails.
+func (j *Jail) RefreshBounds() {
+	for ci := range j.Cells {
+		for pi := range j.Cells[ci].Prisoners {
+			p := &j.Cells[ci].Prisoners[pi]
+			p.startU, p.endU, p.boundsOK = cidrBounds(p.CIDR)
+		}
+	}
 }
 
 func MovePrisonerToNextCell(jail *Jail, cellIndex int, prisonerIndex int) {
@@ -124,26 +145,41 @@ func MovePrisonerToNextCell(jail *Jail, cellIndex int, prisonerIndex int) {
 	}
 }
 
+// cidrBounds parses an IPv4 CIDR into its inclusive [start,end] numeric range.
+// ok is false for parse errors or IPv6 (unsupported), exactly as the previous
+// isSubRange parsing behaved.
+func cidrBounds(cidr string) (start, end uint32, ok bool) {
+	ip, n, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return 0, 0, false
+	}
+	v4 := ip.To4()
+	if v4 == nil {
+		return 0, 0, false // IPv6 not supported
+	}
+	start = binary.BigEndian.Uint32(v4)
+	end = start | ^binary.BigEndian.Uint32(n.Mask)
+	return start, end, true
+}
+
+// prisonerBounds returns a prisoner's cached numeric range, falling back to
+// parsing CIDR if the cache was never populated (e.g. a struct literal built
+// outside ThrowPrisonerInCell/RefreshBounds, as in tests). Correctness never
+// depends on the cache — only speed.
+func prisonerBounds(p Prisoner) (start, end uint32, ok bool) {
+	if p.boundsOK {
+		return p.startU, p.endU, true
+	}
+	return cidrBounds(p.CIDR)
+}
+
 func isSubRange(cidr1, cidr2 string) bool {
-	ip1, net1, err1 := net.ParseCIDR(cidr1)
-	ip2, net2, err2 := net.ParseCIDR(cidr2)
-	if err1 != nil || err2 != nil {
+	s1, e1, ok1 := cidrBounds(cidr1)
+	s2, e2, ok2 := cidrBounds(cidr2)
+	if !ok1 || !ok2 {
 		return false
 	}
-	ip1v4 := ip1.To4()
-	ip2v4 := ip2.To4()
-	if ip1v4 == nil || ip2v4 == nil {
-		return false // IPv6 not supported
-	}
-	ip1u := binary.BigEndian.Uint32(ip1v4)
-	mask1u := binary.BigEndian.Uint32(net1.Mask)
-	end1u := ip1u | ^mask1u
-
-	ip2u := binary.BigEndian.Uint32(ip2v4)
-	mask2u := binary.BigEndian.Uint32(net2.Mask)
-	end2u := ip2u | ^mask2u
-
-	return ip1u >= ip2u && end1u <= end2u
+	return s1 >= s2 && e1 <= e2
 }
 
 func (j *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
@@ -151,9 +187,16 @@ func (j *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
 	var matchedPrisoners []int
 	found := false
 
+	// Parse the query range once; compare against each prisoner's cached
+	// bounds. A prisoner is a sub-range of cidr iff it lies within [qs,qe].
+	qs, qe, qok := cidrBounds(cidr)
+	if !qok {
+		return false, nil, nil
+	}
 	for cellIdx, cell := range j.Cells {
 		for prisonerIdx, prisoner := range cell.Prisoners {
-			if isSubRange(prisoner.CIDR, cidr) {
+			ps, pe, pok := prisonerBounds(prisoner)
+			if pok && ps >= qs && pe <= qe {
 				matchedCells = append(matchedCells, cellIdx)
 				matchedPrisoners = append(matchedPrisoners, prisonerIdx)
 				found = true
@@ -164,9 +207,16 @@ func (j *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
 }
 
 func (j *Jail) ParentRangeInJail(cidr string) (bool, int, int) {
+	// Parse the query range once; cidr is a sub-range of a prisoner iff
+	// [qs,qe] lies within that prisoner's cached bounds.
+	qs, qe, qok := cidrBounds(cidr)
+	if !qok {
+		return false, -1, -1
+	}
 	for cellIdx, cell := range j.Cells {
 		for prisonerIdx, prisoner := range cell.Prisoners {
-			if isSubRange(cidr, prisoner.CIDR) {
+			ps, pe, pok := prisonerBounds(prisoner)
+			if pok && qs >= ps && qe <= pe {
 				return true, cellIdx, prisonerIdx
 			}
 		}

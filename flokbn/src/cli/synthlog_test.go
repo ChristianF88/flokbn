@@ -159,6 +159,30 @@ func TestGenerateSyntheticLogRejectsNonPositive(t *testing.T) {
 	}
 }
 
+// TestSynthPickClampsOutOfRange guards the floating-point edge of synthPick:
+// when r lands exactly on or just past the final cumulative weight (which FP
+// rounding makes possible), it must return the last bucket index rather than
+// len(cum) — indexing the latter into the callers' slices would panic.
+func TestSynthPickClampsOutOfRange(t *testing.T) {
+	cum := synthCumulative([]float64{0.5, 0.5}) // -> [0.5, 1.0]
+	last := len(cum) - 1
+
+	if got := synthPick(cum, cum[last]); got != last {
+		t.Errorf("synthPick(cum, %v) = %d, want %d (boundary)", cum[last], got, last)
+	}
+	if got := synthPick(cum, cum[last]+1); got != last {
+		t.Errorf("synthPick(cum, %v) = %d, want %d (over-range)", cum[last]+1, got, last)
+	}
+
+	// In-range values still map to the correct bucket.
+	if got := synthPick(cum, 0.25); got != 0 {
+		t.Errorf("synthPick(cum, 0.25) = %d, want 0", got)
+	}
+	if got := synthPick(cum, 0.75); got != 1 {
+		t.Errorf("synthPick(cum, 0.75) = %d, want 1", got)
+	}
+}
+
 func BenchmarkGenerateSyntheticLog(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

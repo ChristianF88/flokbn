@@ -627,3 +627,79 @@ func TestJail_PersistenceRoundTrip(t *testing.T) {
 		t.Errorf("Loaded jail does not match original after round-trip persistence")
 	}
 }
+
+// TestFillManyDistinctConsistency exercises the cached-bounds Fill path at the
+// scale that used to be pathological: many distinct /32s plus a parent /16 that
+// must absorb its children. It asserts the merge semantics still hold (the /16
+// swallows every child /32, leaving one prisoner) and serves as the correctness
+// companion to BenchmarkUpdateManyDistinct.
+func TestFillManyDistinctConsistency(t *testing.T) {
+	const n = 2000
+	j := NewJail()
+
+	cidrs := make([]string, 0, n+1)
+	for i := 0; i < n; i++ {
+		cidrs = append(cidrs, fmtCIDR(10, 0, i/256, i%256, 32))
+	}
+	if err := j.Update(cidrs); err != nil {
+		t.Fatalf("Update(%d /32s): %v", n, err)
+	}
+
+	total := 0
+	for _, cell := range j.Cells {
+		total += len(cell.Prisoners)
+	}
+	if total != n {
+		t.Fatalf("after inserting %d distinct /32s, jail holds %d prisoners, want %d", n, total, n)
+	}
+
+	// A parent /16 covering all of them must collapse the children into a
+	// single prisoner (ParentRange/SubRange merge path, now driven by cached
+	// bounds).
+	if err := j.Update([]string{"10.0.0.0/16"}); err != nil {
+		t.Fatalf("Update parent /16: %v", err)
+	}
+	total = 0
+	for _, cell := range j.Cells {
+		total += len(cell.Prisoners)
+	}
+	if total != 1 {
+		t.Fatalf("parent /16 did not absorb children: jail holds %d prisoners, want 1", total)
+	}
+}
+
+func fmtCIDR(a, b, c, d, bits int) string {
+	return itoa(a) + "." + itoa(b) + "." + itoa(c) + "." + itoa(d) + "/" + itoa(bits)
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [4]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
+}
+
+// BenchmarkUpdateManyDistinct guards against the per-prisoner net.ParseCIDR
+// storm in the sub/parent range scans: filling many distinct /32s must stay
+// dominated by the cheap cached-bound comparisons, not CIDR re-parsing.
+func BenchmarkUpdateManyDistinct(b *testing.B) {
+	const n = 4000
+	cidrs := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		cidrs = append(cidrs, fmtCIDR(10, i/256%256, i/256, i%256, 32))
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		j := NewJail()
+		if err := j.Update(cidrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

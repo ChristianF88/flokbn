@@ -21,7 +21,7 @@ seo:
 flokbn [global options] command [command options]
 ```
 
-Three commands: **`static`** (historical log analysis), **`live`** (real-time monitoring), and **`example`** (generate ready-to-run example inputs).
+Three commands: **`static`** (historical log analysis), **`live`** (real-time monitoring), and **`generate`** (generate ready-to-run example inputs).
 
 ## Global Options
 
@@ -135,54 +135,46 @@ Live mode supports the same filter flags as static mode: `--useragentRegex`, `--
 
 ---
 
-## Example Mode
+## Generate Mode
 
 ```bash
-flokbn example <subcommand> [options]
+flokbn generate <subcommand> [options]
 ```
 
 Generates ready-to-run example inputs so you can try the full analysis without
-a Go toolchain or your own logs. Two subcommands:
+a Go toolchain or your own logs.
 
-### `example logs`
+### `generate static-demo`
 
 ```bash
-flokbn example logs --out FILE [--lines N] [--seed S]
+flokbn generate static-demo [--out <dir>]
 ```
 
-Generates a synthetic nginx/Apache-combined access log with a known traffic
-shape (weighted `/16` hotspots over a uniform public-IP background, Zipf
-endpoint popularity, and exact-match whitelist User-Agents). Output is
-deterministic for a given seed.
+Writes a complete, self-contained static-analysis demo into the directory given
+by `--out`: a fixed 1,000,000-line synthetic access log (`access.log`), the
+matching [complex static-analysis configuration]({{< relref "/docs/guides/complex-static-analysis/" >}})
+whose cluster thresholds are calibrated for that log, and the four IP/UA list
+files the config references. Every path in the generated config is rewritten to
+an absolute, co-located target, so it runs from any working directory.
+
+The synthetic log is deterministic, with a known traffic shape (weighted `/16`
+hotspots over a uniform public-IP background, Zipf endpoint popularity, and
+exact-match whitelist User-Agents). There is no line-count flag — the demo
+always generates exactly 1,000,000 lines.
 
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `--out` | string | Yes | - | Output log file path |
-| `--lines` | int | No | `1000000` | Number of log lines to generate |
-| `--seed` | uint | No | `42` | PRNG seed; the same seed produces byte-identical output |
-
-### `example config`
-
-```bash
-flokbn example config --out DIR
-```
-
-Scaffolds the [complex static-analysis example]({{< relref "/docs/guides/complex-static-analysis/" >}})
-into `DIR`: the configuration TOML plus its four IP/UA list files. Every path
-in the written config is rewritten to an absolute, co-located target, so the
-scaffolded config runs from any working directory.
-
-| Flag | Type | Required | Default | Description |
-|------|------|----------|---------|-------------|
-| `--out` | string | Yes | - | Output directory for the scaffolded config and list files |
+| `--out` | directory | No | `.` (current directory) | Directory to create the demo in. Receives the generated `access.log`, the calibrated config, and the IP/UA list files. |
 
 A complete run from the binary alone:
 
 ```bash
-flokbn example config --out ./demo
-flokbn example logs   --out ./demo/access.log --lines 10000000
+flokbn generate static-demo --out ./demo
 flokbn static --config ./demo/complex-static.toml --plain
 ```
+
+Running the analysis additionally writes `heatmap.html`, `flokbn_jail.json`,
+and `flokbn_ban.txt` into the same directory.
 
 ---
 

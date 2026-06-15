@@ -1188,3 +1188,87 @@ func equalCIDRSets(got, want []string) bool {
 	}
 	return true
 }
+
+// TestDropFullyWhitelistedNoFragmentation is the regression guard for the jail
+// blowup: many scattered /32 whitelist entries inside a jailed range must NOT
+// fragment that range. The old pre-jail path called RemoveWhitelisted here,
+// which subtracted every /32 hole and exploded a single /16 into thousands of
+// gap CIDRs (the filtered list grew past its input, producing the nonsensical
+// negative "prevented N CIDRs" count and a super-linear jail update). The
+// remedy keeps partially-overlapping ranges whole and only drops ranges the
+// whitelist fully covers.
+func TestDropFullyWhitelistedNoFragmentation(t *testing.T) {
+	const holes = 5000
+	jail := []string{"10.0.0.0/16"}
+	whitelist := make([]string, 0, holes)
+	for i := 0; i < holes; i++ {
+		whitelist = append(whitelist, fmt.Sprintf("10.0.%d.%d/32", i/256, i%256))
+	}
+
+	kept, dropped := DropFullyWhitelisted(jail, whitelist)
+
+	// The jailed /16 is only partially covered, so it stays whole and is kept.
+	if len(kept) != 1 || kept[0] != "10.0.0.0/16" {
+		t.Fatalf("DropFullyWhitelisted fragmented or dropped a partially-covered range: got %v (len %d), want [10.0.0.0/16]", kept, len(kept))
+	}
+	if dropped != 0 {
+		t.Errorf("dropped = %d, want 0 (no fully-covered range)", dropped)
+	}
+
+	// Demonstrate the bug being prevented: the old subtracting path explodes
+	// the same input into far more entries than it received (hence the negative
+	// count). This is exactly what we must NOT feed into the jail update.
+	if frag := RemoveWhitelisted(jail, whitelist); len(frag) <= len(jail) {
+		t.Skipf("RemoveWhitelisted no longer fragments (%d entries); contrast no longer demonstrable", len(frag))
+	}
+
+	// Invariant preserved: the whitelist still wins at the publish choke point,
+	// so none of the whitelisted /32s can end up in the emitted ban list even
+	// though the /16 was jailed whole.
+	publishBans, _ := ComposeBanLists(kept, nil, whitelist)
+	for _, w := range whitelist {
+		if IsWhitelisted(w, publishBans) {
+			t.Fatalf("whitelisted entry %s is covered by a published ban range %v", w, publishBans)
+		}
+	}
+}
+
+// TestDropFullyWhitelistedDropsCovered checks the count is correct: ranges
+// fully inside the whitelist are dropped and counted, partial and disjoint
+// ranges are kept whole.
+func TestDropFullyWhitelistedDropsCovered(t *testing.T) {
+	jail := []string{
+		"10.0.5.0/24",    // fully inside whitelisted 10.0.5.0/24 -> dropped
+		"10.0.0.0/16",    // only partially covered -> kept whole
+		"192.168.1.0/24", // disjoint -> kept
+	}
+	whitelist := []string{"10.0.5.0/24", "10.0.7.42/32"}
+
+	kept, dropped := DropFullyWhitelisted(jail, whitelist)
+
+	if dropped != 1 {
+		t.Errorf("dropped = %d, want 1", dropped)
+	}
+	wantKept := map[string]bool{"10.0.0.0/16": true, "192.168.1.0/24": true}
+	if len(kept) != len(wantKept) {
+		t.Fatalf("kept = %v, want keys %v", kept, wantKept)
+	}
+	for _, c := range kept {
+		if !wantKept[c] {
+			t.Errorf("unexpected kept CIDR %s", c)
+		}
+	}
+}
+
+func BenchmarkDropFullyWhitelisted(b *testing.B) {
+	const holes = 5000
+	jail := []string{"10.0.0.0/16", "10.1.0.0/16", "10.2.0.0/16"}
+	whitelist := make([]string, 0, holes)
+	for i := 0; i < holes; i++ {
+		whitelist = append(whitelist, fmt.Sprintf("10.0.%d.%d/32", i/256, i%256))
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = DropFullyWhitelisted(jail, whitelist)
+	}
+}

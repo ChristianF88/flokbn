@@ -170,6 +170,11 @@ func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Requ
 	// Add results to output
 	jsonOutput.Tries = trieResults
 
+	// Record the global whitelist entry counts so the renderers can list them as
+	// active filters (they drop requests from every trie regardless of per-trie
+	// params). Lists are tiny and loaded once here; never in the hot loop.
+	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
+
 	// Set General.UniqueIPs to the max across all tries
 	for _, tr := range trieResults {
 		if tr.Stats.UniqueIPs > jsonOutput.General.UniqueIPs {
@@ -194,6 +199,31 @@ func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Requ
 
 	jsonOutput.UpdateDuration(analysisStart)
 	return jsonOutput, requests, nil
+}
+
+// computeGlobalFilters loads the globally-configured whitelists and records
+// their entry counts. The whitelists drop requests from every trie regardless
+// of per-trie params, so the renderers list them as active filters. Only counts
+// are needed (not the entries), and the files are tiny — loaded once per
+// analysis here, never in the per-request hot loop. Loader errors are treated
+// as a zero count: a missing OR unreadable whitelist must never fail the
+// analysis here, so a loader error simply yields a zero count. Note the
+// consequence: for a whitelist file that is PRESENT but unreadable, the "Active
+// Filters" summary derived from these counts can read 0, even though the real
+// load path (ProcessJailWithWhitelist) would surface/act on that same error.
+// This swallowing is intentional and confined to the summary counts.
+func computeGlobalFilters(cfg *config.Config) output.GlobalFilters {
+	var gf output.GlobalFilters
+	if cfg == nil {
+		return gf
+	}
+	if cidrs, err := cfg.LoadWhitelistCIDRs(); err == nil {
+		gf.IPWhitelistCIDRs = len(cidrs)
+	}
+	if patterns, err := cfg.LoadUserAgentWhitelistPatterns(); err == nil {
+		gf.UAWhitelistPatterns = len(patterns)
+	}
+	return gf
 }
 
 // processTrie builds and analyzes a single trie; callers run one goroutine per trie.
@@ -564,6 +594,12 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	})
 
 	jsonOutput.Tries = trieResults
+
+	// Record the global whitelist entry counts (same as the full path). Even
+	// though this fast path runs only when no per-trie filter forces string
+	// fields, a global IP/UA whitelist may still be configured and dropping
+	// requests, so it must be surfaced as an active filter.
+	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
 
 	// Set General.UniqueIPs to the max across all tries.
 	for _, tr := range trieResults {
@@ -1016,12 +1052,15 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 		allWhitelists = append(allWhitelists, ip+"/32")
 	}
 
-	// Apply whitelist filtering
-	filteredJailCIDRs := cidr.RemoveWhitelisted(allJailCIDRs, allWhitelists)
+	// Drop jail CIDRs fully covered by the whitelist, keeping the rest whole.
+	// Partial overlaps are NOT fragmented here — the whitelist is applied
+	// exactly at the publish choke point (ComposeBanLists below). Fragmenting
+	// here around UA-whitelisted /32s would explode a handful of jail ranges
+	// into tens of thousands of CIDRs and feed a super-linear jail update.
+	filteredJailCIDRs, removedCount := cidr.DropFullyWhitelisted(allJailCIDRs, allWhitelists)
 
 	// Log whitelist filtering results
-	if len(whitelistCIDRs) > 0 {
-		removedCount := len(allJailCIDRs) - len(filteredJailCIDRs)
+	if len(allWhitelists) > 0 && removedCount > 0 {
 		jsonOutput.AddWarning("whitelist_applied", fmt.Sprintf("Whitelist filtering prevented %d CIDRs from being added to jail", removedCount), 0)
 	}
 
