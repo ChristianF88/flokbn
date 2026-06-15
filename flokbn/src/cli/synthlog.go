@@ -1,6 +1,6 @@
 package cli
 
-// Synthetic access-log generator backing `flokbn example logs`.
+// Synthetic access-log generator backing `flokbn generate static-demo`.
 //
 // It produces an nginx/Apache-combined access log whose statistical shape
 // matches the (git-ignored) fake-logs/ data set used by the complex static
@@ -12,7 +12,7 @@ package cli
 //	IP - - [02/Feb/2026:15:04:05 +0000] "GET /fake-endpoint-N HTTP/1.1" 200 1234 "-" "UA" "IP"
 //
 // Distributions (measured from the original fake_nginx_2m.log):
-//   - ~13% of traffic concentrates in 10 weighted /16 hotspots
+//   - ~13.9% of traffic concentrates in 10 weighted /16 hotspots
 //     (23.253.0.0/16 is the heaviest at ~2%); the rest is uniform
 //     public-IP background.
 //   - 10 user agents with fixed weights, including the two EXACT strings
@@ -49,8 +49,10 @@ const synthJitter = 5 * time.Minute
 // synthDefaultSeed preserves reproducibility with the historical generator.
 const synthDefaultSeed uint64 = 42
 
-// synthDefaultLines is the default line count for `example logs`: large enough
-// to showcase clustering, but not the ~1.9 GB full 10M default.
+// synthDefaultLines is the fixed line count `flokbn generate static-demo`
+// always writes: large enough to showcase clustering while staying snappy to
+// analyze, and the size the embedded config's cluster thresholds are calibrated
+// for.
 const synthDefaultLines int64 = 1_000_000
 
 // synthHotspot is a weighted /16 source-IP hotspot.
@@ -127,6 +129,13 @@ func synthCumulative(weights []float64) []float64 {
 // synthPick returns the index of the first cumulative bucket containing r.
 // r must be in [0, cum[len(cum)-1]).
 func synthPick(cum []float64, r float64) int {
+	// Floating-point rounding (e.g. r computed as rng.Float64()*uaTotal where
+	// uaTotal is itself an accumulated sum) can push r to or just past the
+	// final cumulative weight. Clamp to the last bucket so SearchFloat64s never
+	// returns len(cum), which callers would index out of bounds.
+	if len(cum) > 0 && r >= cum[len(cum)-1] {
+		return len(cum) - 1
+	}
 	return sort.SearchFloat64s(cum, r)
 }
 

@@ -575,6 +575,51 @@ func RemoveWhitelisted(blacklist []string, whitelist []string) []string {
 	return result
 }
 
+// DropFullyWhitelisted returns the blacklist CIDRs that are NOT fully covered
+// by the whitelist, each kept intact, plus the count of CIDRs dropped because
+// the whitelist covers them completely.
+//
+// Unlike RemoveWhitelisted it never SPLITS a partially-overlapping CIDR into
+// the gaps around whitelisted holes. That fragmentation is catastrophic when
+// the whitelist holds many scattered /32s (e.g. User-Agent-whitelisted bot
+// IPs): a single jailed /16 with thousands of interior /32 holes explodes into
+// thousands of fragment CIDRs, which then feed a super-linear jail update.
+// Keeping ranges whole here is safe because the whitelist is still applied
+// exactly at the publish choke point (ComposeBanLists) before any ban is
+// written, so a whitelisted address can never end up banned.
+//
+// The whitelist is parsed once (RemoveWhitelisted/IsWhitelisted re-parse it per
+// candidate), so this is O(B + W) parsing instead of O(B*W).
+func DropFullyWhitelisted(blacklist, whitelist []string) (kept []string, dropped int) {
+	if len(whitelist) == 0 {
+		return blacklist, 0
+	}
+
+	whitelistNets := make([]*net.IPNet, 0, len(whitelist))
+	for _, entry := range whitelist {
+		_, wn, err := net.ParseCIDR(entry)
+		if err != nil {
+			continue // skip invalid entries, matching IsWhitelisted
+		}
+		whitelistNets = append(whitelistNets, wn)
+	}
+
+	kept = make([]string, 0, len(blacklist))
+	for _, bc := range blacklist {
+		_, candidateNet, err := net.ParseCIDR(bc)
+		if err != nil {
+			kept = append(kept, bc) // keep unparseable entries as-is
+			continue
+		}
+		if IsWhitelistedIPNet(candidateNet, whitelistNets) {
+			dropped++
+			continue
+		}
+		kept = append(kept, bc)
+	}
+	return kept, dropped
+}
+
 // ComposeBanLists applies the whitelist to both the active jail bans and the
 // manual blacklist as the final step before a ban file is written. Whitelists
 // always win: fully covered entries are dropped and partial overlaps are

@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/iputils"
@@ -792,5 +793,173 @@ func TestTrafficMatrixIsGroundTruth(t *testing.T) {
 	}
 	if gB[45][40] != 1 || gB[14][169] != 0 {
 		t.Errorf("trie B overlay: 45.40=%d 14.169=%d, want 1 and 0", gB[45][40], gB[14][169])
+	}
+}
+
+// stripTviewTags removes tview color/style tags ("[white]", "[#202020]",
+// "[red]", "[dim]", ...) from a line so its remaining glyphs are exactly what
+// the terminal draws. The heatmap content contains no literal "[" (no tview
+// escaping), so naively dropping every "[...]" run is correct here.
+func stripTviewTags(line string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range line {
+		switch {
+		case r == '[':
+			inTag = true
+		case r == ']' && inTag:
+			inTag = false
+		case !inTag:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// visibleWidth returns the number of terminal columns a render line occupies:
+// rune count after stripping tview tags. The cell glyphs and borders ("─",
+// "█", "│", "●") are multi-byte, so rune count (not byte count) is the column
+// count.
+func visibleWidth(line string) int {
+	return utf8.RuneCountInString(stripTviewTags(line))
+}
+
+// isBodyRow reports whether a stripped render line is a heatmap grid body row:
+// it carries the left/right "│" borders and a run of cell glyphs between them.
+// Body rows always contain at least one "█" (every cell renders a block glyph,
+// even empty cells as "███").
+func isBodyRow(stripped string) bool {
+	return strings.Count(stripped, "│") == 2 && strings.Contains(stripped, "█")
+}
+
+// axisLine returns the top A-axis line of a render: the line containing the
+// dash run that ends in "256 A".
+func axisLine(t *testing.T, render string) string {
+	t.Helper()
+	for _, line := range strings.Split(render, "\n") {
+		if strings.Contains(line, "─") && strings.Contains(line, "256 A") {
+			return line
+		}
+	}
+	t.Fatalf("no top A-axis line (containing \"─\" and \"256 A\") in render")
+	return ""
+}
+
+// TestAxisDashCount pins the corrected dash-count formula: the dash run spans
+// the cell area minus the "1" and "256" end labels (totalCols*cellWidth - 4),
+// clamped at 0 for the degenerate single-cell grid (scale=256).
+func TestAxisDashCount(t *testing.T) {
+	for _, scale := range []int{256, 16, 8, 4, 2, 1} {
+		totalCols := 256 / scale
+		want := totalCols*3 - 4
+		if want < 0 {
+			want = 0
+		}
+		got := axisDashCount(totalCols)
+		if got != want {
+			t.Errorf("axisDashCount(totalCols=%d) [scale %d] = %d, want %d", totalCols, scale, got, want)
+		}
+		if got < 0 {
+			t.Errorf("axisDashCount(totalCols=%d) = %d, must be >= 0", totalCols, got)
+		}
+	}
+	// Degenerate single-cell grid clamps to 0 (labels alone exceed one cell).
+	if got := axisDashCount(1); got != 0 {
+		t.Errorf("axisDashCount(1) = %d, want 0 (clamped)", got)
+	}
+}
+
+// TestAxisAlignsWithGrid renders the heatmap and asserts the top A-axis line
+// fits inside the grid body and the "A" axis name sits past the cell columns,
+// at the default scale and one finer scale.
+func TestAxisAlignsWithGrid(t *testing.T) {
+	for _, scale := range []int{8, 4} {
+		t.Run(fmt.Sprintf("scale_%d", scale), func(t *testing.T) {
+			v := newBenchRenderView()
+			v.blockScale = scale
+			render := v.generateRenderText()
+
+			axis := axisLine(t, render)
+			axisW := visibleWidth(axis)
+			totalCols := 256 / scale
+
+			// (a) the axis must not overrun the grid: every body row must be at
+			// least as wide as the axis line (the axis ends with its "256 A"
+			// name within the column span the body rows occupy, never past the
+			// right border). Checking the MIN body width (not the widest)
+			// catches the pre-fix jitter, where the narrowest body rows are
+			// shorter than the over-long axis.
+			minBodyW := -1
+			bodyRows := 0
+			for _, line := range strings.Split(render, "\n") {
+				s := stripTviewTags(line)
+				if isBodyRow(s) {
+					bodyRows++
+					w := utf8.RuneCountInString(s)
+					if minBodyW == -1 || w < minBodyW {
+						minBodyW = w
+					}
+				}
+			}
+			if bodyRows == 0 {
+				t.Fatalf("no body rows found in render")
+			}
+			if axisW > minBodyW {
+				t.Errorf("axis visible width %d > narrowest body row width %d (axis overruns grid)", axisW, minBodyW)
+			}
+
+			// (b) the "A" axis name must begin at/after the last grid cell
+			// column. The cell area spans columns gridGutter ..
+			// gridGutter+totalCols*cellWidth-1; the "256 A" tail begins after
+			// the dash run, and "A" must not fall within that cell span.
+			stripped := stripTviewTags(axis)
+			aIdx := strings.IndexRune(stripped, 'A')
+			if aIdx < 0 {
+				t.Fatalf("axis line has no \"A\" name: %q", stripped)
+			}
+			// Rune index of "A".
+			aCol := utf8.RuneCountInString(stripped[:aIdx])
+			cellAreaEnd := gridGutter + totalCols*cellWidth // first column past the cells
+			if aCol < cellAreaEnd {
+				t.Errorf("axis name \"A\" at column %d falls within cell span (cells end at column %d)", aCol, cellAreaEnd)
+			}
+		})
+	}
+}
+
+// TestBodyRowWidthsUniform asserts every heatmap grid body row has identical
+// visible rune-width, so the left and right "│" borders align in a column on
+// every row (no gutter jitter).
+func TestBodyRowWidthsUniform(t *testing.T) {
+	for _, scale := range []int{8, 4} {
+		t.Run(fmt.Sprintf("scale_%d", scale), func(t *testing.T) {
+			v := newBenchRenderView()
+			v.blockScale = scale
+			render := v.generateRenderText()
+
+			width := -1
+			firstStripped := ""
+			rows := 0
+			for _, line := range strings.Split(render, "\n") {
+				s := stripTviewTags(line)
+				if !isBodyRow(s) {
+					continue
+				}
+				rows++
+				w := utf8.RuneCountInString(s)
+				if width == -1 {
+					width = w
+					firstStripped = s
+					continue
+				}
+				if w != width {
+					t.Errorf("body row width %d != first body row width %d\n first: %q\n this:  %q",
+						w, width, firstStripped, s)
+				}
+			}
+			if rows != 256/scale {
+				t.Errorf("found %d body rows, want %d", rows, 256/scale)
+			}
+		})
 	}
 }

@@ -99,7 +99,14 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 		}
 	})
 
-	t.Run("SubtractionSplit", func(t *testing.T) {
+	t.Run("PartialOverlapJailsWholeFiltersAtPublish", func(t *testing.T) {
+		// A detected /24 whose lower half (/25) is whitelisted. The jail stores
+		// the range WHOLE (it is only partially whitelisted) and the whitelist
+		// is applied at the publish choke point, so the emitted ban file still
+		// excludes the whitelisted half. The pre-jail path deliberately does NOT
+		// fragment the range around the whitelist: doing so for many scattered
+		// /32s explodes a handful of ranges into tens of thousands of fragments
+		// and stalls the jail update super-linearly.
 		now := time.Now()
 		batch := append(hotBlock(10, 5, 5, now, "/api/item"), noiseRequests(now, "/api/item")...)
 		fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
@@ -118,18 +125,21 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 			t.Fatal("no iteration log records emitted")
 		}
 		snap := iters[0].snap
-		if bans := jailActiveCIDRs(snap); len(bans) != 1 || bans[0] != "10.5.5.128/25" {
-			t.Errorf("active bans = %v, want [10.5.5.128/25]", bans)
+		// Jail keeps the range whole — no fragmentation.
+		if bans := jailActiveCIDRs(snap); len(bans) != 1 || bans[0] != "10.5.5.0/24" {
+			t.Errorf("jail active bans = %v, want [10.5.5.0/24] (range kept whole)", bans)
 		}
+		// Enforcement still honors the whitelist: the published ban file
+		// excludes the whitelisted /25 half.
 		bans := banCIDRs(t, cfg.GetBanFile())
 		if len(bans) != 1 || bans[0] != "10.5.5.128/25" {
-			t.Errorf("ban file CIDRs = %v, want [10.5.5.128/25]", bans)
+			t.Errorf("ban file CIDRs = %v, want [10.5.5.128/25] (whitelist applied at publish)", bans)
 		}
-		if _, _, found := findPrisoner(t, cfg.GetJailFile(), "10.5.5.128/25"); !found {
-			t.Error("10.5.5.128/25 not found in jail file")
+		if _, _, found := findPrisoner(t, cfg.GetJailFile(), "10.5.5.0/24"); !found {
+			t.Error("10.5.5.0/24 should be jailed whole")
 		}
 		if _, _, found := findPrisoner(t, cfg.GetJailFile(), "10.5.5.0/25"); found {
-			t.Error("whitelisted half 10.5.5.0/25 must not be jailed")
+			t.Error("jail must not be fragmented into /25 halves")
 		}
 	})
 }

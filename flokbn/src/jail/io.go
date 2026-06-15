@@ -104,6 +104,7 @@ func FileToJail(filename string) (Jail, error) {
 	if err != nil {
 		return Jail{}, err
 	}
+	jail.RefreshBounds()
 	return jail, nil
 }
 

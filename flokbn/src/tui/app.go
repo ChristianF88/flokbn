@@ -23,8 +23,17 @@ type App struct {
 	visualizationView *VisualizationView
 	statusBar         *tview.TextView
 
+	// Parent Flex rows that hold a.statusBar (one per page). The status bar is a
+	// single shared primitive placed into each page's layout; these references
+	// let setStatusBarText resize its row to fit the wrapped legend so the
+	// navigational help is never clipped on narrow terminals.
+	progressLayout      *tview.Flex
+	resultsLayout       *tview.Flex
+	visualizationLayout *tview.Flex
+
 	// Results panels
 	summary        *tview.TextView
+	summaryTopRow  *tview.Flex // holds a.summary; resized to fit summary content
 	clustering     *tview.TextView
 	cidrAnalysis   *tview.TextView
 	diagnostics    *tview.TextView
@@ -122,7 +131,7 @@ func (a *App) ShowError(message string) {
 		a.progressView.SetText(fmt.Sprintf("[red]Error:[white] %s\n\n[yellow]Press 'q' to quit[white]", message))
 
 		// Update status bar
-		a.statusBar.SetText("[red]Analysis failed![white] | Press 'q' to quit")
+		a.setStatusBarText("[red]Analysis failed![white] | Press 'q' to quit")
 
 		// Make sure we're on the progress page to show the error
 		a.pages.SwitchToPage("progress")
@@ -142,7 +151,8 @@ func (a *App) preInitializeVisualization() {
 		a.app.QueueUpdateDraw(func() {
 			visualizationLayout := tview.NewFlex().SetDirection(tview.FlexRow).
 				AddItem(a.visualizationView.GetView(), 0, 1, true).
-				AddItem(a.statusBar, 1, 0, false)
+				AddItem(a.statusBar, minStatusBarHeight, 0, false)
+			a.visualizationLayout = visualizationLayout
 
 			a.pages.AddPage("visualization", visualizationLayout, true, false)
 		})
@@ -194,20 +204,26 @@ func (a *App) setupUI() {
 	a.resultsView = tview.NewFlex().SetDirection(tview.FlexRow)
 	a.setupResultsView()
 
-	// Create status bar
+	// Create status bar. Word wrapping is on so the navigational legend can fold
+	// onto a second/third row on narrow terminals instead of being clipped; the
+	// row height is sized to the wrapped line count by setStatusBarText.
 	a.statusBar = tview.NewTextView().
 		SetDynamicColors(true).
+		SetWrap(true).
+		SetWordWrap(true).
 		SetText("[yellow]Starting analysis...[white] | Press 'q' to quit")
 	a.statusBar.SetBorder(false)
 
 	// Create main layout
 	main := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.progressView, 0, 1, true).
-		AddItem(a.statusBar, 1, 0, false)
+		AddItem(a.statusBar, minStatusBarHeight, 0, false)
+	a.progressLayout = main
 
 	results := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.resultsView, 0, 1, true).
-		AddItem(a.statusBar, 1, 0, false)
+		AddItem(a.statusBar, minStatusBarHeight, 0, false)
+	a.resultsLayout = results
 
 	// Add pages
 	a.pages.AddPage("progress", main, true, true)
@@ -227,7 +243,7 @@ func (a *App) setupUI() {
 			return nil
 		case 'p', 'P':
 			a.pages.SwitchToPage("progress")
-			a.statusBar.SetText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
+			a.setStatusBarText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
 			return nil
 		case 'v', 'V':
 			if a.analysisComplete.Load() {
@@ -337,15 +353,51 @@ func (a *App) setupUI() {
 		return event
 	})
 
+	// Re-fit the status-bar row to the live terminal width before every draw, so
+	// the wrapped navigational legend is fully visible and stays correct across
+	// terminal resizes. GetInnerRect only reflects the previous frame's width, so
+	// reading the screen size here is the authoritative source for word wrapping.
+	a.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
+		a.fitStatusBar(screen)
+		return false
+	})
+
 	a.app.SetRoot(a.pages, true)
+}
+
+// fitStatusBar resizes the status-bar row in every page layout to the height
+// needed to word-wrap the current legend at the live screen width. Called from
+// the application's before-draw hook (and tolerant of a nil screen so tests that
+// drive layouts directly can fall back to the bar's current rect width).
+func (a *App) fitStatusBar(screen tcell.Screen) {
+	if a.statusBar == nil {
+		return
+	}
+	width := 0
+	if screen != nil {
+		width, _ = screen.Size()
+	}
+	if width <= 0 {
+		// No screen context (or pre-layout): use the bar's last-known width.
+		_, _, width, _ = a.statusBar.GetInnerRect()
+	}
+	h := statusBarHeight(a.statusBar.GetText(true), width)
+	for _, layout := range []*tview.Flex{a.progressLayout, a.resultsLayout, a.visualizationLayout} {
+		if layout != nil {
+			layout.ResizeItem(a.statusBar, h, 0)
+		}
+	}
 }
 
 // setupResultsView creates the results display layout
 func (a *App) setupResultsView() {
-	// Summary panel
+	// Summary panel. Scrollable acts as a safety net: on very small terminals
+	// the panel may still be shorter than its content, and scrollable means
+	// nothing becomes permanently unreachable. The panel is left out of
+	// focusableItems below so it never steals tab focus.
 	a.summary = tview.NewTextView().
 		SetDynamicColors(true).
-		SetScrollable(false)
+		SetScrollable(true)
 	a.summary.SetBorder(true).SetTitle(" Summary ").SetTitleAlign(tview.AlignLeft)
 
 	// Clustering results
@@ -374,15 +426,97 @@ func (a *App) setupResultsView() {
 	// Layout: Summary on top, then 3 columns for the rest
 	topRow := tview.NewFlex().SetDirection(tview.FlexColumn).
 		AddItem(a.summary, 0, 1, false)
+	a.summaryTopRow = topRow
 
 	bottomRow := tview.NewFlex().SetDirection(tview.FlexColumn).
 		AddItem(a.clustering, 0, 2, false).
 		AddItem(a.cidrAnalysis, 0, 1, false).
 		AddItem(a.diagnostics, 0, 1, false)
 
+	// Initial height is the minimum; setSummaryText resizes the row to fit the
+	// real content once results are available (the summary cannot be built yet
+	// because no analysis data exists at setup time).
 	a.resultsView.
-		AddItem(topRow, 9, 0, false).
+		AddItem(topRow, minSummaryPanelHeight, 0, false).
 		AddItem(bottomRow, 0, 1, false)
+}
+
+// summaryPanel min/max fixed heights. The summary currently runs ~11-12 inner
+// lines and can grow a little (e.g. the optional UA-whitelist line, or wrapped
+// active-filter lists), so we allow headroom up to maxSummaryPanelHeight while
+// never collapsing below minSummaryPanelHeight (which still fits the three
+// global parse-stat lines plus a couple of trie lines).
+const (
+	minSummaryPanelHeight = 9
+	maxSummaryPanelHeight = 18
+	summaryPanelBorders   = 2 // top + bottom border rows
+)
+
+// summaryPanelHeight returns the fixed Flex height needed to display the full
+// summary text without clipping its top: the visible line count plus the two
+// border rows, clamped to a sane min/max. Previously this was hardcoded to 9,
+// which only exposed ~7 inner rows and clipped the top three global parse-stat
+// lines (Parse Rate / Amount of IPs Read / Parsing Time).
+func summaryPanelHeight(text string) int {
+	lines := strings.Count(strings.TrimRight(text, "\n"), "\n") + 1
+	h := lines + summaryPanelBorders
+	if h < minSummaryPanelHeight {
+		h = minSummaryPanelHeight
+	}
+	if h > maxSummaryPanelHeight {
+		h = maxSummaryPanelHeight
+	}
+	return h
+}
+
+// setSummaryText sets the Summary panel text and resizes its row to fit, so the
+// top global parse stats are always visible. Used everywhere the summary is
+// (re)rendered, including per-trie switches, so the height tracks the content.
+func (a *App) setSummaryText(text string) {
+	a.summary.SetText(text)
+	if a.summaryTopRow != nil && a.resultsView != nil {
+		a.resultsView.ResizeItem(a.summaryTopRow, summaryPanelHeight(text), 0)
+	}
+}
+
+// status-bar fixed-height bounds. The bar normally needs a single row, but the
+// full navigational legend ("Tab/Shift+Tab: panels ... 'q': quit") is long and
+// must word-wrap onto a second (or, on very narrow terminals, third) row rather
+// than be clipped. We grow only as far as the wrapped legend needs and never
+// past maxStatusBarHeight so the main results/visualization area is not eaten
+// on normal-width terminals (where the legend fits on one row).
+const (
+	minStatusBarHeight = 1
+	maxStatusBarHeight = 3
+)
+
+// statusBarHeight returns the row height needed to render text word-wrapped to
+// the given inner width, clamped to [minStatusBarHeight, maxStatusBarHeight].
+// tview.WordWrap is the same wrapper the TextView uses to draw, and it is
+// color-tag aware, so the count matches what is actually rendered. A width <= 0
+// (no layout yet) falls back to the minimum height.
+func statusBarHeight(text string, width int) int {
+	if width <= 0 {
+		return minStatusBarHeight
+	}
+	h := len(tview.WordWrap(text, width))
+	if h < minStatusBarHeight {
+		h = minStatusBarHeight
+	}
+	if h > maxStatusBarHeight {
+		h = maxStatusBarHeight
+	}
+	return h
+}
+
+// setStatusBarText sets the status-bar text and resizes its row to fit the
+// wrapped legend, mirroring the setSummaryText content-fit pattern. The
+// before-draw hook re-fits at the live width on every frame; this best-effort
+// resize keeps the height correct for callers that draw without the event loop
+// (e.g. tests) by using the bar's last-known width.
+func (a *App) setStatusBarText(text string) {
+	a.statusBar.SetText(text)
+	a.fitStatusBar(nil)
 }
 
 // Run starts the TUI application
@@ -564,7 +698,7 @@ func (a *App) displayCachedResults() {
 		diagnostics = a.buildDiagnosticsText()
 		a.trieCache.SetPreRenderedTexts(a.currentTrie, summary, clustering, cidr, diagnostics)
 	}
-	a.summary.SetText(summary)
+	a.setSummaryText(summary)
 	a.clustering.SetText(clustering)
 	a.cidrAnalysis.SetText(cidr)
 	a.diagnostics.SetText(diagnostics)
@@ -574,7 +708,7 @@ func (a *App) displayCachedResults() {
 func (a *App) displayResultsUncached() {
 	// Populate summary with fixed stats and trie-specific stats
 	summaryText := a.buildSummaryText()
-	a.summary.SetText(summaryText)
+	a.setSummaryText(summaryText)
 
 	// Populate clustering results
 	var clusteringText strings.Builder
@@ -750,7 +884,7 @@ func (a *App) buildDiagnosticsText() string {
 // buildSummaryText creates the summary text with fixed and trie-specific stats
 func (a *App) buildSummaryText() string {
 	var summaryText strings.Builder
-	summaryText.WriteString("[white::b]Analysis Summary[white::-]\n\n")
+	summaryText.WriteString("[white::b]Analysis Summary[white::-]\n")
 
 	// Fixed stats (global, not trie-specific) - always show these first
 	// Use original multiTrieResult data for truly fixed stats
@@ -770,9 +904,9 @@ func (a *App) buildSummaryText() string {
 		parsingTime = a.jsonResult.General.Parsing.DurationMS
 	}
 
-	summaryText.WriteString(fmt.Sprintf("[dim]Parse Rate:[white] %s req/sec  ",
+	summaryText.WriteString(fmt.Sprintf("[dim]Parse Rate:[white] %s req/sec\n",
 		output.FormatNumber(int(parseRate))))
-	summaryText.WriteString(fmt.Sprintf("[dim]Amount of IPs Read:[white] %s  ",
+	summaryText.WriteString(fmt.Sprintf("[dim]Amount of IPs Read:[white] %s\n",
 		output.FormatNumber(totalIPsRead)))
 	summaryText.WriteString(fmt.Sprintf("[dim]Parsing Time:[white] %dms\n\n",
 		parsingTime))
@@ -788,7 +922,7 @@ func (a *App) buildSummaryText() string {
 
 		// Active filters
 		summaryText.WriteString("[dim]Active Filters:[white] ")
-		filters := a.getActiveFilters(trieData.Parameters)
+		filters := output.ActiveFilters(trieData.Parameters, a.multiTrieResult.GlobalFilters)
 		if len(filters) > 0 {
 			summaryText.WriteString(strings.Join(filters, ", "))
 		} else {
@@ -840,40 +974,9 @@ func (a *App) buildSummaryText() string {
 	return summaryText.String()
 }
 
-// getActiveFilters returns a list of active filter descriptions
-func (a *App) getActiveFilters(params output.TrieParameters) []string {
-	var filters []string
-
-	if params.UserAgentRegex != nil && *params.UserAgentRegex != "" {
-		filters = append(filters, fmt.Sprintf("User-Agent: %s", *params.UserAgentRegex))
-	}
-
-	if params.EndpointRegex != nil && *params.EndpointRegex != "" {
-		filters = append(filters, fmt.Sprintf("Endpoint: %s", *params.EndpointRegex))
-	}
-
-	if params.TimeRange != nil {
-		if !params.TimeRange.Start.IsZero() || !params.TimeRange.End.IsZero() {
-			timeFilter := "Time: "
-			if !params.TimeRange.Start.IsZero() {
-				timeFilter += params.TimeRange.Start.Format("2006-01-02 15:04")
-			} else {
-				timeFilter += "∞"
-			}
-			timeFilter += " → "
-			if !params.TimeRange.End.IsZero() {
-				timeFilter += params.TimeRange.End.Format("2006-01-02 15:04")
-			} else {
-				timeFilter += "∞"
-			}
-			filters = append(filters, timeFilter)
-		}
-	}
-
-	// Note: CIDRRanges are not filters - they are analysis targets, so we don't include them
-
-	return filters
-}
+// Active-filter rendering lives in output.ActiveFilters, shared with the CLI
+// plain renderer so the two never drift (and so the global whitelists are
+// always listed, not just the per-trie TrieParameters).
 
 // calculateTotalAnalysisTime sums up all clustering execution times
 func (a *App) calculateTotalAnalysisTime(clusterResults []output.ClusterResult) int64 {
@@ -921,7 +1024,7 @@ func (a *App) updateFocusBorders() {
 
 func (a *App) updateStatusBar() {
 	if !a.analysisComplete.Load() {
-		a.statusBar.SetText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
+		a.setStatusBarText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
 		return
 	}
 
@@ -930,10 +1033,10 @@ func (a *App) updateStatusBar() {
 	switch frontPageName {
 	case "visualization":
 		if a.visualizationView != nil && a.visualizationView.totalClusterSets > 0 {
-			a.statusBar.SetText(fmt.Sprintf("[green]Visualization mode[white] | Set %d/%d | ←→: change cluster set, ↑↓: scroll, 'r': results, 'v': visualization, 'q': quit",
+			a.setStatusBarText(fmt.Sprintf("[green]Visualization mode[white] | Set %d/%d | ←→: change cluster set, ↑↓: scroll, 'r': results, 'v': visualization, 'q': quit",
 				a.visualizationView.currentClusterSet+1, a.visualizationView.totalClusterSets))
 		} else {
-			a.statusBar.SetText("[green]Visualization mode[white] | ↑↓: scroll, 'r': results, 'q': quit")
+			a.setStatusBarText("[green]Visualization mode[white] | ↑↓: scroll, 'r': results, 'q': quit")
 		}
 	default:
 		panelNames := []string{"Clustering Results", "CIDR Analysis", "Diagnostics"}
@@ -947,15 +1050,15 @@ func (a *App) updateStatusBar() {
 					a.currentTrie = 0
 				}
 				trieName := a.multiTrieResult.Tries[a.currentTrie].Name
-				a.statusBar.SetText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | [cyan]%s (%d/%d)[white] | Tab/Shift+Tab: panels, 't': next trie, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit",
+				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | [cyan]%s (%d/%d)[white] | Tab/Shift+Tab: panels, 't': next trie, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit",
 					currentPanel, trieName, a.currentTrie+1, len(a.multiTrieResult.Tries)))
 			} else {
 				// Single trie config mode
-				a.statusBar.SetText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
+				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
 			}
 		} else {
 			// No-config CLI mode
-			a.statusBar.SetText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: switch panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
+			a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: switch panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
 		}
 	}
 }
@@ -970,7 +1073,8 @@ func (a *App) showVisualization() {
 		// Create visualization page layout
 		visualizationLayout := tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(a.visualizationView.GetView(), 0, 1, true).
-			AddItem(a.statusBar, 1, 0, false)
+			AddItem(a.statusBar, minStatusBarHeight, 0, false)
+		a.visualizationLayout = visualizationLayout
 
 		a.pages.AddPage("visualization", visualizationLayout, true, false)
 
@@ -1039,7 +1143,7 @@ func (a *App) displayResultsFromTrieCache(trieIndex int) {
 	}
 
 	// Set pre-rendered content directly - no processing required
-	a.summary.SetText(summaryText)
+	a.setSummaryText(summaryText)
 	a.clustering.SetText(clusteringText)
 	a.cidrAnalysis.SetText(cidrText)
 	a.diagnostics.SetText(diagnosticsText)

@@ -28,9 +28,12 @@ config_examples/
 ### complex-static.toml
 A runnable static-mode configuration exercising the full filter surface:
 global IP/UA lists, per-trie User-Agent/endpoint/time filters, CIDR-range
-analysis, multiple cluster parameter sets per trie, and jail wiring. See the
-"Complex Static Analysis" guide in the documentation for a full walkthrough,
-including how to generate the fake log data it references.
+analysis, multiple cluster parameter sets per trie, and jail wiring. This is
+the reference copy; the easiest way to run it is to unpack a self-contained,
+ready-to-run demo (this config, a matching 1,000,000-line synthetic log, and
+all four list files) with `flokbn generate static-demo --out ./demo`, then
+`flokbn static --config ./demo/complex-static.toml --plain`. See the
+"Complex Static Analysis" guide in the documentation for a full walkthrough.
 
 ### whitelist.txt
 Contains IP addresses and CIDR ranges that should **never** be banned:

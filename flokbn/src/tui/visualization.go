@@ -366,6 +366,51 @@ func (v *VisualizationView) generateRenderText() string {
 	return content.String()
 }
 
+// Heatmap layout constants. gridGutter is the visible width of the left
+// y-axis label column every body row reserves (e.g. "256│", "  │ "); cellWidth
+// is the visible width every display cell renders (three glyphs: "███", or a
+// char/dot/char overlay). The top A-axis and both body gutters are sized off
+// these so the dash run, cells, and "│" borders all line up in the same
+// columns on every row.
+const (
+	gridGutter = 4
+	cellWidth  = 3
+)
+
+// axisDashCount returns the number of "─" runes for the top A-axis so the dash
+// run plus its "1"/"256" end labels exactly span the grid's cell area
+// (totalCols cells × cellWidth glyphs). Clamped at 0 for tiny grids
+// (scale=256 → totalCols=1, where the labels alone already exceed the cells).
+func axisDashCount(totalCols int) int {
+	n := totalCols*cellWidth - len("1") - len("256")
+	if n < 0 {
+		n = 0
+	}
+	return n
+}
+
+// writePadded writes s into a fixed-width field of width columns, padding with
+// spaces. rightAlign puts the padding before s (numbers flush right against the
+// "│"); otherwise the padding follows s. Labels here are ASCII so len == column
+// count. Allocation-free: it writes the spaces and the string directly to b.
+func writePadded(b *strings.Builder, s string, width int, rightAlign bool) {
+	pad := width - len(s)
+	if pad < 0 {
+		pad = 0
+	}
+	if rightAlign {
+		for i := 0; i < pad; i++ {
+			b.WriteByte(' ')
+		}
+		b.WriteString(s)
+	} else {
+		b.WriteString(s)
+		for i := 0; i < pad; i++ {
+			b.WriteByte(' ')
+		}
+	}
+}
+
 // renderHeatmap creates the ASCII-based heatmap. Cell brightness encodes the
 // cell's TOTAL requests (sum of its scale×scale /16 bins), normalized against
 // the busiest cell on the map (= 100% = white); the red dot encodes the share
@@ -385,13 +430,16 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 		}
 	}
 
-	// Simple scale line for A axis (first octet) - now on x-axis, 1.5x wider
-	content.WriteString("    1") // Start at 1
+	// Top A-axis (first octet, x-axis). The dash run plus its "1"/"256" end
+	// labels exactly span the grid's cell area, and a gridGutter-wide blank
+	// lead-in aligns the "1" with the first cell column (matching the body
+	// rows' left label width). Visible width therefore equals
+	// gridGutter + totalCols*cellWidth + len(" A"), so the axis never overruns
+	// the cell area or the right border.
 	totalCols := 256 / scale
-	scaleLineLength := totalCols*3 - 4 // Account for triple-width cells (3 chars each) minus space for numbers
-	for i := 0; i < scaleLineLength; i++ {
-		content.WriteString("─")
-	}
+	content.WriteString(strings.Repeat(" ", gridGutter)) // align with cell-area start
+	content.WriteString("1")
+	content.WriteString(strings.Repeat("─", axisDashCount(totalCols)))
 	content.WriteString("256 A\n")
 
 	// Render rows (B axis) with simple row numbering - now on y-axis, reversed for bottom-left origin
@@ -400,14 +448,19 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 		// Calculate actual B value (reverse order: start from top = 256, go down to 1)
 		b := 256 - scale - (rowIndex * scale)
 
-		// Row labels for y-axis
+		// Left y-axis label: a fixed gridGutter-wide field so the "│" border
+		// lands in the SAME column on every row (the numeric label is
+		// right-aligned in gridGutter-1 columns, then the bar). Preserves the
+		// label text ("256", "1", blank). Built with plain WriteString to keep
+		// the per-row cost allocation-free (no fmt).
+		var leftLabel string
 		if rowIndex == 0 {
-			content.WriteString("256│")
+			leftLabel = "256"
 		} else if rowIndex == totalRows-1 {
-			content.WriteString("1 │ ")
-		} else {
-			content.WriteString("  │ ")
+			leftLabel = "1"
 		}
+		writePadded(content, leftLabel, gridGutter-1, true) // right-align
+		content.WriteString("│")
 
 		for a := 0; a < 256; a += scale {
 			// Sum the cell's traffic and clustered requests.
@@ -438,14 +491,20 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 			}
 		}
 
-		// Right side labels
+		// Right y-axis label: the "│" border immediately follows the last
+		// cell on EVERY row (same column), then a fixed gridGutter-1-wide,
+		// left-aligned label field so all body rows have identical visible
+		// width. Preserves the label text ("256", "1", blank). Allocation-free
+		// (no fmt).
+		var rightLabel string
 		if rowIndex == 0 {
-			content.WriteString("│256\n")
+			rightLabel = "256"
 		} else if rowIndex == totalRows-1 {
-			content.WriteString(" │1\n")
-		} else {
-			content.WriteString(" │\n")
+			rightLabel = "1"
 		}
+		content.WriteString("│")
+		writePadded(content, rightLabel, gridGutter-1, false) // left-align
+		content.WriteString("\n")
 	}
 
 	// Add axis label

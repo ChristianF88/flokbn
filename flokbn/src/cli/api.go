@@ -570,12 +570,13 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		// Whitelists from every source: CIDR list + UA-whitelisted IPs.
 		allWhitelists := composeAllWhitelists(whitelistCIDRs, uaWhitelistIPs)
 
-		// Apply whitelist filtering before jail update (static parity).
-		filteredJailCIDRs := cidr.RemoveWhitelisted(mergedCIDRs, allWhitelists)
-		if len(allWhitelists) > 0 {
-			if removed := len(mergedCIDRs) - len(filteredJailCIDRs); removed > 0 {
-				logger.Warn("whitelist filtering prevented CIDRs from being added to jail", "count", removed)
-			}
+		// Drop fully-whitelisted CIDRs before the jail update without
+		// fragmenting partial overlaps (static parity). The whitelist is
+		// reapplied exactly at the publish choke point; fragmenting here around
+		// UA-whitelisted /32s would explode the jail update super-linearly.
+		filteredJailCIDRs, removed := cidr.DropFullyWhitelisted(mergedCIDRs, allWhitelists)
+		if len(allWhitelists) > 0 && removed > 0 {
+			logger.Warn("whitelist filtering prevented CIDRs from being added to jail", "count", removed)
 		}
 
 		// Force-jail IPs seen with blacklisted User-Agents as /32 (static
@@ -803,7 +804,7 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 
 		// Active Filters
 		fmt.Printf("Active Filters:          ")
-		filters := getActiveFiltersPlain(trieResult.Parameters)
+		filters := output.ActiveFilters(trieResult.Parameters, jsonOutput.GlobalFilters)
 		if len(filters) > 0 {
 			fmt.Printf("%s\n", strings.Join(filters, ", "))
 		} else {
@@ -890,35 +891,6 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 	fmt.Printf("═══════════════════════════════════════════════════════════════════════════════\n")
 }
 
-// getActiveFiltersPlain returns a list of active filter descriptions for plain output
-func getActiveFiltersPlain(params output.TrieParameters) []string {
-	var filters []string
-
-	if params.UserAgentRegex != nil && *params.UserAgentRegex != "" {
-		filters = append(filters, fmt.Sprintf("User-Agent: %s", *params.UserAgentRegex))
-	}
-
-	if params.EndpointRegex != nil && *params.EndpointRegex != "" {
-		filters = append(filters, fmt.Sprintf("Endpoint: %s", *params.EndpointRegex))
-	}
-
-	if params.TimeRange != nil {
-		if !params.TimeRange.Start.IsZero() || !params.TimeRange.End.IsZero() {
-			timeFilter := "Time: "
-			if !params.TimeRange.Start.IsZero() {
-				timeFilter += params.TimeRange.Start.Format("2006-01-02 15:04")
-			} else {
-				timeFilter += "∞"
-			}
-			timeFilter += " → "
-			if !params.TimeRange.End.IsZero() {
-				timeFilter += params.TimeRange.End.Format("2006-01-02 15:04")
-			} else {
-				timeFilter += "∞"
-			}
-			filters = append(filters, timeFilter)
-		}
-	}
-
-	return filters
-}
+// Active-filter rendering lives in output.ActiveFilters, shared with the TUI so
+// the two renderers never drift (and so the global whitelists are always
+// listed, not just the per-trie TrieParameters).
