@@ -137,7 +137,7 @@ For complex multi-trie analysis, use a TOML [config file]({{< relref "/docs/refe
 ./cidrx static --config cidrx.toml --plain
 ```
 
-Config files support multiple named tries, each with independent filters and cluster parameters.
+Config files support multiple named tries, each with independent filters and cluster parameters. For a complete runnable example exercising every static-mode filter - global lists, per-trie UA/endpoint/time filters, multiple cluster regimes, and jail wiring - see [Complex Static Analysis]({{< relref "/docs/guides/complex-static-analysis/" >}}).
 
 ## Custom Log Formats
 

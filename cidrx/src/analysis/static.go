@@ -301,6 +301,11 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	// Track invalid IPs for warning
 	var invalidIPCount int
 
+	// Track requests dropped solely because their User-Agent matched the
+	// global UA whitelist (surfaced in the summary so the request-count drop
+	// is never unexplained when no per-trie filters are active).
+	var uaWhitelistExcluded int
+
 	// True unique-IP count, derived from the sorted insert slice in a single
 	// linear pass — keeps the trie insert hot path untouched.
 	var uniqueIPs int
@@ -337,7 +342,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
 				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
-				&filteredRequests, &ipsToInsertUint32, &invalidIPCount)
+				&filteredRequests, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded)
 			if err != nil {
 				jsonOutput.AddError("concurrent_filtering", fmt.Sprintf("failed to process requests concurrently: %v", err), 1)
 			}
@@ -348,7 +353,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
 				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
-				&filteredRequests, &ipsToInsertUint32, &invalidIPCount)
+				&filteredRequests, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded)
 		}
 
 		// Radix sort + batch sorted insert — same optimization as unfiltered fast path
@@ -373,6 +378,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 		TotalRequestsAfterFiltering: len(filteredRequests),
 		UniqueIPs:                   uniqueIPs,
 		SkippedInvalidIPs:           invalidIPCount,
+		UAWhitelistExcluded:         uaWhitelistExcluded,
 		InsertTimeMS:                insertDuration.Milliseconds(),
 	}
 
@@ -688,7 +694,8 @@ func filterRequestsConcurrent(
 	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
 	filteredRequests *[]ingestor.Request,
 	ipsToInsert *[]uint32,
-	invalidIPCount *int) error {
+	invalidIPCount *int,
+	uaWhitelistExcluded *int) error {
 
 	// Determine optimal worker count for filtering
 	numWorkers := runtime.NumCPU()
@@ -730,6 +737,9 @@ func filterRequestsConcurrent(
 
 	// Track invalid IPs in collector
 	var localInvalidCount int
+	// Track requests excluded solely by the UA whitelist (passed all other
+	// filters but were dropped because their User-Agent is whitelisted).
+	var localUAExcluded int
 
 	collectorWG.Add(1)
 	go func() {
@@ -743,6 +753,8 @@ func filterRequestsConcurrent(
 				}
 				*filteredRequests = append(*filteredRequests, result.request)
 				*ipsToInsert = append(*ipsToInsert, result.request.IPUint32)
+			} else if result.isWhitelistedUA && result.request.IPUint32 != 0 {
+				localUAExcluded++
 			}
 
 			// Collect User-Agent whitelist IPs (only if IP is valid)
@@ -767,8 +779,9 @@ func filterRequestsConcurrent(
 				blacklistMutex.Unlock()
 			}
 		}
-		// Update the shared invalid count
+		// Update the shared counts
 		*invalidIPCount += localInvalidCount
+		*uaWhitelistExcluded += localUAExcluded
 	}()
 
 	// Distribute work in larger chunks to reduce overhead
@@ -814,7 +827,8 @@ func filterRequests(
 	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
 	filteredRequests *[]ingestor.Request,
 	ipsToInsert *[]uint32,
-	invalidIPCount *int) {
+	invalidIPCount *int,
+	uaWhitelistExcluded *int) {
 
 	// Single pass through requests with optimized filtering
 	for _, r := range requests {
@@ -876,6 +890,8 @@ func filterRequests(
 		if !isWhitelistedUA {
 			*filteredRequests = append(*filteredRequests, r)
 			*ipsToInsert = append(*ipsToInsert, r.IPUint32)
+		} else {
+			*uaWhitelistExcluded++
 		}
 	}
 }

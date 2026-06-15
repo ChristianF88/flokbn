@@ -803,6 +803,13 @@ func (a *App) buildSummaryText() string {
 		summaryText.WriteString(fmt.Sprintf("[dim]Requests After Filtering:[white] %s\n",
 			output.FormatNumber(trieData.Stats.TotalRequestsAfterFiltering)))
 
+		// Requests dropped by the global UA whitelist (shown so the count drop
+		// is explained even when no per-trie filters are active).
+		if trieData.Stats.UAWhitelistExcluded > 0 {
+			summaryText.WriteString(fmt.Sprintf("[dim]Excluded (UA whitelist):[white] %s\n",
+				output.FormatNumber(trieData.Stats.UAWhitelistExcluded)))
+		}
+
 		// Analysis time (sum of all clustering runs)
 		totalAnalysisTime := a.calculateTotalAnalysisTime(trieData.Data)
 		clusterCount := len(trieData.Data)

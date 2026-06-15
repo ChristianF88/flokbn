@@ -7,7 +7,7 @@ This directory contains example configuration files for the cidrx threat detecti
 cidrx uses various filtering mechanisms to identify and block malicious traffic:
 
 1. **IP-based filtering** - Whitelist/blacklist specific IP addresses and CIDR ranges
-2. **User-Agent filtering** - Whitelist/blacklist based on User-Agent patterns
+2. **User-Agent filtering** - Whitelist/blacklist based on exact User-Agent strings
 3. **Clustering analysis** - Detect threat patterns through IP clustering
 4. **Jail system** - Persistent ban management
 
@@ -15,14 +15,22 @@ cidrx uses various filtering mechanisms to identify and block malicious traffic:
 
 ```
 config_examples/
-├── README.md           # This file
-├── whitelist.txt       # IP addresses/CIDRs to never ban
-├── blacklist.txt       # IP addresses/CIDRs to always ban
-├── ua_whitelist.txt    # User-Agent patterns that whitelist IPs
-└── ua_blacklist.txt    # User-Agent patterns that blacklist IPs
+├── README.md             # This file
+├── complex-static.toml   # Runnable full-coverage static-mode example config
+├── whitelist.txt         # IP addresses/CIDRs to never ban
+├── blacklist.txt         # IP addresses/CIDRs to always ban
+├── ua_whitelist.txt      # Exact User-Agent strings that whitelist IPs
+└── ua_blacklist.txt      # Exact User-Agent strings that blacklist IPs
 ```
 
 ## Configuration Files
+
+### complex-static.toml
+A runnable static-mode configuration exercising the full filter surface:
+global IP/UA lists, per-trie User-Agent/endpoint/time filters, CIDR-range
+analysis, multiple cluster parameter sets per trie, and jail wiring. See the
+"Complex Static Analysis" guide in the documentation for a full walkthrough,
+including how to generate the fake log data it references.
 
 ### whitelist.txt
 Contains IP addresses and CIDR ranges that should **never** be banned:
@@ -40,7 +48,7 @@ Contains IP addresses and CIDR ranges that should **always** be banned:
 - Custom manual blocks
 
 ### ua_whitelist.txt
-Contains User-Agent substring patterns that **whitelist** the source IP:
+Contains exact User-Agent strings that **whitelist** the source IP:
 - Search engine crawlers (Googlebot, Bingbot)
 - SEO and analysis tools (AhrefsBot, SemrushBot)
 - Monitoring services (UptimeRobot, Pingdom)
@@ -48,7 +56,7 @@ Contains User-Agent substring patterns that **whitelist** the source IP:
 - Legitimate security scanners
 
 ### ua_blacklist.txt
-Contains User-Agent substring patterns that **blacklist** the source IP:
+Contains exact User-Agent strings that **blacklist** the source IP:
 - Security testing tools (sqlmap, nmap, nikto)
 - Web scraping frameworks (scrapy, selenium)
 - Command line tools (curl, wget)
@@ -68,6 +76,9 @@ userAgentWhitelist = "config_examples/ua_whitelist.txt"
 userAgentBlacklist = "config_examples/ua_blacklist.txt"
 ```
 
+Note: relative paths are resolved from the directory you run cidrx in (the
+current working directory), not from the config file location.
+
 ### File Format
 All files use the same format:
 - One entry per line
@@ -83,11 +94,15 @@ All files use the same format:
 ```
 
 #### User-Agent Files Format (ua_whitelist.txt, ua_blacklist.txt)
+Entries are **exact** User-Agent strings — the full User-Agent header must
+match the line completely. They are NOT substrings and NOT regexes.
 ```
 # Comment
-Googlebot         # Matches any UA containing "Googlebot"
-scanner           # Matches any UA containing "scanner"
+Googlebot/2.1 (+http://www.google.com/bot.html)
+curl/7.68.0
 ```
+`Googlebot` alone would only match requests whose entire User-Agent header
+is literally `Googlebot`.
 
 ## Processing Order
 
@@ -108,7 +123,7 @@ cidrx processes filtering in this order:
 1. **Review and modify** the example entries
 2. **Add your specific networks** to whitelist.txt
 3. **Add known threats** to blacklist.txt
-4. **Customize User-Agent patterns** for your application
+4. **Customize User-Agent entries** for your application
 5. **Test thoroughly** before production deployment
 
 ### Best Practices
@@ -133,9 +148,10 @@ cidrx processes filtering in this order:
 - Monitor for false positives
 
 ### User-Agent Security
-- Use specific patterns to avoid false positives
-- Some patterns may match legitimate tools
-- Consider your application's legitimate traffic
+- Remember matches are exact: one version bump in a User-Agent string
+  (e.g. `curl/8.4.0` -> `curl/8.5.0`) means the entry no longer matches
+- List every variant you want to match explicitly
+- Some entries may match legitimate tools
 - Balance security with usability
 
 ## Troubleshooting
@@ -143,7 +159,8 @@ cidrx processes filtering in this order:
 ### Common Issues
 1. **File not found** - Check file paths and permissions
 2. **Invalid CIDR format** - Verify CIDR syntax (e.g., 192.168.1.0/24)
-3. **Regex errors** - Test User-Agent patterns with sample data
+3. **UA entry never matches** - Entries are exact strings; check for missing
+   version suffixes or extra whitespace
 4. **Performance issues** - Consider file size and pattern complexity
 
 ### Debugging Tips

@@ -1,0 +1,121 @@
+# ==============================================================================
+# cidrx — complex static-analysis example (full filter surface, CIDRX-050)
+# ==============================================================================
+# This is a RUNNABLE example exercising every static-mode filter option:
+# global IP/UA white- and blacklists, per-trie UA/endpoint/time filters,
+# CIDR-range analysis, multiple cluster parameter regimes, and jail wiring.
+#
+# IMPORTANT — relative paths resolve from the directory you RUN cidrx in,
+# NOT from the location of this config file. This file is written to be run
+# from the Go module root `cidrx/src`:
+#
+#     cd cidrx/src
+#     go run . static --config ../../config_examples/complex-static.toml --plain
+#
+# The referenced log data (fake-logs/) is generated, not committed. Recreate it
+# with the committed generator (see docs: Guides -> Complex Static Analysis):
+#
+#     cd cidrx/src
+#     go run ./cmd/fakeloggen --lines 10000000 --out ../../fake-logs/fake_nginx_10m.log
+#
+# ...or point logFile at your own access log and adapt logFormat
+# (see docs: Reference -> Log Formats) and the per-trie filters/minimum sizes.
+
+[global]
+# Jail/ban output. Both must be set or no jail/ban processing happens.
+# Relative => written into the CWD (cidrx/src); both names are git-ignored.
+# NOTE: the jail file persists across runs — delete it for a clean rerun.
+#
+# Heads-up: on very large, high-cardinality inputs like this 10M-line example
+# the jail/ban stage is currently slow. For a quick run, comment out
+# jailFile/banFile below to skip jail processing — the trie analysis, CIDR
+# range stats, and clustering are unaffected.
+jailFile = "cidrx_jail.json"
+banFile  = "cidrx_ban.txt"
+
+# IP lists: CIDRs never to ban / always to ban. The example whitelist holds
+# private ranges and public DNS; the blacklist holds TEST-NET-2 — neither
+# overlaps the hotspot ranges in the fake data, so detection is unaffected.
+whitelist = "../../config_examples/whitelist.txt"
+blacklist = "../../config_examples/blacklist.txt"
+
+# User-Agent lists: EXACT string matches (not substrings, not regexes).
+# A whitelisted UA removes the request from EVERY trie below and shields the
+# IP from jailing; a blacklisted UA jails its IP immediately as a /32.
+# The example whitelist contains the exact Googlebot/bingbot strings present
+# in the fake data — that is why every trie below "loses" ~10% of requests,
+# including the unfiltered baseline. Deliberate: it demonstrates precedence.
+userAgentWhitelist = "../../config_examples/ua_whitelist.txt"
+userAgentBlacklist = "../../config_examples/ua_blacklist.txt"
+
+[static]
+logFile = "../../fake-logs/fake_nginx_10m.log"
+# Combined log with the real client IP in the trailing quoted field (%h last).
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+# 256x256 first-octet/second-octet request heatmap (git-ignored filename).
+plotPath = "heatmap.html"
+
+# ------------------------------------------------------------------------------
+# Trie 1 — unfiltered baseline: all traffic (minus UA-whitelisted requests).
+# Expect ~8.95M requests. The ~10 hotspot /16s carry 77k-178k requests each;
+# a background /16 carries only ~116, so size thresholds separate them cleanly.
+# ------------------------------------------------------------------------------
+[static.t1_baseline]
+# CIDR-range analysis: one broad /8 and two narrow /16s matching real hotspots.
+cidrRanges = ["23.0.0.0/8", "23.253.0.0/16", "87.26.0.0/16"]
+clusterArgSets = [
+    [100000, 12, 18, 0.2],   # coarse sweep: only the heaviest hotspot cores
+    [50000,  16, 24, 0.15],  # standard sweep: the dominant hotspot ranges
+    [15000,  18, 26, 0.1],   # deeper minDepth: finer slices of each hotspot
+]
+# Only the conservative coarse set feeds the jail; the finer sets are
+# exploratory. Mixed true/false is the point.
+useForJail = [true, false, false]
+
+# ------------------------------------------------------------------------------
+# Trie 2 — UA-filtered bot traffic.
+# The regex names all five fake bot UAs, but Googlebot/bingbot requests are
+# already removed by the exact-match UA whitelist above — whitelist wins.
+# What remains: curl + python-requests + Anubis ~= 1.96M requests; hotspot
+# /16s carry ~17k-39k of them.
+# ------------------------------------------------------------------------------
+[static.t2_bots]
+useragentRegex = "Googlebot|bingbot|python-requests|curl|Anubis"
+clusterArgSets = [
+    [20000, 12, 16, 0.2],    # top hotspot /16s within bot traffic
+    [10000, 16, 24, 0.15],   # dominant hotspot ranges
+    [3500,  18, 28, 0.1],    # finer slices of each hotspot
+]
+useForJail = [true, true, false]
+
+# ------------------------------------------------------------------------------
+# Trie 3 — endpoint-filtered: the nine hottest endpoints (~60% of traffic,
+# Zipf-distributed; /fake-endpoint-1 alone is ~23%). ~5.4M requests;
+# hotspot /16s carry ~47k-108k.
+# ------------------------------------------------------------------------------
+[static.t3_hot_endpoints]
+endpointRegex = "^/fake-endpoint-[1-9]$"
+clusterArgSets = [
+    [60000, 12, 18, 0.2],    # coarse sweep: only the heaviest hotspot cores
+    [30000, 16, 24, 0.15],   # dominant hotspot ranges
+    [10000, 18, 26, 0.1],    # finer slices of each hotspot
+]
+useForJail = [false, true, false]
+
+# ------------------------------------------------------------------------------
+# Trie 4 — everything combined: bot UAs + hot endpoints + a 24h window
+# (the log spans 2026-02-03T23:56Z to 2026-02-06T23:58Z; RFC3339 only).
+# ~0.4M requests survive all three filters; hotspot /16s carry ~3.4k-8k.
+# ------------------------------------------------------------------------------
+[static.t4_targeted_window]
+useragentRegex = "python-requests|curl|Anubis"
+endpointRegex  = "^/fake-endpoint-[1-9]$"
+startTime = "2026-02-04T12:00:00Z"
+endTime   = "2026-02-05T12:00:00Z"
+cidrRanges = ["23.0.0.0/8", "23.253.0.0/16"]
+clusterArgSets = [
+    [3000, 12, 16, 0.2],     # hotspot /16s despite triple filtering
+    [1500, 16, 24, 0.15],    # dominant hotspot ranges
+    [600,  18, 28, 0.1],     # finer slices of each hotspot
+]
+useForJail = [false, false, true]
