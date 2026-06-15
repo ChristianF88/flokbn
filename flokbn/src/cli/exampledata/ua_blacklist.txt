@@ -1,0 +1,253 @@
+# User-Agent Blacklist Configuration (Exact Match)
+# This file contains exact User-Agent strings that should blacklist IP addresses
+# IPs with these exact User-Agent strings will be immediately banned
+# Format: One exact User-Agent string per line, comments start with '#'
+# Note: These are EXACT matches, not substrings - must match completely
+# Examples:
+#   "sqlmap/1.0"         # Exact match for SQL injection tool
+#   "curl/7.68.0"        # Exact match for specific curl version
+#   "Nmap NSE scanner"   # Exact match for Nmap scanner
+
+# Security Testing Tools - Known exact User-Agent strings
+# SQL injection tools
+sqlmap/1.0
+sqlmap/1.1
+sqlmap/1.2
+sqlmap/1.3
+sqlmap/1.4
+sqlmap/1.5
+sqlmap/1.6
+sqlmap/1.7
+sqlmap/1.8
+
+# Network scanners
+Nmap NSE scanner
+nmap scripting engine
+
+# Vulnerability scanners  
+Nikto/2.1.6
+Nikto/2.5.0
+Acunetix/WVS
+Nessus/NESS
+OpenVAS/Scanner
+
+# Directory brute forcers
+DirBuster-1.0-RC1
+gobuster/3.0
+gobuster/3.1
+gobuster/3.2
+gobuster/3.3
+gobuster/3.4
+
+# Web fuzzers
+wfuzz/2.2
+wfuzz/2.3
+wfuzz/2.4
+wfuzz/3.0
+wfuzz/3.1
+
+# Reconnaissance tools
+w3af/1.0
+w3af/1.1
+w3af/1.2
+skipfish/2.0
+skipfish/2.1
+Wapiti/3.0.1
+Wapiti/3.0.2
+Wapiti/3.0.3
+Wapiti/3.0.4
+
+# Modern vulnerability scanners
+nuclei/2.0
+nuclei/2.1
+nuclei/2.2
+nuclei/2.3
+nuclei/2.4
+nuclei/2.5
+nuclei/2.6
+nuclei/2.7
+nuclei/2.8
+nuclei/2.9
+
+# Mass scanners
+masscan/1.0
+masscan/1.3
+zmap/2.1
+zmap/3.0
+
+# Common curl patterns used by attackers
+curl/7.47.0
+curl/7.58.0
+curl/7.68.0
+curl/7.74.0
+curl/7.81.0
+curl/8.0.0
+
+# wget patterns
+Wget/1.19.4
+Wget/1.20.1
+Wget/1.21.1
+Wget/1.21.2
+Wget/1.21.3
+
+# Python requests library (commonly used by scripts)
+python-requests/2.18.4
+python-requests/2.20.0
+python-requests/2.25.1
+python-requests/2.27.1
+python-requests/2.28.0
+python-requests/2.28.1
+
+# HTTPie command line tool
+HTTPie/1.0.0
+HTTPie/2.0.0
+HTTPie/2.1.0
+HTTPie/2.2.0
+HTTPie/2.3.0
+HTTPie/2.4.0
+HTTPie/2.5.0
+HTTPie/2.6.0
+HTTPie/3.0.0
+HTTPie/3.1.0
+HTTPie/3.2.0
+
+# Known bot/scanner patterns
+Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)
+facebookexternalhit/1.1
+Twitterbot/1.0
+LinkedInBot/1.0
+WhatsApp/2.0
+
+# Headless browsers commonly used for scraping
+HeadlessChrome/90.0.4430.212
+HeadlessChrome/91.0.4472.124
+HeadlessChrome/92.0.4515.107
+HeadlessChrome/93.0.4577.63
+HeadlessChrome/94.0.4606.61
+HeadlessChrome/95.0.4638.54
+HeadlessChrome/96.0.4664.45
+HeadlessChrome/97.0.4692.71
+HeadlessChrome/98.0.4758.80
+HeadlessChrome/99.0.4844.51
+HeadlessChrome/100.0.4896.60
+HeadlessChrome/101.0.4951.41
+HeadlessChrome/102.0.5005.61
+HeadlessChrome/103.0.5060.53
+HeadlessChrome/104.0.5112.79
+HeadlessChrome/105.0.5195.52
+HeadlessChrome/106.0.5249.61
+HeadlessChrome/107.0.5304.62
+HeadlessChrome/108.0.5359.71
+HeadlessChrome/109.0.5414.74
+HeadlessChrome/110.0.5481.77
+HeadlessChrome/111.0.5563.64
+HeadlessChrome/112.0.5615.49
+HeadlessChrome/113.0.5672.63
+
+# Selenium WebDriver
+Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/91.0.4472.124 Safari/537.36
+selenium/3.141.0
+selenium/4.0.0
+
+# Common scraping tools
+Scrapy/1.4.0
+Scrapy/1.5.0
+Scrapy/1.6.0
+Scrapy/1.7.0
+Scrapy/1.8.0
+Scrapy/2.0.0
+Scrapy/2.1.0
+Scrapy/2.2.0
+Scrapy/2.3.0
+Scrapy/2.4.0
+Scrapy/2.5.0
+
+# API testing tools
+Postman/7.0.0
+Postman/7.1.0
+Postman/7.2.0
+Postman/8.0.0
+Postman/8.1.0
+Postman/8.2.0
+Postman/8.3.0
+Postman/9.0.0
+Postman/9.1.0
+Postman/9.2.0
+Postman/9.3.0
+Postman/9.4.0
+Postman/9.5.0
+Postman/9.6.0
+Postman/9.7.0
+Postman/9.8.0
+Postman/9.9.0
+Postman/9.10.0
+Postman/9.11.0
+Postman/9.12.0
+Postman/9.13.0
+Postman/9.14.0
+Postman/9.15.0
+Postman/9.16.0
+Postman/9.17.0
+Postman/9.18.0
+Postman/9.19.0
+Postman/9.20.0
+Postman/9.21.0
+Postman/9.22.0
+Postman/9.23.0
+Postman/9.24.0
+Postman/9.25.0
+Postman/9.26.0
+Postman/9.27.0
+Postman/9.28.0
+Postman/9.29.0
+Postman/9.30.0
+Postman/9.31.0
+
+# Penetration testing frameworks
+Metasploit/5.0
+Metasploit/6.0
+burpsuite/1.7
+burpsuite/2.0
+burpsuite/2.1
+ZAP/2.8.0
+ZAP/2.9.0
+ZAP/2.10.0
+ZAP/2.11.0
+ZAP/2.12.0
+
+# Simple HTTP clients that are often malicious
+Go-http-client/1.1
+Go-http-client/2.0
+Java/1.8.0_144
+Java/11.0.1
+okhttp/3.14.0
+okhttp/4.0.0
+okhttp/4.1.0
+okhttp/4.2.0
+okhttp/4.3.0
+okhttp/4.4.0
+okhttp/4.5.0
+okhttp/4.6.0
+okhttp/4.7.0
+okhttp/4.8.0
+okhttp/4.9.0
+okhttp/4.10.0
+
+# Known malicious patterns
+libwww-perl/6.05
+libwww-perl/6.15
+libwww-perl/6.25
+libwww-perl/6.35
+libwww-perl/6.45
+libwww-perl/6.55
+
+# Empty or suspicious User-Agents
+-
+NULL
+null
+test
+Test
+testing
+Testing
+Mozilla
+Internet Explorer
