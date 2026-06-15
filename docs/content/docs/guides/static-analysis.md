@@ -1,6 +1,6 @@
 ---
 title: "Static Analysis"
-description: "Step-by-step guide to analyzing historical logs with cidrx"
+description: "Step-by-step guide to analyzing historical logs with flokbn"
 summary: "Complete walkthrough of static mode for log analysis and cluster detection"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-12T10:00:00+00:00
@@ -9,8 +9,8 @@ weight: 810
 slug: "static-analysis-guide"
 toc: true
 seo:
-  title: "cidrx Static Analysis Guide"
-  description: "Learn how to use cidrx static mode for historical log analysis and IP cluster detection"
+  title: "flokbn Static Analysis Guide"
+  description: "Learn how to use flokbn static mode for historical log analysis and IP cluster detection"
   canonical: ""
   noindex: false
 ---
@@ -22,7 +22,7 @@ Static mode analyzes historical log files to identify high-volume IP clusters. U
 Analyze a log file with a single cluster arg set:
 
 ```bash
-./cidrx static --logfile /var/log/nginx/access.log \
+./flokbn static --logfile /var/log/nginx/access.log \
   --clusterArgSets 1000,24,32,0.1 \
   --plain
 ```
@@ -31,7 +31,7 @@ This detects IP clusters with 1000+ requests in /24 to /32 ranges using a 10% th
 
 ## Interpreting Results
 
-cidrx outputs the detected ranges with request counts and their share of total traffic:
+flokbn outputs the detected ranges with request counts and their share of total traffic:
 
 ```
 CLUSTERING RESULTS
@@ -49,7 +49,7 @@ Reading the prefix lengths: `/24` = large cluster (256 IPs), `/25` = medium clus
 Run multiple [cluster arg sets]({{< relref "/docs/reference/clustering/" >}}) to catch different cluster sizes:
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --clusterArgSets 500,28,32,0.1 \
   --clusterArgSets 2000,20,28,0.2 \
   --clusterArgSets 10000,16,24,0.3 \
@@ -65,7 +65,7 @@ Each set runs independently: small clusters (500+), medium clusters (2000+), lar
 Filter by user-agent patterns:
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --useragentRegex "Chrome|Firefox" \
   --clusterArgSets 100,30,32,0.05 --plain
 ```
@@ -75,7 +75,7 @@ Filter by user-agent patterns:
 Focus on API abuse:
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --endpointRegex "/api/.*" \
   --clusterArgSets 500,28,32,0.1 --plain
 ```
@@ -85,7 +85,7 @@ Focus on API abuse:
 Analyze a specific period:
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --startTime "2025-01-15 14:00" \
   --endTime "2025-01-15 16:00" \
   --clusterArgSets 1000,24,32,0.1 --plain
@@ -98,8 +98,8 @@ See [Filtering]({{< relref "/docs/reference/filtering/" >}}) for all filter type
 Protect legitimate traffic:
 
 ```bash
-./cidrx static --logfile access.log \
-  --whitelist /etc/cidrx/whitelist.txt \
+./flokbn static --logfile access.log \
+  --whitelist /etc/flokbn/whitelist.txt \
   --clusterArgSets 1000,24,32,0.1 --plain
 ```
 
@@ -110,7 +110,7 @@ See [Filtering]({{< relref "/docs/reference/filtering/" >}}) for whitelist/black
 Focus on known problematic ranges:
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --rangesCidr "203.0.113.0/24" \
   --rangesCidr "198.51.100.0/24" \
   --clusterArgSets 1000,24,32,0.1 --plain
@@ -121,7 +121,7 @@ Focus on known problematic ranges:
 Write detected ranges to files for firewall integration:
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --jailFile /tmp/jail.json \
   --banFile /tmp/ban.txt \
   --clusterArgSets 1000,24,32,0.1 --plain
@@ -134,7 +134,7 @@ Both flags must be set together - with only one of them, no jail/ban output is w
 For complex multi-trie analysis, use a TOML [config file]({{< relref "/docs/reference/config-file/" >}}):
 
 ```bash
-./cidrx static --config cidrx.toml --plain
+./flokbn static --config flokbn.toml --plain
 ```
 
 Config files support multiple named tries, each with independent filters and cluster parameters. For a complete runnable example exercising every static-mode filter - global lists, per-trie UA/endpoint/time filters, multiple cluster regimes, and jail wiring - see [Complex Static Analysis]({{< relref "/docs/guides/complex-static-analysis/" >}}).
@@ -144,7 +144,7 @@ Config files support multiple named tries, each with independent filters and clu
 If your logs don't use the default format, specify a custom [log format]({{< relref "/docs/reference/log-formats/" >}}):
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"" \
   --clusterArgSets 1000,24,32,0.1 --plain
 ```
@@ -154,10 +154,10 @@ If your logs don't use the default format, specify a custom [log format]({{< rel
 Static mode supports all [output formats]({{< relref "/docs/reference/output-formats/" >}}):
 
 ```bash
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1           # JSON (default)
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact # Compact JSON
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain   # Plain text
-./cidrx static --config cidrx.toml --tui                                       # Interactive TUI
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1           # JSON (default)
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact # Compact JSON
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain   # Plain text
+./flokbn static --config flokbn.toml --tui                                       # Interactive TUI
 ```
 
 ## Large Files

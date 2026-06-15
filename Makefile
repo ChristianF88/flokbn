@@ -1,7 +1,7 @@
-# Repo-root Makefile — canonical local test gate for cidrx.
+# Repo-root Makefile — canonical local test gate for flokbn.
 # Go module lives in $(GO_DIR); e2e suites delegate to e2e/Makefile.
 
-GO_DIR := cidrx/src
+GO_DIR := flokbn/src
 
 .PHONY: test fmt-check fmt vet staticcheck go-test test-race e2e test-docker test-all bench
 

@@ -1,4 +1,4 @@
-# cidrx Docker DEMO configuration (mounted by docker-compose.demo.yml).
+# flokbn Docker DEMO configuration (mounted by docker-compose.demo.yml).
 # Paced for watching the Grafana dashboard: together with the demo overlay's
 # slower client intervals, the first ban lands ~20 s after traffic starts
 # and further clusters get banned progressively instead of all at once.
@@ -9,7 +9,7 @@ jailFile = "/data/jail.json"
 banFile = "/data/blocklist.txt"
 
 [log]
-# Leveled log lines on stderr (visible via `docker compose logs cidrx`).
+# Leveled log lines on stderr (visible via `docker compose logs flokbn`).
 level = "info"
 format = "text"
 

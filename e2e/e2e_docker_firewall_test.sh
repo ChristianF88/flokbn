@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# E2E test: closed-loop firewall overlay (CIDRX-045)
+# E2E test: closed-loop firewall overlay (FLOKBN-045)
 # Brings up the fast test base plus the firewall/monitoring overlay and verifies:
-#   1. cidrx publishes bans and the banpoller renders them as nginx deny rules
+#   1. flokbn publishes bans and the banpoller renders them as nginx deny rules
 #   2. banned clients start failing (403) while the negative control stays OK
-#   3. cidrx /metrics serves Prometheus text format with active bans
-#   4. Prometheus scrapes cidrx and sees the denied 403s via the log exporter
-#   5. Grafana is healthy and the provisioned cidrx dashboard exists
+#   3. flokbn /metrics serves Prometheus text format with active bans
+#   4. Prometheus scrapes flokbn and sees the denied 403s via the log exporter
+#   5. Grafana is healthy and the provisioned flokbn dashboard exists
 #
 # Prerequisites: docker and docker compose must be available.
 # This test takes ~60-90 seconds to run.
@@ -16,7 +16,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 PASS=0
 FAIL=0
-COMPOSE_PROJECT="cidrx-e2e-firewall-$$"
+COMPOSE_PROJECT="flokbn-e2e-firewall-$$"
 COMPOSE=(docker compose -p "$COMPOSE_PROJECT" -f "$REPO_ROOT/docker-compose.test.yml" -f "$REPO_ROOT/docker-compose-firewall-with-monitoring.demo.yml")
 
 log() { printf "[e2e-firewall] %s\n" "$*"; }
@@ -45,26 +45,26 @@ cd "$REPO_ROOT"
 "${COMPOSE[@]}" build --quiet 2>/dev/null
 "${COMPOSE[@]}" up -d 2>/dev/null
 
-# --- Wait for cidrx and Filebeat ---
-log "Waiting for cidrx container to start..."
+# --- Wait for flokbn and Filebeat ---
+log "Waiting for flokbn container to start..."
 MAX_WAIT=30
 for i in $(seq 1 $MAX_WAIT); do
-    STATUS=$("${COMPOSE[@]}" ps cidrx --format '{{.State}}' 2>/dev/null || echo "")
+    STATUS=$("${COMPOSE[@]}" ps flokbn --format '{{.State}}' 2>/dev/null || echo "")
     if [ "$STATUS" = "running" ]; then
         break
     fi
     if [ "$i" -eq "$MAX_WAIT" ]; then
-        fail "cidrx container did not start within ${MAX_WAIT}s"
+        fail "flokbn container did not start within ${MAX_WAIT}s"
         exit 1
     fi
     sleep 1
 done
-pass "cidrx container started"
+pass "flokbn container started"
 
 log "Waiting for Filebeat to connect..."
 MAX_WAIT=60
 for i in $(seq 1 $MAX_WAIT); do
-    LOGS=$("${COMPOSE[@]}" logs cidrx 2>/dev/null || echo "")
+    LOGS=$("${COMPOSE[@]}" logs flokbn 2>/dev/null || echo "")
     if echo "$LOGS" | grep -q "Filebeat connected"; then
         pass "Filebeat connected"
         break
@@ -123,34 +123,34 @@ else
     pass "negative control client never failed"
 fi
 
-# --- Test 3: cidrx /metrics endpoint ---
-log "Test 3: cidrx /metrics..."
-METRICS=$("${COMPOSE[@]}" exec -T cidrx wget -q -O - http://127.0.0.1:8666/metrics 2>/dev/null || echo "")
-if echo "$METRICS" | grep -q "^# TYPE cidrx_jail_active gauge"; then
+# --- Test 3: flokbn /metrics endpoint ---
+log "Test 3: flokbn /metrics..."
+METRICS=$("${COMPOSE[@]}" exec -T flokbn wget -q -O - http://127.0.0.1:8666/metrics 2>/dev/null || echo "")
+if echo "$METRICS" | grep -q "^# TYPE flokbn_jail_active gauge"; then
     pass "/metrics serves Prometheus text format"
 else
-    fail "/metrics missing TYPE header for cidrx_jail_active"
+    fail "/metrics missing TYPE header for flokbn_jail_active"
 fi
-JAIL_ACTIVE=$(echo "$METRICS" | grep "^cidrx_jail_active " | awk '{print $2}' || echo "0")
+JAIL_ACTIVE=$(echo "$METRICS" | grep "^flokbn_jail_active " | awk '{print $2}' || echo "0")
 if [ -n "$JAIL_ACTIVE" ] && [ "${JAIL_ACTIVE%%.*}" -gt 0 ] 2>/dev/null; then
-    pass "cidrx_jail_active = $JAIL_ACTIVE"
+    pass "flokbn_jail_active = $JAIL_ACTIVE"
 else
-    fail "cidrx_jail_active not > 0 (got '$JAIL_ACTIVE')"
+    fail "flokbn_jail_active not > 0 (got '$JAIL_ACTIVE')"
 fi
-if echo "$METRICS" | grep -q '^cidrx_ban_active{cidr="'; then
-    pass "per-CIDR ban series present (cidrx_ban_active)"
+if echo "$METRICS" | grep -q '^flokbn_ban_active{cidr="'; then
+    pass "per-CIDR ban series present (flokbn_ban_active)"
 else
-    fail "cidrx_ban_active has no per-CIDR series"
+    fail "flokbn_ban_active has no per-CIDR series"
 fi
 
-# --- Test 4: Prometheus sees cidrx and the denied 403s ---
+# --- Test 4: Prometheus sees flokbn and the denied 403s ---
 log "Test 4: Prometheus queries..."
 PROM_JAIL=$("${COMPOSE[@]}" exec -T prometheus wget -q -O - \
-    'http://localhost:9090/api/v1/query?query=cidrx_jail_active' 2>/dev/null || echo "")
-if echo "$PROM_JAIL" | grep -q '"status":"success"' && echo "$PROM_JAIL" | grep -q '"cidrx_jail_active"'; then
-    pass "Prometheus scrapes cidrx_jail_active"
+    'http://localhost:9090/api/v1/query?query=flokbn_jail_active' 2>/dev/null || echo "")
+if echo "$PROM_JAIL" | grep -q '"status":"success"' && echo "$PROM_JAIL" | grep -q '"flokbn_jail_active"'; then
+    pass "Prometheus scrapes flokbn_jail_active"
 else
-    fail "Prometheus query for cidrx_jail_active returned no sample"
+    fail "Prometheus query for flokbn_jail_active returned no sample"
 fi
 PROM_403=""
 for i in $(seq 1 15); do
@@ -189,11 +189,11 @@ else
     fail "Grafana /api/health not ok: $GRAFANA_HEALTH"
 fi
 DASHBOARD=$("${COMPOSE[@]}" exec -T grafana wget -q -O - \
-    http://localhost:3000/api/dashboards/uid/cidrx 2>/dev/null || echo "")
-if echo "$DASHBOARD" | grep -q '"uid": *"cidrx"'; then
-    pass "provisioned cidrx dashboard exists"
+    http://localhost:3000/api/dashboards/uid/flokbn 2>/dev/null || echo "")
+if echo "$DASHBOARD" | grep -q '"uid": *"flokbn"'; then
+    pass "provisioned flokbn dashboard exists"
 else
-    fail "cidrx dashboard not provisioned"
+    fail "flokbn dashboard not provisioned"
 fi
 
 # --- Summary ---

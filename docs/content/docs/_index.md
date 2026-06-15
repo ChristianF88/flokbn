@@ -1,15 +1,15 @@
 ---
 title: "Documentation"
-description: "cidrx Documentation - IP clustering and analysis"
-summary: "Comprehensive guides and documentation for cidrx"
+description: "flokbn Documentation - IP clustering and analysis"
+summary: "Comprehensive guides and documentation for flokbn"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2025-11-26T10:00:00+00:00
 draft: false
 weight: 999
 toc: false
 seo:
-  title: "cidrx Documentation"
-  description: "Complete documentation for cidrx - IP clustering and analysis tool"
+  title: "flokbn Documentation"
+  description: "Complete documentation for flokbn - IP clustering and analysis tool"
   canonical: ""
   noindex: false
 ---

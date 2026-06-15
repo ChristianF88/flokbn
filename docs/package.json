@@ -10,7 +10,7 @@
   },
   "scripts": {
     "create": "hugo new",
-    "dev": "hugo server --disableFastRender --noHTTPCache --baseURL http://localhost:1313/cidrx/",
+    "dev": "hugo server --disableFastRender --noHTTPCache --baseURL http://localhost:1313/flokbn/",
     "format": "prettier **/** -w -c",
     "build": "hugo --minify --gc",
     "build:extended": "~/go/bin/hugo --minify --gc",

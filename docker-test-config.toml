@@ -1,4 +1,4 @@
-# cidrx Docker TEST configuration (mounted by docker-compose.test.yml)
+# flokbn Docker TEST configuration (mounted by docker-compose.test.yml)
 # Fast detection for the e2e suites; the paced demo variant is
 # docker-test-config.demo.toml
 # It's designed to detect the clustering patterns from the test clients
@@ -8,7 +8,7 @@ jailFile = "/data/jail.json"
 banFile = "/data/blocklist.txt"
 
 [log]
-# Leveled log lines on stderr (visible via `docker compose logs cidrx`).
+# Leveled log lines on stderr (visible via `docker compose logs flokbn`).
 level = "info"
 format = "text"
 

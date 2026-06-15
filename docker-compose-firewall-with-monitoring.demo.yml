@@ -1,4 +1,4 @@
-# Firewall + observability overlay (CIDRX-045). Pacing-neutral: stack it on
+# Firewall + observability overlay (FLOKBN-045). Pacing-neutral: stack it on
 # either base.
 #
 # Demo (slow, for watching Grafana):
@@ -17,17 +17,17 @@
 #     loop (ban -> decay -> expiry -> re-ban) is observable.
 #   - nginx-log-exporter: tails the proxy's full access log (incl. 403s)
 #     and exposes per-status request counts for Prometheus.
-#   - prometheus: scrapes cidrx (/metrics, CIDRX-045) + the log exporter.
-#   - grafana: provisioned datasource + "cidrx — closed-loop firewall"
+#   - prometheus: scrapes flokbn (/metrics, FLOKBN-045) + the log exporter.
+#   - grafana: provisioned datasource + "flokbn — closed-loop firewall"
 #     dashboard, anonymous access (test stack only). http://localhost:3000
 services:
   proxy:
     environment:
-      BANLIST_URL: http://cidrx:8666/bans
+      BANLIST_URL: http://flokbn:8666/bans
       BANPOLL_INTERVAL: 2
     networks:
       mon: {}
-  cidrx:
+  flokbn:
     networks:
       mon: {}
   nginx-log-exporter:
@@ -49,7 +49,7 @@ services:
     container_name: prometheus
     restart: unless-stopped
     depends_on:
-    - cidrx
+    - flokbn
     - nginx-log-exporter
     ports:
     - 9090:9090

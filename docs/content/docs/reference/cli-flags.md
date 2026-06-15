@@ -1,7 +1,7 @@
 ---
 title: "CLI Flags"
-description: "Complete command-line reference for cidrx"
-summary: "Every cidrx command-line flag with type, default value, and description"
+description: "Complete command-line reference for flokbn"
+summary: "Every flokbn command-line flag with type, default value, and description"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
 draft: false
@@ -9,8 +9,8 @@ weight: 210
 slug: "cli-flags"
 toc: true
 seo:
-  title: "cidrx CLI Reference"
-  description: "Complete command-line interface reference for cidrx including all flags and options"
+  title: "flokbn CLI Reference"
+  description: "Complete command-line interface reference for flokbn including all flags and options"
   canonical: ""
   noindex: false
 ---
@@ -18,7 +18,7 @@ seo:
 ## Command Structure
 
 ```bash
-cidrx [global options] command [command options]
+flokbn [global options] command [command options]
 ```
 
 Two commands: **`static`** (historical log analysis) and **`live`** (real-time monitoring).
@@ -33,7 +33,7 @@ Two commands: **`static`** (historical log analysis) and **`live`** (real-time m
 ## Static Mode
 
 ```bash
-cidrx static [options]
+flokbn static [options]
 ```
 
 ### Core Options
@@ -96,7 +96,7 @@ Static mode writes the jail and ban files only when **both** flags are set; with
 ## Live Mode
 
 ```bash
-cidrx live [options]
+flokbn live [options]
 ```
 
 ### Core Options

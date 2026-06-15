@@ -9,8 +9,8 @@ weight: 815
 slug: "complex-static-analysis-guide"
 toc: true
 seo:
-  title: "cidrx Complex Static Analysis Guide"
-  description: "Learn how to combine multiple tries, filters, and cluster parameter sets in a single cidrx TOML configuration"
+  title: "flokbn Complex Static Analysis Guide"
+  description: "Learn how to combine multiple tries, filters, and cluster parameter sets in a single flokbn TOML configuration"
   canonical: ""
   noindex: false
 ---
@@ -33,7 +33,7 @@ The config references `fake-logs/fake_nginx_10m.log` (~1.9 GB), which is
 generated, not committed. Recreate it with the committed generator:
 
 ```bash
-cd cidrx/src
+cd flokbn/src
 go run ./cmd/fakeloggen --lines 10000000 --out ../../fake-logs/fake_nginx_10m.log
 ```
 
@@ -56,15 +56,15 @@ requests each.
 ## Running It
 
 ```bash
-cd cidrx/src
+cd flokbn/src
 go run . static --config ../../config_examples/complex-static.toml --plain
 ```
 
-**Relative paths resolve from the directory you run cidrx in, not from the
+**Relative paths resolve from the directory you run flokbn in, not from the
 config file location.** The committed example is written to be run from the
-Go module root `cidrx/src`; running it from elsewhere will fail to find the
-list files and the log. The jail file (`cidrx_jail.json`) persists across
-runs — delete it (together with `cidrx_ban.txt` and `heatmap.html`) for a
+Go module root `flokbn/src`; running it from elsewhere will fail to find the
+list files and the log. The jail file (`flokbn_jail.json`) persists across
+runs — delete it (together with `flokbn_ban.txt` and `heatmap.html`) for a
 clean rerun.
 
 ## Global Lists
@@ -244,8 +244,8 @@ Active Filters:  User-Agent: python-requests|curl|Anubis,
 
 Every cluster set detects at least one range; the four tries report
 ~8.95M / ~1.96M / ~5.40M / ~0.39M requests after filtering. After the run,
-`cidrx_ban.txt` contains the jailed ranges plus the IP blacklist entries,
-`cidrx_jail.json` holds the persistent jail state, and `heatmap.html` shows
+`flokbn_ban.txt` contains the jailed ranges plus the IP blacklist entries,
+`flokbn_jail.json` holds the persistent jail state, and `heatmap.html` shows
 the first-octet/second-octet request distribution.
 
 ## Performance

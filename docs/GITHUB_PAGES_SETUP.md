@@ -4,7 +4,7 @@ Follow these steps to enable automatic documentation deployment to GitHub Pages.
 
 ## 1. Enable GitHub Pages
 
-1. Navigate to your repository on GitHub: https://github.com/ChristianF88/cidrx
+1. Navigate to your repository on GitHub: https://github.com/ChristianF88/flokbn
 
 2. Click on **Settings** (gear icon in the top navigation)
 
@@ -59,7 +59,7 @@ Expected build time: ~1-2 minutes
 
 Once the workflow completes successfully:
 
-**Documentation URL**: https://christianf88.github.io/cidrx/
+**Documentation URL**: https://christianf88.github.io/flokbn/
 
 The documentation will be live and accessible to everyone.
 
@@ -67,7 +67,7 @@ The documentation will be live and accessible to everyone.
 
 Test that the documentation is working:
 
-1. Visit https://christianf88.github.io/cidrx/
+1. Visit https://christianf88.github.io/flokbn/
 2. Check that the homepage loads
 3. Navigate to the documentation sections
 4. Test the search functionality
@@ -103,7 +103,7 @@ Test that the documentation is working:
 
 **Issue**: Internal links return 404
 - **Solution**: Ensure all internal links in markdown use the format `/docs/section/page/`
-- Check that the baseURL includes `/cidrx/` at the end
+- Check that the baseURL includes `/flokbn/` at the end
 
 ## Manual Deployment Trigger
 
@@ -133,11 +133,11 @@ No additional configuration needed!
 
 ## Custom Domain (Optional)
 
-To use a custom domain like `docs.cidrx.io`:
+To use a custom domain like `docs.flokbn.io`:
 
 1. Add a `CNAME` file:
    ```bash
-   echo "docs.cidrx.io" > docs/static/CNAME
+   echo "docs.flokbn.io" > docs/static/CNAME
    git add docs/static/CNAME
    git commit -m "Add custom domain"
    git push
@@ -153,7 +153,7 @@ To use a custom domain like `docs.cidrx.io`:
 
 4. Update `docs/config/_default/hugo.toml`:
    ```toml
-   baseurl = "https://docs.cidrx.io/"
+   baseurl = "https://docs.flokbn.io/"
    ```
 
 ## Support

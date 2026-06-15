@@ -1,22 +1,22 @@
 ---
 title: "Internals"
-description: "cidrx internal architecture and design"
-summary: "Deep dive into how cidrx works: pipeline, binary trie, cluster detection, jail system, and code organization"
+description: "flokbn internal architecture and design"
+summary: "Deep dive into how flokbn works: pipeline, binary trie, cluster detection, jail system, and code organization"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 410
 toc: true
 seo:
-  title: "cidrx Internals"
-  description: "Learn about cidrx's internal architecture including trie-based IP clustering and detection algorithms"
+  title: "flokbn Internals"
+  description: "Learn about flokbn's internal architecture including trie-based IP clustering and detection algorithms"
   canonical: ""
   noindex: false
 ---
 
 ## Pipeline
 
-cidrx is built around a multi-stage pipeline:
+flokbn is built around a multi-stage pipeline:
 
 ```
 Log Files → Parser → Filter → Trie → Cluster Detector → Jail → Ban File
@@ -82,7 +82,7 @@ Log Files → Parser → Filter → Trie → Cluster Detector → Jail → Ban F
        │
        ▼
 ┌─────────────────────────────────┐
-│     cidrx Live Server           │
+│     flokbn Live Server           │
 │  ┌───────────────────────────┐  │
 │  │  Sliding Window Manager   │  │
 │  │                           │  │
@@ -357,10 +357,10 @@ Multiple windows with different parameters are all updated by the single detecti
 
 ## Lumberjack Protocol
 
-cidrx implements the Lumberjack protocol (Beats protocol) for receiving logs from Filebeat:
+flokbn implements the Lumberjack protocol (Beats protocol) for receiving logs from Filebeat:
 
 ```
-Client (Filebeat) → [Lumberjack Protocol] → cidrx Server
+Client (Filebeat) → [Lumberjack Protocol] → flokbn Server
 ```
 
 **Protocol features** (Lumberjack v2): zlib-compressed batches, acknowledgments, windowed flow control, reliable delivery.
@@ -373,7 +373,7 @@ Pre-allocated object pools (trie nodes, scratch slices) reduce allocation and GC
 
 ### Regex Compilation and Prefiltering
 
-Regex patterns are compiled once at startup, per trie/window. On top of that, cidrx derives each pattern's *required literals* (e.g. `bot` from `.*bot.*`) and screens every input with fast substring checks before the regex engine runs - see [Filtering]({{< relref "/docs/reference/filtering/" >}}).
+Regex patterns are compiled once at startup, per trie/window. On top of that, flokbn derives each pattern's *required literals* (e.g. `bot` from `.*bot.*`) and screens every input with fast substring checks before the regex engine runs - see [Filtering]({{< relref "/docs/reference/filtering/" >}}).
 
 ### Adaptive Filtering
 
@@ -388,7 +388,7 @@ See [Performance]({{< relref "/docs/architecture/performance/" >}}) for benchmar
 ## Package Structure
 
 ```
-cidrx/src/
+flokbn/src/
 ├── main.go              # Entry point
 ├── analysis/            # Analysis orchestration
 ├── cidr/                # CIDR parsing utilities

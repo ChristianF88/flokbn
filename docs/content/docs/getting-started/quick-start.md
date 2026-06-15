@@ -1,6 +1,6 @@
 ---
 title: "Quick Start"
-description: "Get started with cidrx in minutes"
+description: "Get started with flokbn in minutes"
 summary: "Quick examples to get you analyzing logs immediately"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
@@ -8,8 +8,8 @@ draft: false
 weight: 120
 toc: true
 seo:
-  title: "cidrx Quick Start Guide"
-  description: "Learn how to use cidrx for IP clustering and blacklist generation in minutes with practical examples"
+  title: "flokbn Quick Start Guide"
+  description: "Learn how to use flokbn for IP clustering and blacklist generation in minutes with practical examples"
   canonical: ""
   noindex: false
 ---
@@ -17,7 +17,7 @@ seo:
 ## Your First Analysis
 
 ```bash
-./cidrx static --logfile /var/log/nginx/access.log \
+./flokbn static --logfile /var/log/nginx/access.log \
   --clusterArgSets 1000,24,32,0.1 \
   --plain
 ```
@@ -28,7 +28,7 @@ This detects clusters of 1000+ requests from IPs in /24 to /32 ranges using a 10
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
-                               cidrx Analysis Results
+                               flokbn Analysis Results
 ═══════════════════════════════════════════════════════════════════════════════
 
 📊 ANALYSIS OVERVIEW
@@ -65,7 +65,7 @@ To catch small, medium, and large clusters in one run, pass several `--clusterAr
 ### Time-Specific Analysis
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --startTime "2025-01-15" \
   --endTime "2025-01-15 23:59" \
   --clusterArgSets 1000,24,32,0.1 \
@@ -75,8 +75,8 @@ To catch small, medium, and large clusters in one run, pass several `--clusterAr
 ### Generating Block Lists
 
 ```bash
-./cidrx static --logfile access.log \
-  --whitelist /etc/cidrx/whitelist.txt \
+./flokbn static --logfile access.log \
+  --whitelist /etc/flokbn/whitelist.txt \
   --jailFile /tmp/jail.json \
   --banFile /tmp/ban.txt \
   --clusterArgSets 1000,24,32,0.1 \
@@ -87,14 +87,14 @@ Detected ranges (minus whitelisted ones) are jailed and written to the ban file.
 
 ## Real-Time Protection
 
-For continuous monitoring and automatic blocking, run cidrx in live mode - the [Live Protection guide]({{< relref "/docs/guides/live-protection/" >}}) covers the command, Filebeat setup, and production deployment.
+For continuous monitoring and automatic blocking, run flokbn in live mode - the [Live Protection guide]({{< relref "/docs/guides/live-protection/" >}}) covers the command, Filebeat setup, and production deployment.
 
 ## Using Configuration Files
 
 For complex scenarios, use a TOML config file:
 
 ```bash
-./cidrx static --config cidrx.toml --plain
+./flokbn static --config flokbn.toml --plain
 ```
 
 See [Config File]({{< relref "/docs/reference/config-file/" >}}) for the complete schema and examples.
@@ -105,7 +105,7 @@ Besides `--plain`, static mode can emit JSON (default), compact JSON (`--compact
 
 ## Testing Your Setup
 
-The [Docker test and demo stacks]({{< relref "/docs/guides/docker-testing/" >}}) let you verify cidrx end-to-end against simulated traffic - including a closed-loop demo with firewall enforcement, Prometheus, and Grafana.
+The [Docker test and demo stacks]({{< relref "/docs/guides/docker-testing/" >}}) let you verify flokbn end-to-end against simulated traffic - including a closed-loop demo with firewall enforcement, Prometheus, and Grafana.
 
 ## Next Steps
 

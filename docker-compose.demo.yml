@@ -1,4 +1,4 @@
-# DEMO base stack (CIDRX-045) — same topology as docker-compose.test.yml but
+# DEMO base stack (FLOKBN-045) — same topology as docker-compose.test.yml but
 # paced for watching the Grafana dashboard: slower clients (~46 req/s total
 # instead of ~580) and a detection config (docker-test-config.demo.toml)
 # tuned so the first ban lands ~20 s after traffic starts and further
@@ -27,18 +27,18 @@ services:
       net3: {}
       net4: {}
       net5: {}
-  cidrx:
+  flokbn:
     build:
-      context: ./cidrx
+      context: ./flokbn
       dockerfile: Dockerfile
-    container_name: cidrx
+    container_name: flokbn
     restart: unless-stopped
     ports:
     - 9000:9000
     - 8666:8666
     volumes:
-    - ./docker-test-config.demo.toml:/config/cidrx.toml:ro
-    - cidrx_data:/data
+    - ./docker-test-config.demo.toml:/config/flokbn.toml:ro
+    - flokbn_data:/data
     healthcheck:
       test:
       - CMD
@@ -60,14 +60,14 @@ services:
     user: root
     depends_on:
     - proxy
-    - cidrx
+    - flokbn
     restart: unless-stopped
     networks: *id001
     volumes:
     - /tmp:/var/log/nginx:ro
     - filebeat_data:/usr/share/filebeat/data
     environment:
-      INGESTOR_HOST: cidrx:9000
+      INGESTOR_HOST: flokbn:9000
       PROXY_CONTAINER_NAME: proxy
   clients_net1:
     build: &id002
@@ -192,4 +192,4 @@ networks:
         ip_range: 172.30.99.0/27
 volumes:
   filebeat_data: {}
-  cidrx_data: {}
+  flokbn_data: {}

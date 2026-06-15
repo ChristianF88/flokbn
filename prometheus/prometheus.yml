@@ -1,14 +1,14 @@
-# Prometheus config for the firewall/observability overlay (CIDRX-045).
-# 2s scrape: the cidrx loop iterates every 1s in the docker test config and
+# Prometheus config for the firewall/observability overlay (FLOKBN-045).
+# 2s scrape: the flokbn loop iterates every 1s in the docker test config and
 # bans appear/expire within seconds — coarser scraping hides the sawtooth.
 global:
   scrape_interval: 2s
   evaluation_interval: 10s
 
 scrape_configs:
-  - job_name: cidrx
+  - job_name: flokbn
     static_configs:
-      - targets: ["cidrx:8666"]
+      - targets: ["flokbn:8666"]
 
   - job_name: nginx
     static_configs:

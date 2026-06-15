@@ -1,15 +1,15 @@
 #!/bin/sh
-# Firewall-like enforcement inside the nginx container (CIDRX-045).
+# Firewall-like enforcement inside the nginx container (FLOKBN-045).
 #
-# Polls BANLIST_URL (cidrx GET /bans) every BANPOLL_INTERVAL seconds,
+# Polls BANLIST_URL (flokbn GET /bans) every BANPOLL_INTERVAL seconds,
 # renders the CIDRs as `deny <cidr>;` lines into the include consumed by
 # default.conf, and reloads nginx when the set changes. Tolerates the 503
-# cidrx serves before its first snapshot (wget fails -> retry next tick).
+# flokbn serves before its first snapshot (wget fails -> retry next tick).
 #
 # Only lines that look like an IPv4 address or CIDR are accepted; the ban
 # file's `#` comments and blanks fall out of the same filter. The filter is
 # shape-only on purpose (it does not range-check octets or the prefix):
-# cidrx renders /bans from its own jail of parsed CIDRs, so the grep guards
+# flokbn renders /bans from its own jail of parsed CIDRs, so the grep guards
 # against non-banlist bodies (proxy error pages, comments), not bad values.
 set -u
 

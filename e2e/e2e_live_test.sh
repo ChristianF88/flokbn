@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # E2E test: live analysis mode (Docker Compose)
-# Starts the full stack (proxy, cidrx, filebeat, clients),
-# waits for data to accumulate, then checks cidrx's output for detections.
+# Starts the full stack (proxy, flokbn, filebeat, clients),
+# waits for data to accumulate, then checks flokbn's output for detections.
 #
-# cidrx uses TCP Lumberjack v2 protocol on port 9000 (not HTTP).
+# flokbn uses TCP Lumberjack v2 protocol on port 9000 (not HTTP).
 # Health checking is done via container logs and ban/jail file inspection.
 #
 # Expected Docker network layout:
@@ -23,7 +23,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 PASS=0
 FAIL=0
-COMPOSE_PROJECT="cidrx-e2e-$$"
+COMPOSE_PROJECT="flokbn-e2e-$$"
 
 log() { printf "[e2e-live] %s\n" "$*"; }
 pass() { PASS=$((PASS + 1)); log "PASS: $1"; }
@@ -51,41 +51,41 @@ cd "$REPO_ROOT"
 docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml build --quiet 2>/dev/null
 docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml up -d 2>/dev/null
 
-# --- Wait for cidrx container to be running ---
-log "Waiting for cidrx container to start..."
+# --- Wait for flokbn container to be running ---
+log "Waiting for flokbn container to start..."
 MAX_WAIT=30
 for i in $(seq 1 $MAX_WAIT); do
-    STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml ps cidrx --format '{{.State}}' 2>/dev/null || echo "")
+    STATUS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml ps flokbn --format '{{.State}}' 2>/dev/null || echo "")
     if [ "$STATUS" = "running" ]; then
         break
     fi
     if [ "$i" -eq "$MAX_WAIT" ]; then
-        fail "cidrx container did not start within ${MAX_WAIT}s (state: $STATUS)"
+        fail "flokbn container did not start within ${MAX_WAIT}s (state: $STATUS)"
         exit 1
     fi
     sleep 1
 done
-pass "cidrx container is running"
+pass "flokbn container is running"
 
-# --- Wait for cidrx to output "Filebeat connected" ---
-log "Waiting for Filebeat to connect to cidrx..."
+# --- Wait for flokbn to output "Filebeat connected" ---
+log "Waiting for Filebeat to connect to flokbn..."
 MAX_WAIT=60
 CONNECTED=false
 for i in $(seq 1 $MAX_WAIT); do
-    LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs cidrx 2>/dev/null || echo "")
+    LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs flokbn 2>/dev/null || echo "")
     if echo "$LOGS" | grep -q "Filebeat connected"; then
         CONNECTED=true
         break
     fi
     if [ "$i" -eq "$MAX_WAIT" ]; then
         log "WARNING: Filebeat connection not confirmed in logs within ${MAX_WAIT}s"
-        log "Last cidrx logs:"
+        log "Last flokbn logs:"
         echo "$LOGS" | tail -5
     fi
     sleep 1
 done
 if [ "$CONNECTED" = "true" ]; then
-    pass "Filebeat connected to cidrx"
+    pass "Filebeat connected to flokbn"
 else
     fail "Filebeat connection not confirmed"
 fi
@@ -97,7 +97,7 @@ fi
 # above min_size 50 from the first batch. Poll so fast machines exit early.
 log "Waiting up to 10s for traffic to accumulate and clusters to form..."
 for i in $(seq 1 10); do
-    BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+    BAN_PROBE=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T flokbn cat /data/blocklist.txt 2>/dev/null || echo "")
     BAN_PROBE_ENTRIES=$(echo "$BAN_PROBE" | grep -v '^#' | grep -c . || true)
     if [ "$BAN_PROBE_ENTRIES" -gt 0 ]; then
         break
@@ -107,7 +107,7 @@ done
 
 # --- Check ban file for detections ---
 log "Checking ban file..."
-BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/blocklist.txt 2>/dev/null || echo "")
+BAN_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T flokbn cat /data/blocklist.txt 2>/dev/null || echo "")
 if [ -n "$BAN_CONTENT" ]; then
     BAN_COUNT=$(echo "$BAN_CONTENT" | grep -v '^#' | grep -c . || true)
     pass "Ban file has $BAN_COUNT entries"
@@ -125,7 +125,7 @@ fi
 
 # --- Check jail file ---
 log "Checking jail file..."
-JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T cidrx cat /data/jail.json 2>/dev/null || echo "")
+JAIL_CONTENT=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml exec -T flokbn cat /data/jail.json 2>/dev/null || echo "")
 if [ -n "$JAIL_CONTENT" ]; then
     VALID_JSON=$(echo "$JAIL_CONTENT" | python3 -c "import json, sys; json.load(sys.stdin); print('yes')" 2>/dev/null || echo "no")
     if [ "$VALID_JSON" = "yes" ]; then
@@ -197,10 +197,10 @@ fi
 if [ "$FOUND_172_16" = "true" ]; then
     pass "Client network (172.16.x) detected in ban or jail"
 else
-    # Check cidrx output logs as fallback
-    DETECT_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs cidrx 2>/dev/null || echo "")
+    # Check flokbn output logs as fallback
+    DETECT_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs flokbn 2>/dev/null || echo "")
     if echo "$DETECT_LOGS" | grep -q "172.16"; then
-        pass "Client network (172.16.x) detected in cidrx output"
+        pass "Client network (172.16.x) detected in flokbn output"
     else
         fail "Client network (172.16.x) NOT detected anywhere after 10s"
     fi
@@ -209,7 +209,7 @@ fi
 # --- Negative client must never be clustered or banned ---
 # clients_net5 (172.30.99.32) sends 1 request every 3s - far below min_size 50.
 # Verify it IS producing traffic first, so its absence from ban/jail output is
-# meaningful: cidrx does not ban benign low-rate IPs.
+# meaningful: flokbn does not ban benign low-rate IPs.
 log "Checking negative client (172.30.99.x) exclusion..."
 NET5_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs clients_net5 --tail=5 2>/dev/null || echo "")
 if echo "$NET5_LOGS" | grep -q "OK"; then
@@ -230,30 +230,30 @@ else
     pass "Negative client (172.30.99.x) not in jail file"
 fi
 
-# --- Check cidrx iteration log lines for detection data ---
-log "Checking cidrx logs for iteration summaries..."
-CIDRX_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs cidrx 2>/dev/null || echo "")
+# --- Check flokbn iteration log lines for detection data ---
+log "Checking flokbn logs for iteration summaries..."
+FLOKBN_LOGS=$(docker compose -p "$COMPOSE_PROJECT" -f docker-compose.test.yml logs flokbn 2>/dev/null || echo "")
 
-# cidrx logs one leveled summary line per loop iteration to stderr
-if echo "$CIDRX_LOGS" | grep 'msg=iteration' | grep -qE 'detected=[1-9]'; then
-    pass "cidrx logged iterations with detections"
-elif echo "$CIDRX_LOGS" | grep -q 'msg=iteration'; then
-    pass "cidrx logged iteration summaries"
+# flokbn logs one leveled summary line per loop iteration to stderr
+if echo "$FLOKBN_LOGS" | grep 'msg=iteration' | grep -qE 'detected=[1-9]'; then
+    pass "flokbn logged iterations with detections"
+elif echo "$FLOKBN_LOGS" | grep -q 'msg=iteration'; then
+    pass "flokbn logged iteration summaries"
 else
-    fail "No iteration log lines found in cidrx logs"
+    fail "No iteration log lines found in flokbn logs"
 fi
 
 # --- Check for panics or fatal errors ---
-if echo "$CIDRX_LOGS" | grep -qi "panic"; then
-    fail "cidrx logs contain panics"
+if echo "$FLOKBN_LOGS" | grep -qi "panic"; then
+    fail "flokbn logs contain panics"
 else
-    pass "No panics in cidrx logs"
+    pass "No panics in flokbn logs"
 fi
 
-if echo "$CIDRX_LOGS" | grep -qi "fatal"; then
-    fail "cidrx logs contain fatal errors"
+if echo "$FLOKBN_LOGS" | grep -qi "fatal"; then
+    fail "flokbn logs contain fatal errors"
 else
-    pass "No fatal errors in cidrx logs"
+    pass "No fatal errors in flokbn logs"
 fi
 
 # --- Verify proxy is serving traffic ---
