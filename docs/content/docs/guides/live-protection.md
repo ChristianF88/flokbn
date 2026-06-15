@@ -29,7 +29,7 @@ Live mode provides real-time detection by continuously monitoring incoming logs 
 ## Quick Start (CLI)
 
 ```bash
-./flokbn live --port 8080 \
+flokbn live --port 8080 \
   --jailFile /etc/flokbn/jail.json \
   --banFile /etc/flokbn/ban.txt \
   --slidingWindowMaxTime 2h \
@@ -43,7 +43,7 @@ Flags-only mode runs a single sliding window; multiple windows and the HTTP stat
 For production, use a [config file]({{< relref "/docs/reference/config-file/" >}}) with multiple windows:
 
 ```bash
-./flokbn live --config /etc/flokbn/config.toml
+flokbn live --config /etc/flokbn/config.toml
 ```
 
 See [Config File]({{< relref "/docs/reference/config-file/" >}}) for the complete live example with multiple windows.

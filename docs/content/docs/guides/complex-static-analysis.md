@@ -15,9 +15,11 @@ seo:
   noindex: false
 ---
 
-This guide walks through `config_examples/complex-static.toml`, a committed,
-runnable configuration that exercises the **entire static-mode filter
-surface** in a single run: global IP and User-Agent white-/blacklists,
+This guide walks through the complex static-analysis example
+(`config_examples/complex-static.toml`), a runnable configuration that
+exercises the **entire static-mode filter surface** in a single run — you can
+unpack it into a working directory with `flokbn example config` (see below):
+global IP and User-Agent white-/blacklists,
 per-trie User-Agent/endpoint/time filters, CIDR-range analysis, three
 cluster parameter regimes per trie, and mixed jail wiring. It builds four
 differently-filtered tries from **one parse pass** over a 10-million-line
@@ -27,44 +29,58 @@ configuration.
 If you have not used static mode before, start with
 [Static Analysis]({{< relref "/docs/guides/static-analysis/" >}}).
 
-## Getting the Data
+## Scaffolding the Example
 
-The config references `fake-logs/fake_nginx_10m.log` (~1.9 GB), which is
-generated, not committed. Recreate it with the committed generator:
+`flokbn example config` writes a runnable copy of this configuration — the
+TOML plus its four list files — into a directory of your choice. Every path
+in the scaffolded config is rewritten to an absolute, co-located target, so
+the config runs from any working directory:
 
 ```bash
-cd flokbn/src
-go run ./cmd/fakeloggen --lines 10000000 --out ../../fake-logs/fake_nginx_10m.log
+flokbn example config --out ./demo
+```
+
+## Generating the Log
+
+The config drives a synthetic log produced by the matching generator. Write
+it into the scaffolded directory as `access.log` — the file name the
+scaffolded config expects:
+
+```bash
+flokbn example logs --out ./demo/access.log --lines 10000000
 ```
 
 The generator is deterministic for a given `--seed` (default 42) and
 produces traffic with a known shape: ten weighted `/16` hotspots over a
 uniform public-IP background, ten User-Agents (including exact matches for
-two entries in `config_examples/ua_whitelist.txt` — deliberate, see below),
-100 endpoints with Zipf-distributed popularity, and timestamps ascending
-over 72 hours from `2026-02-03T23:56:44Z`.
+two entries in the UA whitelist — deliberate, see below), 100 endpoints with
+Zipf-distributed popularity, and timestamps ascending over 72 hours from
+`2026-02-03T23:56:44Z`. The full 10-million-line log is ~1.9 GB.
+
+`flokbn example logs` defaults to 1,000,000 lines for a quick taste, but the
+`clusterArgSets` minimum sizes in the scaffolded config are calibrated for
+the full 10M-line run (hotspot `/16`s carrying 77k–178k requests each). Pass
+`--lines 10000000` to reproduce the figures below, or lower the per-trie
+minimum sizes to match a smaller log.
 
 **Using your own log instead:** point `logFile` at your access log and
 adapt `logFormat` to its layout (see
 [Log Formats]({{< relref "/docs/reference/log-formats/" >}})). You will
 also need to adapt the per-trie `useragentRegex`/`endpointRegex` patterns,
 the `startTime`/`endTime` window, and — most importantly — the
-`clusterArgSets` minimum sizes to your traffic volume: the committed values
-are calibrated for ~10M requests with hotspot `/16`s carrying 77k–178k
-requests each.
+`clusterArgSets` minimum sizes to your traffic volume.
 
 ## Running It
 
 ```bash
-cd flokbn/src
-go run . static --config ../../config_examples/complex-static.toml --plain
+flokbn static --config ./demo/complex-static.toml --plain
 ```
 
-**Relative paths resolve from the directory you run flokbn in, not from the
-config file location.** The committed example is written to be run from the
-Go module root `flokbn/src`; running it from elsewhere will fail to find the
-list files and the log. The jail file (`flokbn_jail.json`) persists across
-runs — delete it (together with `flokbn_ban.txt` and `heatmap.html`) for a
+Because `flokbn example config` rewrote every path to an absolute,
+co-located target, the scaffolded config runs from any working directory —
+there is no need to be in a particular directory. The jail file
+(`flokbn_jail.json`) persists across runs — delete it (together with
+`flokbn_ban.txt` and `heatmap.html`, all in the scaffold directory) for a
 clean rerun.
 
 ## Global Lists
@@ -170,8 +186,8 @@ with the IP blacklist entries.
 ## Expected Output
 
 Abbreviated `--plain` output (full run against the reference fake data).
-If you regenerate the data with `fakeloggen`, the per-trie totals and
-hotspot `/16` counts match closely, but the exact shape of the detected
+If you regenerate the data with `flokbn example logs`, the per-trie totals
+and hotspot `/16` counts match closely, but the exact shape of the detected
 ranges differs: the generator spreads hotspot traffic uniformly within
 each `/16`, so the sweeps tend to report whole `/16`s and their `/17`/`/18`
 halves rather than the dense cores shown below.
@@ -179,7 +195,7 @@ halves rather than the dense cores shown below.
 ```
 📊 ANALYSIS OVERVIEW
 ────────────────────────────────────────────────────────────
-Log File:        ../../fake-logs/fake_nginx_10m.log
+Log File:        /home/you/demo/access.log
 Analysis Type:   static
 
 ⚡ PARSING PERFORMANCE
@@ -269,8 +285,8 @@ dominant costs are parsing and trie construction. See
 [Performance]({{< relref "/docs/architecture/performance/" >}}) for how the
 parser and tries achieve this.
 
-> **Note on the synthetic data:** `fakeloggen` scatters IPs almost uniformly
-> at random, so ~85 % of requests carry a distinct address. Real logs reuse
+> **Note on the synthetic data:** `flokbn example logs` scatters IPs almost
+> uniformly at random, so ~85 % of requests carry a distinct address. Real logs reuse
 > client IPs heavily, which builds a far smaller, cache-resident trie — so on
 > real traffic of the same volume the build times are substantially lower.
 > Read the figures above as a deliberate worst case.

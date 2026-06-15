@@ -17,7 +17,7 @@ seo:
 ## Your First Analysis
 
 ```bash
-./flokbn static --logfile /var/log/nginx/access.log \
+flokbn static --logfile /var/log/nginx/access.log \
   --clusterArgSets 1000,24,32,0.1 \
   --plain
 ```
@@ -65,7 +65,7 @@ To catch small, medium, and large clusters in one run, pass several `--clusterAr
 ### Time-Specific Analysis
 
 ```bash
-./flokbn static --logfile access.log \
+flokbn static --logfile access.log \
   --startTime "2025-01-15" \
   --endTime "2025-01-15 23:59" \
   --clusterArgSets 1000,24,32,0.1 \
@@ -75,7 +75,7 @@ To catch small, medium, and large clusters in one run, pass several `--clusterAr
 ### Generating Block Lists
 
 ```bash
-./flokbn static --logfile access.log \
+flokbn static --logfile access.log \
   --whitelist /etc/flokbn/whitelist.txt \
   --jailFile /tmp/jail.json \
   --banFile /tmp/ban.txt \
@@ -94,7 +94,7 @@ For continuous monitoring and automatic blocking, run flokbn in live mode - the 
 For complex scenarios, use a TOML config file:
 
 ```bash
-./flokbn static --config flokbn.toml --plain
+flokbn static --config flokbn.toml --plain
 ```
 
 See [Config File]({{< relref "/docs/reference/config-file/" >}}) for the complete schema and examples.

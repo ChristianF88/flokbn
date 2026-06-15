@@ -193,10 +193,10 @@ Detected Threat Ranges:
 
 Test parameters on known data:
 ```bash
-./flokbn static --logfile access.log \
+flokbn static --logfile access.log \
   --clusterArgSets 1000,24,32,0.1 --plain > results-1.txt
 
-./flokbn static --logfile access.log \
+flokbn static --logfile access.log \
   --clusterArgSets 500,24,32,0.05 --plain > results-2.txt
 
 diff results-1.txt results-2.txt
@@ -206,7 +206,7 @@ Sweep thresholds:
 ```bash
 for threshold in 0.05 0.1 0.2 0.3; do
   echo "threshold=$threshold"
-  ./flokbn static --logfile access.log \
+  flokbn static --logfile access.log \
     --clusterArgSets 1000,24,32,$threshold --plain | grep "Detected"
 done
 ```

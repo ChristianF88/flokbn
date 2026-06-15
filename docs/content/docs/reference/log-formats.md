@@ -159,7 +159,7 @@ Use `%^` for any field you don't need. Can appear unlimited times.
 echo '192.0.2.1 - - [09/Oct/2025:10:15:23 +0000] "GET / HTTP/1.1" 200 1234 "-" "curl"' > test.log
 
 # Test parsing
-./flokbn static --logfile test.log \
+flokbn static --logfile test.log \
   --logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"" \
   --clusterArgSets 1,32,32,0.01 \
   --plain
