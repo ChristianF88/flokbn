@@ -268,3 +268,9 @@ top of the parse: clustering itself runs in microseconds per set — the
 dominant costs are parsing and trie construction. See
 [Performance]({{< relref "/docs/architecture/performance/" >}}) for how the
 parser and tries achieve this.
+
+> **Note on the synthetic data:** `fakeloggen` scatters IPs almost uniformly
+> at random, so ~85 % of requests carry a distinct address. Real logs reuse
+> client IPs heavily, which builds a far smaller, cache-resident trie — so on
+> real traffic of the same volume the build times are substantially lower.
+> Read the figures above as a deliberate worst case.
