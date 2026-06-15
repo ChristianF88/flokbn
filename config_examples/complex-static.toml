@@ -25,6 +25,11 @@
 # Jail/ban output. Both must be set or no jail/ban processing happens.
 # Relative => written into the CWD (cidrx/src); both names are git-ignored.
 # NOTE: the jail file persists across runs — delete it for a clean rerun.
+#
+# Heads-up: on very large, high-cardinality inputs like this 10M-line example
+# the jail/ban stage is currently slow. For a quick run, comment out
+# jailFile/banFile below to skip jail processing — the trie analysis, CIDR
+# range stats, and clustering are unaffected.
 jailFile = "cidrx_jail.json"
 banFile  = "cidrx_ban.txt"
 
