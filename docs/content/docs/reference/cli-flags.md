@@ -21,7 +21,7 @@ seo:
 flokbn [global options] command [command options]
 ```
 
-Two commands: **`static`** (historical log analysis) and **`live`** (real-time monitoring).
+Three commands: **`static`** (historical log analysis), **`live`** (real-time monitoring), and **`example`** (generate ready-to-run example inputs).
 
 ## Global Options
 
@@ -132,6 +132,57 @@ Flags-only live mode creates a **single** sliding window (internally named `cli_
 Live mode supports the same filter flags as static mode: `--useragentRegex`, `--endpointRegex`, `--whitelist`, `--blacklist`, `--userAgentWhitelist`, `--userAgentBlacklist`.
 
 `--rangesCidr`, `--plotPath`, `--plain`, `--compact`, and `--tui` are static-only flags - the live command rejects them with an error. Live mode produces log lines, the jail/ban files, and the optional HTTP endpoints, not a report.
+
+---
+
+## Example Mode
+
+```bash
+flokbn example <subcommand> [options]
+```
+
+Generates ready-to-run example inputs so you can try the full analysis without
+a Go toolchain or your own logs. Two subcommands:
+
+### `example logs`
+
+```bash
+flokbn example logs --out FILE [--lines N] [--seed S]
+```
+
+Generates a synthetic nginx/Apache-combined access log with a known traffic
+shape (weighted `/16` hotspots over a uniform public-IP background, Zipf
+endpoint popularity, and exact-match whitelist User-Agents). Output is
+deterministic for a given seed.
+
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--out` | string | Yes | - | Output log file path |
+| `--lines` | int | No | `1000000` | Number of log lines to generate |
+| `--seed` | uint | No | `42` | PRNG seed; the same seed produces byte-identical output |
+
+### `example config`
+
+```bash
+flokbn example config --out DIR
+```
+
+Scaffolds the [complex static-analysis example]({{< relref "/docs/guides/complex-static-analysis/" >}})
+into `DIR`: the configuration TOML plus its four IP/UA list files. Every path
+in the written config is rewritten to an absolute, co-located target, so the
+scaffolded config runs from any working directory.
+
+| Flag | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `--out` | string | Yes | - | Output directory for the scaffolded config and list files |
+
+A complete run from the binary alone:
+
+```bash
+flokbn example config --out ./demo
+flokbn example logs   --out ./demo/access.log --lines 10000000
+flokbn static --config ./demo/complex-static.toml --plain
+```
 
 ---
 

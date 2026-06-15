@@ -1,22 +1,21 @@
 # ==============================================================================
-# flokbn — complex static-analysis example (full filter surface, FLOKBN-050)
+# flokbn — complex static-analysis example (full filter surface)
 # ==============================================================================
-# This is a RUNNABLE example exercising every static-mode filter option:
-# global IP/UA white- and blacklists, per-trie UA/endpoint/time filters,
-# CIDR-range analysis, multiple cluster parameter regimes, and jail wiring.
+# This is the reference copy of a RUNNABLE example exercising every static-mode
+# filter option: global IP/UA white- and blacklists, per-trie UA/endpoint/time
+# filters, CIDR-range analysis, multiple cluster parameter regimes, jail wiring.
 #
-# IMPORTANT — relative paths resolve from the directory you RUN flokbn in,
-# NOT from the location of this config file. This file is written to be run
-# from the Go module root `flokbn/src`:
+# The easiest way to run it is to scaffold a self-contained copy with the
+# binary, generate the matching log into the same directory, and analyze it:
 #
-#     cd flokbn/src
-#     go run . static --config ../../config_examples/complex-static.toml --plain
+#     flokbn example config --out ./demo
+#     flokbn example logs   --out ./demo/access.log --lines 10000000
+#     flokbn static --config ./demo/complex-static.toml --plain
 #
-# The referenced log data (fake-logs/) is generated, not committed. Recreate it
-# with the committed generator (see docs: Guides -> Complex Static Analysis):
-#
-#     cd flokbn/src
-#     go run ./cmd/fakeloggen --lines 10000000 --out ../../fake-logs/fake_nginx_10m.log
+# `flokbn example config` rewrites every path below to an absolute, co-located
+# path, so the scaffolded copy runs from any working directory. The paths in
+# THIS reference file are relative and resolve from the directory you run
+# flokbn in.
 #
 # ...or point logFile at your own access log and adapt logFormat
 # (see docs: Reference -> Log Formats) and the per-trie filters/minimum sizes.

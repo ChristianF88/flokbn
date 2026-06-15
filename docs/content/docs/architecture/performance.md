@@ -129,7 +129,7 @@ Live mode memory is bounded by `slidingWindowMaxSize` (~50MB per window at 50,00
 ### Monitoring Memory
 
 ```bash
-/usr/bin/time -v ./flokbn static --logfile access.log \
+/usr/bin/time -v flokbn static --logfile access.log \
   --clusterArgSets 1000,24,32,0.1 --plain
 # Look for: Maximum resident set size
 ```
@@ -157,10 +157,10 @@ For timing full runs against a real log file, use the recipe in the [Developer G
 For very large datasets, split by time range:
 
 ```bash
-./flokbn static --logfile access.log \
+flokbn static --logfile access.log \
   --startTime "2025-10-09" --endTime "2025-10-09 06" &
 
-./flokbn static --logfile access.log \
+flokbn static --logfile access.log \
   --startTime "2025-10-09 06" --endTime "2025-10-09 12" &
 
 wait  # Merge results
@@ -189,7 +189,7 @@ Possible causes: slow disk I/O, complex regex patterns, large whitelist.
 Debug by testing without filters first:
 
 ```bash
-time ./flokbn static --logfile access.log \
+time flokbn static --logfile access.log \
   --clusterArgSets 10000,24,32,0.5 --plain
 ```
 

@@ -34,7 +34,7 @@ The [ban file](#ban-file-format) and [jail file](#jail-file-format) formats at t
 ### JSON (Default)
 
 ```bash
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1
 ```
 
 #### Schema
@@ -110,15 +110,15 @@ The top level contains `metadata`, `general`, one entry per trie under `tries`, 
 
 ```bash
 # Extract all merged CIDRs from every trie and cluster set
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq -r '.tries[].data[].merged_ranges[].cidr'
 
 # Get CIDRs with > 1000 requests
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq -r '.tries[].data[].merged_ranges[] | select(.requests > 1000) | .cidr'
 
 # Total requests parsed
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq '.general.total_requests'
 ```
 
@@ -128,7 +128,7 @@ The top level contains `metadata`, `general`, one entry per trie under `tries`, 
 import json, subprocess
 
 result = subprocess.run(
-    ['./flokbn', 'static', '--logfile', 'access.log',
+    ['flokbn', 'static', '--logfile', 'access.log',
      '--clusterArgSets', '1000,24,32,0.1'],
     capture_output=True, text=True
 )
@@ -145,19 +145,19 @@ for trie in data['tries']:
 Single-line minified JSON, same schema as above.
 
 ```bash
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact
 ```
 
 Useful for SIEM ingestion, message queues, and log aggregation:
 
 ```bash
 # Send to Elasticsearch
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact | \
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact | \
   curl -X POST "localhost:9200/flokbn-detections/_doc" \
        -H 'Content-Type: application/json' -d @-
 
 # Append to log file
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact >> \
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact >> \
   /var/log/flokbn/detections.log
 ```
 
@@ -166,7 +166,7 @@ Useful for SIEM ingestion, message queues, and log aggregation:
 Human-readable formatted output with box-drawing characters and aligned columns.
 
 ```bash
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain
 ```
 
 Example output (illustrative; RFC 5737 ranges):
@@ -213,12 +213,12 @@ Useful for terminal display, reports, and email alerts:
 
 ```bash
 # Daily report
-./flokbn static --logfile access.log \
+flokbn static --logfile access.log \
   --startTime "2025-10-09" --endTime "2025-10-09 23:59" \
   --clusterArgSets 1000,24,32,0.1 --plain > daily-report.txt
 
 # Email
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain | \
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain | \
   mail -s "flokbn Report" admin@example.com
 ```
 
@@ -227,8 +227,8 @@ Useful for terminal display, reports, and email alerts:
 Terminal user interface that runs the analysis and presents the results in scrollable panels, plus an address-space visualization of the detected clusters.
 
 ```bash
-./flokbn static --config flokbn.toml --tui
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --tui
+flokbn static --config flokbn.toml --tui
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --tui
 ```
 
 **Views**: a results view with four panels - Summary, Clustering, CIDR Analysis, Diagnostics - and a visualization view showing where detections sit in the address space.
@@ -241,12 +241,12 @@ Works both with `--config` and CLI-only parameters. Available in static mode onl
 
 ```bash
 # iptables rules
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq -r '.tries[].data[].merged_ranges[].cidr' | \
   sed 's/^/iptables -A INPUT -s /; s/$/ -j DROP/' > rules.sh
 
 # nginx deny directives
-./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq -r '.tries[].data[].merged_ranges[].cidr' | \
   sed 's/^/deny /; s/$/;/' > nginx-deny.conf
 ```
@@ -272,7 +272,7 @@ Fatal errors (missing log file, invalid flags, bad config) are printed as a plai
 
 Check the exit code in scripts:
 ```bash
-if ./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 > output.json; then
+if flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 > output.json; then
     jq -r '.tries[].data[].merged_ranges[].cidr' output.json > blocklist.txt
 else
     echo "Analysis failed"
