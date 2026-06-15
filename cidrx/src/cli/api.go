@@ -795,6 +795,9 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 
 		// Trie Statistics
 		fmt.Printf("Requests After Filtering: %s\n", output.FormatNumber(trieResult.Stats.TotalRequestsAfterFiltering))
+		if trieResult.Stats.UAWhitelistExcluded > 0 {
+			fmt.Printf("Excluded (UA whitelist): %s\n", output.FormatNumber(trieResult.Stats.UAWhitelistExcluded))
+		}
 		fmt.Printf("Unique IPs:              %s\n", output.FormatNumber(trieResult.Stats.UniqueIPs))
 		fmt.Printf("Trie Build Time:         %d ms\n", trieResult.Stats.InsertTimeMS)
 
