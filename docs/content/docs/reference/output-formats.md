@@ -1,7 +1,7 @@
 ---
 title: "Output Formats"
 description: "Static report formats (JSON, plain text, TUI) and live mode outputs (ban file, jail file, HTTP endpoints)"
-summary: "Complete reference for cidrx output: static analysis reports and the files and HTTP endpoints live mode produces"
+summary: "Complete reference for flokbn output: static analysis reports and the files and HTTP endpoints live mode produces"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-12T10:00:00+00:00
 draft: false
@@ -9,13 +9,13 @@ weight: 260
 slug: "output-formats"
 toc: true
 seo:
-  title: "cidrx Output Formats"
-  description: "Learn about cidrx output formats including JSON, plain text, TUI, and the live mode ban file and HTTP endpoints"
+  title: "flokbn Output Formats"
+  description: "Learn about flokbn output formats including JSON, plain text, TUI, and the live mode ban file and HTTP endpoints"
   canonical: ""
   noindex: false
 ---
 
-cidrx's two modes produce fundamentally different output, and this page is split accordingly:
+flokbn's two modes produce fundamentally different output, and this page is split accordingly:
 
 - **[Static mode](#static-mode-output)** runs once and writes an analysis **report to stdout** - JSON, compact JSON, plain text, or an interactive TUI.
 - **[Live mode](#live-mode-output)** runs forever and writes **no report at all**. Its output is the continuously updated jail and ban files, leveled log lines on stderr, and three HTTP endpoints (`/stats`, `/bans`, `/metrics`).
@@ -34,7 +34,7 @@ The [ban file](#ban-file-format) and [jail file](#jail-file-format) formats at t
 ### JSON (Default)
 
 ```bash
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1
 ```
 
 #### Schema
@@ -110,15 +110,15 @@ The top level contains `metadata`, `general`, one entry per trie under `tries`, 
 
 ```bash
 # Extract all merged CIDRs from every trie and cluster set
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq -r '.tries[].data[].merged_ranges[].cidr'
 
 # Get CIDRs with > 1000 requests
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq -r '.tries[].data[].merged_ranges[] | select(.requests > 1000) | .cidr'
 
 # Total requests parsed
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq '.general.total_requests'
 ```
 
@@ -128,7 +128,7 @@ The top level contains `metadata`, `general`, one entry per trie under `tries`, 
 import json, subprocess
 
 result = subprocess.run(
-    ['./cidrx', 'static', '--logfile', 'access.log',
+    ['./flokbn', 'static', '--logfile', 'access.log',
      '--clusterArgSets', '1000,24,32,0.1'],
     capture_output=True, text=True
 )
@@ -145,20 +145,20 @@ for trie in data['tries']:
 Single-line minified JSON, same schema as above.
 
 ```bash
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact
 ```
 
 Useful for SIEM ingestion, message queues, and log aggregation:
 
 ```bash
 # Send to Elasticsearch
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact | \
-  curl -X POST "localhost:9200/cidrx-detections/_doc" \
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact | \
+  curl -X POST "localhost:9200/flokbn-detections/_doc" \
        -H 'Content-Type: application/json' -d @-
 
 # Append to log file
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact >> \
-  /var/log/cidrx/detections.log
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --compact >> \
+  /var/log/flokbn/detections.log
 ```
 
 ### Plain Text
@@ -166,14 +166,14 @@ Useful for SIEM ingestion, message queues, and log aggregation:
 Human-readable formatted output with box-drawing characters and aligned columns.
 
 ```bash
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain
 ```
 
 Example output (illustrative; RFC 5737 ranges):
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
-                               cidrx Analysis Results
+                               flokbn Analysis Results
 ═══════════════════════════════════════════════════════════════════════════════
 
 📊 ANALYSIS OVERVIEW
@@ -213,13 +213,13 @@ Useful for terminal display, reports, and email alerts:
 
 ```bash
 # Daily report
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --startTime "2025-10-09" --endTime "2025-10-09 23:59" \
   --clusterArgSets 1000,24,32,0.1 --plain > daily-report.txt
 
 # Email
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain | \
-  mail -s "cidrx Report" admin@example.com
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --plain | \
+  mail -s "flokbn Report" admin@example.com
 ```
 
 ### TUI (Interactive)
@@ -227,8 +227,8 @@ Useful for terminal display, reports, and email alerts:
 Terminal user interface that runs the analysis and presents the results in scrollable panels, plus an address-space visualization of the detected clusters.
 
 ```bash
-./cidrx static --config cidrx.toml --tui
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 --tui
+./flokbn static --config flokbn.toml --tui
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 --tui
 ```
 
 **Views**: a results view with four panels - Summary, Clustering, CIDR Analysis, Diagnostics - and a visualization view showing where detections sit in the address space.
@@ -241,12 +241,12 @@ Works both with `--config` and CLI-only parameters. Available in static mode onl
 
 ```bash
 # iptables rules
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq -r '.tries[].data[].merged_ranges[].cidr' | \
   sed 's/^/iptables -A INPUT -s /; s/$/ -j DROP/' > rules.sh
 
 # nginx deny directives
-./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
+./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 | \
   jq -r '.tries[].data[].merged_ranges[].cidr' | \
   sed 's/^/deny /; s/$/;/' > nginx-deny.conf
 ```
@@ -272,7 +272,7 @@ Fatal errors (missing log file, invalid flags, bad config) are printed as a plai
 
 Check the exit code in scripts:
 ```bash
-if ./cidrx static --logfile access.log --clusterArgSets 1000,24,32,0.1 > output.json; then
+if ./flokbn static --logfile access.log --clusterArgSets 1000,24,32,0.1 > output.json; then
     jq -r '.tries[].data[].merged_ranges[].cidr' output.json > blocklist.txt
 else
     echo "Analysis failed"
@@ -301,7 +301,7 @@ topTalkers = 5   # optional: top-N IPs per window in /stats
 |----------|---------|
 | `GET /stats` | JSON snapshot of the last iteration: `ingest` (connection, queue, totals, parse errors), `windows` (size, accepted/rejected counts, per-set detections and timings, optional `top_talkers`), `jail` (active bans per stage with start/expiry), `lists`, `loop` |
 | `GET /bans` | The ban file content last written to disk, verbatim (`text/plain`) - what enforcement tooling should poll |
-| `GET /metrics` | Prometheus exposition format; all metrics are prefixed `cidrx_` (ingest, window, cluster, jail, ban-file, and loop families) |
+| `GET /metrics` | Prometheus exposition format; all metrics are prefixed `flokbn_` (ingest, window, cluster, jail, ban-file, and loop families) |
 
 All three return `503` with a `Retry-After` header until the loop has completed its first iteration. The snapshot updates once per iteration, not per request. Bind to localhost unless you have a reason not to.
 
@@ -330,7 +330,7 @@ grep -v '^#' /tmp/ban.txt | while read -r cidr; do
 done
 
 # nginx format
-grep -v '^#' /tmp/ban.txt | sed 's/^/deny /; s/$/;/' > /etc/nginx/cidrx-bans.conf
+grep -v '^#' /tmp/ban.txt | sed 's/^/deny /; s/$/;/' > /etc/nginx/flokbn-bans.conf
 ```
 
 In live mode the same content is served over HTTP as `GET /bans`, which avoids file-distribution entirely - poll the endpoint instead of shipping the file.

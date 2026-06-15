@@ -1,6 +1,6 @@
 # Documentation Deployment Guide
 
-This guide explains how to deploy the cidrx documentation to GitHub Pages.
+This guide explains how to deploy the flokbn documentation to GitHub Pages.
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ To enable GitHub Pages for this repository:
 The deployment workflow (`.github/workflows/docs.yml`) will automatically:
 - Build the Hugo site
 - Deploy it to GitHub Pages
-- Make it available at `https://christianf88.github.io/cidrx/`
+- Make it available at `https://christianf88.github.io/flokbn/`
 
 ### Workflow Triggers
 
@@ -66,7 +66,7 @@ cd docs
 npm run dev
 ```
 
-The site will be available at `http://localhost:1313/cidrx/`
+The site will be available at `http://localhost:1313/flokbn/`
 
 ### Build Locally
 
@@ -178,7 +178,7 @@ Edit `docs/config/_default/menus/menus.en.toml` to modify navigation menus.
 The base URL is configured in `docs/config/_default/hugo.toml`:
 
 ```toml
-baseurl = "https://christianf88.github.io/cidrx/"
+baseurl = "https://christianf88.github.io/flokbn/"
 ```
 
 Change this if deploying to a different URL or custom domain.
@@ -198,7 +198,7 @@ To use a custom domain:
 
 1. Add a `CNAME` file to `docs/static/`:
    ```bash
-   echo "docs.cidrx.example.com" > docs/static/CNAME
+   echo "docs.flokbn.example.com" > docs/static/CNAME
    ```
 
 2. Update DNS settings to point to GitHub Pages:
@@ -228,4 +228,4 @@ To use a custom domain:
 For issues with:
 - **Hugo/Doks**: Check [Doks documentation](https://getdoks.org/)
 - **GitHub Pages**: Check [GitHub Pages docs](https://docs.github.com/en/pages)
-- **cidrx content**: Open an issue in the repository
+- **flokbn content**: Open an issue in the repository

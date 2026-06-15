@@ -145,7 +145,7 @@
         <div class="cx-demo-copy">
           <p class="cx-section-kicker">00 / SEE IT RUN</p>
           <h2 class="cx-section-title">One command from raw log to clustered&nbsp;ranges</h2>
-          <p>Point <code>cidrx static</code> at an access log and give it one or more cluster arg sets - <code>minSize,minDepth,maxDepth,threshold</code>. Each set is a detection tier: tight ones catch single hot hosts, loose ones catch whole subnets misbehaving together.</p>
+          <p>Point <code>flokbn static</code> at an access log and give it one or more cluster arg sets - <code>minSize,minDepth,maxDepth,threshold</code>. Each set is a detection tier: tight ones catch single hot hosts, loose ones catch whole subnets misbehaving together.</p>
           <ul class="cx-checklist">
             <li>Multiple detection tiers in a single pass</li>
             <li>Whitelists protect monitoring and partner IPs</li>
@@ -155,12 +155,12 @@
           <a class="cx-inline-link" href="{{ .RelPermalink }}">Static analysis guide &rarr;</a>
           {{ end }}
         </div>
-        <div class="cx-terminal" role="figure" aria-label="Illustrative cidrx terminal session">
+        <div class="cx-terminal" role="figure" aria-label="Illustrative flokbn terminal session">
           <div class="cx-terminal-bar">
             <span class="cx-terminal-dot"></span><span class="cx-terminal-dot"></span><span class="cx-terminal-dot"></span>
-            <span class="cx-terminal-title">cidrx static - illustrative output, RFC&nbsp;5737 ranges</span>
+            <span class="cx-terminal-title">flokbn static - illustrative output, RFC&nbsp;5737 ranges</span>
           </div>
-          <pre class="cx-terminal-body"><code><span class="t-prompt">$</span> cidrx static --logfile /var/log/nginx/access.log \
+          <pre class="cx-terminal-body"><code><span class="t-prompt">$</span> flokbn static --logfile /var/log/nginx/access.log \
     --clusterArgSets 1000,24,32,0.1 \
     --clusterArgSets 10000,16,24,0.2 --plain
 
@@ -232,7 +232,7 @@ Set 2: min_size=10000, depth=16-24, threshold=0.20
       <div class="cx-modes-grid">
         <article class="cx-mode-card">
           <div class="cx-mode-head">
-            <span class="cx-mode-chip">cidrx static</span>
+            <span class="cx-mode-chip">flokbn static</span>
             <h3>Static analysis</h3>
           </div>
           <p>Analyze historical log files. Slice by time window, query specific CIDR ranges, and - when the use case calls for it - generate a ban-candidate list from what actually happened.</p>
@@ -245,7 +245,7 @@ Set 2: min_size=10000, depth=16-24, threshold=0.20
         </article>
         <article class="cx-mode-card cx-mode-card-live">
           <div class="cx-mode-head">
-            <span class="cx-mode-chip cx-mode-chip-live"><span class="cx-live-dot" aria-hidden="true"></span>cidrx live</span>
+            <span class="cx-mode-chip cx-mode-chip-live"><span class="cx-live-dot" aria-hidden="true"></span>flokbn live</span>
             <h3>Live protection</h3>
           </div>
           <p>Continuous monitoring over the Lumberjack protocol (Filebeat-compatible). Sliding windows watch traffic in real time; detected ranges are banned automatically.</p>
@@ -347,7 +347,7 @@ Set 2: min_size=10000, depth=16-24, threshold=0.20
           {{ with site.GetPage "/docs/getting-started/quick-start" }}
           <a class="cx-btn cx-btn-primary cx-btn-lg" href="{{ .RelPermalink }}">Quick start<span class="cx-btn-arrow" aria-hidden="true">&rarr;</span></a>
           {{ end }}
-          <a class="cx-btn cx-btn-ghost cx-btn-lg" href="https://github.com/ChristianF88/cidrx">View on GitHub</a>
+          <a class="cx-btn cx-btn-ghost cx-btn-lg" href="https://github.com/ChristianF88/flokbn">View on GitHub</a>
         </div>
       </div>
     </div>

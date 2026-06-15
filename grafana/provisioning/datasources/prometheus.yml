@@ -1,4 +1,4 @@
-# Provisioned Prometheus datasource (CIDRX-045) — zero manual setup.
+# Provisioned Prometheus datasource (FLOKBN-045) — zero manual setup.
 apiVersion: 1
 
 datasources:

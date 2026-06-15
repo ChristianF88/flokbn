@@ -1,41 +1,41 @@
 <h1>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/cidrx-mark-dark.svg">
-    <img src=".github/assets/cidrx-mark-light.svg" alt="cidrx logo" width="32" height="32">
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/flokbn-mark-dark.svg">
+    <img src=".github/assets/flokbn-mark-light.svg" alt="flokbn logo" width="32" height="32">
   </picture>
-  cidrx
+  flokbn
 </h1>
 
 **A million IPs. A handful of ranges.**
 
-cidrx is a Go CLI that clusters the IPs in your access logs into CIDR ranges. A binary trie does the heavy lifting - a 2-million-line log takes about a second on an ordinary workstation. Use it for botnet detection, abuse analysis, or building ban lists.
+flokbn is a Go CLI that clusters the IPs in your access logs into CIDR ranges. A binary trie does the heavy lifting - a 2-million-line log takes about a second on an ordinary workstation. Use it for botnet detection, abuse analysis, or building ban lists.
 
-[Documentation](https://christianf88.github.io/cidrx/) · [Quick start](https://christianf88.github.io/cidrx/docs/getting-started/quick-start/) · [CLI reference](https://christianf88.github.io/cidrx/docs/reference/cli-flags/)
+[Documentation](https://christianf88.github.io/flokbn/) · [Quick start](https://christianf88.github.io/flokbn/docs/getting-started/quick-start/) · [CLI reference](https://christianf88.github.io/flokbn/docs/reference/cli-flags/)
 
 <!-- DEMO:STATIC - replace this whole comment with the static-mode recording.
      Recommended (mp4): edit README on github.com, drag the .mp4 into the editor,
      and keep the generated https://github.com/user-attachments/assets/... URL
      on its own line with a blank line above and below (no markdown around it).
      Fallback (gif): commit to .github/assets/demo-static.gif and use:
-     ![cidrx static mode: clustering a 2M-line access log](.github/assets/demo-static.gif)
+     ![flokbn static mode: clustering a 2M-line access log](.github/assets/demo-static.gif)
 -->
 
 ## Quick start
 
-Grab a prebuilt static binary from the [releases page](https://github.com/ChristianF88/cidrx/releases/latest) (Linux x86_64/arm64/armv7, macOS Intel & Apple Silicon, Windows x86_64 - no Go required), unpack it, and put `cidrx` on your `PATH`. Verify downloads with `sha256sum -c checksums.txt`.
+Grab a prebuilt static binary from the [releases page](https://github.com/ChristianF88/flokbn/releases/latest) (Linux x86_64/arm64/armv7, macOS Intel & Apple Silicon, Windows x86_64 - no Go required), unpack it, and put `flokbn` on your `PATH`. Verify downloads with `sha256sum -c checksums.txt`.
 
 Or build from source (Go 1.23+):
 
 ```bash
-git clone https://github.com/ChristianF88/cidrx.git
-cd cidrx/cidrx/src
-go build -o cidrx .
+git clone https://github.com/ChristianF88/flokbn.git
+cd flokbn/flokbn/src
+go build -o flokbn .
 ```
 
 Point it at a log file with one or more cluster arg sets:
 
 ```bash
-./cidrx static --logfile /var/log/nginx/access.log \
+./flokbn static --logfile /var/log/nginx/access.log \
   --clusterArgSets 1000,24,32,0.1 \
   --clusterArgSets 10000,16,24,0.2 --plain
 ```
@@ -72,16 +72,16 @@ Each `--clusterArgSets` is `minSize,minDepth,maxDepth,threshold`: a minimum requ
 
 ## Two modes
 
-**`cidrx static`** analyzes historical log files: multi-tier detection in one pass, time-window slices for forensics, and JSON, compact JSON, plain-text, or interactive TUI output.
+**`flokbn static`** analyzes historical log files: multi-tier detection in one pass, time-window slices for forensics, and JSON, compact JSON, plain-text, or interactive TUI output.
 
-**`cidrx live`** monitors continuously, ingesting over the Lumberjack protocol (Filebeat-compatible). Sliding windows watch recent traffic; detected ranges go into a persistent jail with escalating ban stages. HTTP endpoints expose `/stats`, `/bans`, and Prometheus `/metrics`. A Docker demo stack wires it into closed-loop deny enforcement with a Grafana dashboard.
+**`flokbn live`** monitors continuously, ingesting over the Lumberjack protocol (Filebeat-compatible). Sliding windows watch recent traffic; detected ranges go into a persistent jail with escalating ban stages. HTTP endpoints expose `/stats`, `/bans`, and Prometheus `/metrics`. A Docker demo stack wires it into closed-loop deny enforcement with a Grafana dashboard.
 
 <!-- DEMO:LIVE - replace this whole comment with the live-mode recording.
      Recommended (mp4): edit README on github.com, drag the .mp4 into the editor,
      and keep the generated https://github.com/user-attachments/assets/... URL
      on its own line with a blank line above and below (no markdown around it).
      Fallback (gif): commit to .github/assets/demo-live.gif and use:
-     ![cidrx live mode: sliding-window detection and automatic banning](.github/assets/demo-live.gif)
+     ![flokbn live mode: sliding-window detection and automatic banning](.github/assets/demo-live.gif)
 -->
 
 ## Performance
@@ -91,7 +91,7 @@ Each `--clusterArgSets` is `minSize,minDepth,maxDepth,threshold`: a minimum requ
 - <1 ms cluster detection across multiple arg sets
 - ~50 B of memory per unique IP in the trie
 
-Measured on a 2.3M-request real-world dataset on a single Linux workstation - your numbers will vary with hardware and log shape. Details in the [performance docs](https://christianf88.github.io/cidrx/docs/architecture/performance/).
+Measured on a 2.3M-request real-world dataset on a single Linux workstation - your numbers will vary with hardware and log shape. Details in the [performance docs](https://christianf88.github.io/flokbn/docs/architecture/performance/).
 
 ## What's in the box
 
@@ -112,12 +112,12 @@ Measured on a 2.3M-request real-world dataset on a single Linux workstation - yo
 
 ## Documentation
 
-Full docs at **https://christianf88.github.io/cidrx/**:
-[Getting Started](https://christianf88.github.io/cidrx/docs/getting-started/) ·
-[Guides](https://christianf88.github.io/cidrx/docs/guides/) ·
-[Reference](https://christianf88.github.io/cidrx/docs/reference/) ·
-[Architecture](https://christianf88.github.io/cidrx/docs/architecture/) ·
-[Contributing](https://christianf88.github.io/cidrx/docs/contributing/)
+Full docs at **https://christianf88.github.io/flokbn/**:
+[Getting Started](https://christianf88.github.io/flokbn/docs/getting-started/) ·
+[Guides](https://christianf88.github.io/flokbn/docs/guides/) ·
+[Reference](https://christianf88.github.io/flokbn/docs/reference/) ·
+[Architecture](https://christianf88.github.io/flokbn/docs/architecture/) ·
+[Contributing](https://christianf88.github.io/flokbn/docs/contributing/)
 
 ## License
 

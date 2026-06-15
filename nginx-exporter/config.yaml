@@ -1,4 +1,4 @@
-# prometheus-nginxlog-exporter config (CIDRX-045 firewall overlay).
+# prometheus-nginxlog-exporter config (FLOKBN-045 firewall overlay).
 # Tails the proxy's FULL access log (every request incl. denied 403s) and
 # exposes nginx_http_response_count_total{method,status} on :4040 so the
 # deny is visible in Grafana. The format must match nginx's stock "main"

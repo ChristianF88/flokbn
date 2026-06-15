@@ -1,0 +1,544 @@
+{
+  "title": "flokbn \u2014 closed-loop firewall",
+  "uid": "flokbn",
+  "tags": [
+    "flokbn"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Traffic at nginx by status (full log, incl. denied)",
+      "description": "Every request reaching nginx. 403 = denied by the banpoller's deny rules \u2014 this panel validates the firewall.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 30,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "403"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "200"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(nginx_http_response_count_total[10s]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "flokbn ingest rate (shipped log, denied excluded)",
+      "description": "Requests flokbn actually sees. Drops when bans take effect; recovers when bans expire \u2014 the closed-loop sawtooth.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "rate(flokbn_ingest_requests_total[10s])",
+          "legendFormat": "ingested",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(flokbn_ingest_parse_errors_total[10s])",
+          "legendFormat": "parse errors",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "state-timeline",
+      "title": "Ban timeline per CIDR",
+      "description": "Each row is one banned CIDR; a bar means the ban is active. Shows the ban -> decay -> expiry -> re-ban cycle per attacker network.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 70,
+            "lineWidth": 0
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "banned",
+                  "color": "red"
+                }
+              }
+            }
+          ],
+          "noValue": "free"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "never",
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "flokbn_ban_active",
+          "legendFormat": "{{cidr}} (stage {{stage}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Traffic at nginx by client subnet",
+      "description": "Per-attacker-network request rate from the full log. Banned subnets keep sending (denied with 403) until their client backs off; the negative control (172.30.99.0/24) hums along untouched.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (subnet) (rate(nginx_http_response_count_total[10s]))",
+          "legendFormat": "{{subnet}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (subnet) (rate(nginx_http_response_count_total{status=\"403\"}[10s]))",
+          "legendFormat": "{{subnet}} denied",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Active bans",
+      "description": "Number of currently banned CIDRs over time: jail total, split by escalation stage (stage 1 = 10 min, repeat offenders move up to longer stages), and the entries written to the ban file.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "flokbn_jail_active",
+          "legendFormat": "jail total",
+          "refId": "A"
+        },
+        {
+          "expr": "flokbn_jail_stage_active",
+          "legendFormat": "stage {{stage}}",
+          "refId": "B"
+        },
+        {
+          "expr": "flokbn_ban_file_entries",
+          "legendFormat": "ban file entries",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Sliding window unique IPs",
+      "description": "Distinct client IPs currently inside each detection window. Drops as bans take effect (banned clients no longer reach the shipped log) and recovers when bans expire.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "flokbn_window_unique_ips",
+          "legendFormat": "{{window}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Detected clusters per arg set",
+      "description": "How many suspicious CIDR clusters each detection rule (window + min_size/depth/threshold arg set) found in its latest iteration. A rising step here precedes a new ban.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "flokbn_cluster_detected",
+          "legendFormat": "{{window}} [{{set}}]",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Window requests (queue length)",
+      "description": "Total requests held in each sliding window (bounded by the window's max time and max size). This is the data volume the clustering runs on.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "flokbn_window_requests",
+          "legendFormat": "{{window}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Loop / clustering duration",
+      "description": "Processing cost per iteration: total live-loop time and the clustering share per window/arg set. Should stay in the microsecond-to-millisecond range even under attack.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "flokbn_loop_duration_seconds",
+          "legendFormat": "loop",
+          "refId": "A"
+        },
+        {
+          "expr": "flokbn_cluster_duration_seconds",
+          "legendFormat": "cluster {{window}} [{{set}}]",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "User-Agent list hits",
+      "description": "Rate of requests matching the configured User-Agent lists: whitelisted UAs bypass detection, blacklisted UAs get their IP force-jailed. Flat at zero when no lists are configured (the demo).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "fillOpacity": 20
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "rate(flokbn_ua_list_hits_total[30s])",
+          "legendFormat": "{{list}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Uptime",
+      "description": "Seconds since the flokbn live process started.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "flokbn_uptime_seconds",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Requests total",
+      "description": "Total log lines ingested by flokbn since start (shipped log only, denied requests excluded).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "flokbn_ingest_requests_total",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Active bans now",
+      "description": "CIDRs currently in jail with an active ban. Green = none, red = at least one. The demo settles at 4.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "flokbn_jail_active",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Denied req/s (403 at nginx)",
+      "description": "Requests per second nginx is rejecting with 403 because the client matches a deny rule from the banlist. Proof the firewall is enforcing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(nginx_http_response_count_total{status=\"403\"}[10s])) or vector(0)",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

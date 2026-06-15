@@ -1,7 +1,7 @@
 ---
 title: "Log Formats"
 description: "Log format specifiers for parsing HTTP access logs"
-summary: "Complete reference for cidrx log format specifiers and common format patterns"
+summary: "Complete reference for flokbn log format specifiers and common format patterns"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
 draft: false
@@ -9,13 +9,13 @@ weight: 230
 slug: "log-formats"
 toc: true
 seo:
-  title: "cidrx Log Format Reference"
-  description: "Learn how to configure cidrx to parse Apache, Nginx, and custom log formats"
+  title: "flokbn Log Format Reference"
+  description: "Learn how to configure flokbn to parse Apache, Nginx, and custom log formats"
   canonical: ""
   noindex: false
 ---
 
-cidrx parses HTTP access logs using a format string that maps log fields to specifiers.
+flokbn parses HTTP access logs using a format string that maps log fields to specifiers.
 
 Format strings apply to **static mode only**. Live mode parses incoming events with a fixed combined-log layout (client IP as the first field) - see the [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}).
 
@@ -159,7 +159,7 @@ Use `%^` for any field you don't need. Can appear unlimited times.
 echo '192.0.2.1 - - [09/Oct/2025:10:15:23 +0000] "GET / HTTP/1.1" 200 1234 "-" "curl"' > test.log
 
 # Test parsing
-./cidrx static --logfile test.log \
+./flokbn static --logfile test.log \
   --logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"" \
   --clusterArgSets 1,32,32,0.01 \
   --plain

@@ -1,7 +1,7 @@
 ---
 title: "Config File"
 description: "TOML configuration file schema and reference"
-summary: "Complete reference for cidrx TOML configuration files"
+summary: "Complete reference for flokbn TOML configuration files"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
 draft: false
@@ -9,13 +9,13 @@ weight: 220
 slug: "config-file"
 toc: true
 seo:
-  title: "cidrx Config File Reference"
-  description: "Complete TOML configuration file reference for cidrx static and live modes"
+  title: "flokbn Config File Reference"
+  description: "Complete TOML configuration file reference for flokbn static and live modes"
   canonical: ""
   noindex: false
 ---
 
-cidrx uses TOML configuration files for complex multi-trie setups. Both CLI flags and TOML build the same internal `*config.Config` struct.
+flokbn uses TOML configuration files for complex multi-trie setups. Both CLI flags and TOML build the same internal `*config.Config` struct.
 
 ## File Structure
 
@@ -145,10 +145,10 @@ Enforced at load/startup (the run aborts with an error):
 
 ```toml
 [global]
-jailFile = "/var/lib/cidrx/jail.json"
-banFile = "/var/lib/cidrx/ban.txt"
-whitelist = "/etc/cidrx/whitelist.txt"
-blacklist = "/etc/cidrx/blacklist.txt"
+jailFile = "/var/lib/flokbn/jail.json"
+banFile = "/var/lib/flokbn/ban.txt"
+whitelist = "/etc/flokbn/whitelist.txt"
+blacklist = "/etc/flokbn/blacklist.txt"
 
 [static]
 logFile = "/var/log/nginx/access.log"
@@ -182,12 +182,12 @@ useForJail = [true]
 
 ```toml
 [global]
-jailFile = "/var/lib/cidrx/jail.json"
-banFile = "/var/lib/cidrx/ban.txt"
-whitelist = "/etc/cidrx/whitelist.txt"
-blacklist = "/etc/cidrx/blacklist.txt"
-userAgentWhitelist = "/etc/cidrx/ua_whitelist.txt"
-userAgentBlacklist = "/etc/cidrx/ua_blacklist.txt"
+jailFile = "/var/lib/flokbn/jail.json"
+banFile = "/var/lib/flokbn/ban.txt"
+whitelist = "/etc/flokbn/whitelist.txt"
+blacklist = "/etc/flokbn/blacklist.txt"
+userAgentWhitelist = "/etc/flokbn/ua_whitelist.txt"
+userAgentBlacklist = "/etc/flokbn/ua_blacklist.txt"
 
 [live]
 port = "8080"

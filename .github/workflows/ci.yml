@@ -33,16 +33,16 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true  # built-in module & build cache
-          cache-dependency-path: cidrx/src/go.sum
+          cache-dependency-path: flokbn/src/go.sum
 
       - name: Verify modules are tidy (no diff)
-        working-directory: ./cidrx/src
+        working-directory: ./flokbn/src
         run: |
           go mod tidy
           git diff --exit-code go.mod go.sum
 
       - name: Prime module cache
-        working-directory: ./cidrx/src
+        working-directory: ./flokbn/src
         run: go mod download
 
   lint:
@@ -58,10 +58,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-          cache-dependency-path: cidrx/src/go.sum
+          cache-dependency-path: flokbn/src/go.sum
 
       - name: gofmt check
-        working-directory: ./cidrx/src
+        working-directory: ./flokbn/src
         run: |
           UNFORMATTED=$(gofmt -l .)
           if [ -n "$UNFORMATTED" ]; then
@@ -72,14 +72,14 @@ jobs:
           fi
 
       - name: go vet
-        working-directory: ./cidrx/src
+        working-directory: ./flokbn/src
         run: go vet ./...
 
       - name: Install staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@latest
 
       - name: staticcheck
-        working-directory: ./cidrx/src
+        working-directory: ./flokbn/src
         run: staticcheck ./...
 
   test:
@@ -95,23 +95,23 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-          cache-dependency-path: cidrx/src/go.sum
+          cache-dependency-path: flokbn/src/go.sum
 
       - name: Run tests
-        working-directory: ./cidrx/src
+        working-directory: ./flokbn/src
         run: go test -v -race -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage
-          path: ./cidrx/src/coverage.out
+          path: ./flokbn/src/coverage.out
           retention-days: 21
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
-          file: ./cidrx/src/coverage.out
+          file: ./flokbn/src/coverage.out
           flags: unittests
           fail_ci_if_error: false
 
@@ -144,23 +144,23 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-          cache-dependency-path: cidrx/src/go.sum
+          cache-dependency-path: flokbn/src/go.sum
 
       - name: Build binary
-        working-directory: ./cidrx/src
+        working-directory: ./flokbn/src
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
-          OUT="cidrx-${GOOS}-${GOARCH}${{ matrix.ext }}"
+          OUT="flokbn-${GOOS}-${GOARCH}${{ matrix.ext }}"
           go build -ldflags="-s -w" -o "$OUT" .
           ls -lh "$OUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cidrx-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ./cidrx/src/cidrx-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          name: flokbn-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ./flokbn/src/flokbn-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
           retention-days: 21
 

@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SRC_DIR="$REPO_ROOT/cidrx/src"
+SRC_DIR="$REPO_ROOT/flokbn/src"
 
 PASS=0
 FAIL=0
@@ -20,8 +20,8 @@ fail() { FAIL=$((FAIL + 1)); log "FAIL: $1"; }
 LOG_FORMAT='%h %^ %^ [%t] "%r" %s %b "%^" "%u"'
 
 # --- Build ---
-log "Building cidrx binary..."
-(cd "$SRC_DIR" && go build -o "$TMPDIR/cidrx" .)
+log "Building flokbn binary..."
+(cd "$SRC_DIR" && go build -o "$TMPDIR/flokbn" .)
 
 # --- Generate test log ---
 log "Generating test log..."
@@ -110,7 +110,7 @@ useForJail = [true]
 TOML
 
 JSON_FILE="$TMPDIR/result.json"
-"$TMPDIR/cidrx" static \
+"$TMPDIR/flokbn" static \
     --config "$CONFIG_FILE" \
     > "$JSON_FILE" 2>/dev/null
 
@@ -199,7 +199,7 @@ useForJail = [true]
 TOML
 
 JSON_FILE2="$TMPDIR/baseline.json"
-"$TMPDIR/cidrx" static \
+"$TMPDIR/flokbn" static \
     --config "$CONFIG_FILE2" \
     > "$JSON_FILE2" 2>/dev/null
 
@@ -256,7 +256,7 @@ clusterArgSets = [[500, 16, 24, 0.2]]
 useForJail = [true]
 TOML
 
-"$TMPDIR/cidrx" static \
+"$TMPDIR/flokbn" static \
     --config "$CONFIG_FILE3" \
     > /dev/null 2>&1
 
@@ -280,6 +280,6 @@ log "============================="
 log "Results: $PASS passed, $FAIL failed"
 log "============================="
 
-rm -f "$TMPDIR/cidrx"
+rm -f "$TMPDIR/flokbn"
 
 [ "$FAIL" -eq 0 ]

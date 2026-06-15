@@ -8,10 +8,10 @@
 # (.32 and up) on its interface; see client/entrypoint.sh.
 #
 # Each network's IPAM `ip_range` is pinned to the first /27 of the subnet so
-# docker's auto-assigned addresses (proxy/cidrx/filebeat) stay below .32 and
+# docker's auto-assigned addresses (proxy/flokbn/filebeat) stay below .32 and
 # never collide with the static/secondary client IPs.
 #
-# The cidrx service publishes its stats endpoints to the host. While the
+# The flokbn service publishes its stats endpoints to the host. While the
 # stack runs:
 #   curl http://localhost:8666/stats   # JSON live stats
 #   curl http://localhost:8666/bans    # plain-text ban list
@@ -32,7 +32,7 @@ RANGES = [
 PROXY_BUILD    = {'context': './proxy',    'dockerfile': 'Dockerfile'}
 CLIENT_BUILD   = {'context': './client',   'dockerfile': 'Dockerfile'}
 FILEBEAT_BUILD = {'context': './filebeat', 'dockerfile': 'Dockerfile'}
-CIDRX_BUILD    = {'context': './cidrx',    'dockerfile': 'Dockerfile'}
+FLOKBN_BUILD    = {'context': './flokbn',    'dockerfile': 'Dockerfile'}
 
 TARGET_URL  = 'http://proxy:80/'
 OUTPUT_FILE = 'docker-compose.yml'
@@ -46,7 +46,7 @@ def generate_compose():
     networks = {}
     volumes  = {
         'filebeat_data': {},
-        'cidrx_data': {},
+        'flokbn_data': {},
     }
 
     # ── proxy ──
@@ -62,15 +62,15 @@ def generate_compose():
         'networks':       proxy_nets,
     }
 
-    # ── cidrx ──
-    services['cidrx'] = {
-        'build':          CIDRX_BUILD,
-        'container_name': 'cidrx',
+    # ── flokbn ──
+    services['flokbn'] = {
+        'build':          FLOKBN_BUILD,
+        'container_name': 'flokbn',
         'restart':        'unless-stopped',
         'ports':          ['9000:9000', '8666:8666'],
         'volumes':        [
-            './docker-test-config.toml:/config/cidrx.toml:ro',
-            'cidrx_data:/data',
+            './docker-test-config.toml:/config/flokbn.toml:ro',
+            'flokbn_data:/data',
         ],
         'healthcheck': {
             'test':         ['CMD', 'wget', '-q', '-O', '/dev/null',
@@ -88,7 +88,7 @@ def generate_compose():
         'build':          FILEBEAT_BUILD,
         'container_name': 'filebeat',
         'user':           'root',
-        'depends_on':     ['proxy', 'cidrx'],
+        'depends_on':     ['proxy', 'flokbn'],
         'restart':        'unless-stopped',
         'networks':       proxy_nets,
         'volumes': [
@@ -96,7 +96,7 @@ def generate_compose():
             'filebeat_data:/usr/share/filebeat/data',
         ],
         'environment': {
-            'INGESTOR_HOST':       'cidrx:9000',
+            'INGESTOR_HOST':       'flokbn:9000',
             'PROXY_CONTAINER_NAME': 'proxy',
         },
     }

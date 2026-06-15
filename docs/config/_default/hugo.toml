@@ -1,5 +1,5 @@
-title = "cidrx Overview"
-baseurl = "https://christianf88.github.io/cidrx/"
+title = "flokbn Overview"
+baseurl = "https://christianf88.github.io/flokbn/"
 relativeURLs = false
 canonifyURLs = false
 disableAliases = true
@@ -17,7 +17,7 @@ defaultContentLanguage = "en"
 disableLanguages = ["de", "nl"]
 defaultContentLanguageInSubdir = false
 
-copyRight = "Copyright (c) 2025 cidrx Project"
+copyRight = "Copyright (c) 2025 flokbn Project"
 
 [build.buildStats]
   enable = true

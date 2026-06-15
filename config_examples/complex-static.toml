@@ -1,21 +1,21 @@
 # ==============================================================================
-# cidrx — complex static-analysis example (full filter surface, CIDRX-050)
+# flokbn — complex static-analysis example (full filter surface, FLOKBN-050)
 # ==============================================================================
 # This is a RUNNABLE example exercising every static-mode filter option:
 # global IP/UA white- and blacklists, per-trie UA/endpoint/time filters,
 # CIDR-range analysis, multiple cluster parameter regimes, and jail wiring.
 #
-# IMPORTANT — relative paths resolve from the directory you RUN cidrx in,
+# IMPORTANT — relative paths resolve from the directory you RUN flokbn in,
 # NOT from the location of this config file. This file is written to be run
-# from the Go module root `cidrx/src`:
+# from the Go module root `flokbn/src`:
 #
-#     cd cidrx/src
+#     cd flokbn/src
 #     go run . static --config ../../config_examples/complex-static.toml --plain
 #
 # The referenced log data (fake-logs/) is generated, not committed. Recreate it
 # with the committed generator (see docs: Guides -> Complex Static Analysis):
 #
-#     cd cidrx/src
+#     cd flokbn/src
 #     go run ./cmd/fakeloggen --lines 10000000 --out ../../fake-logs/fake_nginx_10m.log
 #
 # ...or point logFile at your own access log and adapt logFormat
@@ -23,15 +23,15 @@
 
 [global]
 # Jail/ban output. Both must be set or no jail/ban processing happens.
-# Relative => written into the CWD (cidrx/src); both names are git-ignored.
+# Relative => written into the CWD (flokbn/src); both names are git-ignored.
 # NOTE: the jail file persists across runs — delete it for a clean rerun.
 #
 # Heads-up: on very large, high-cardinality inputs like this 10M-line example
 # the jail/ban stage is currently slow. For a quick run, comment out
 # jailFile/banFile below to skip jail processing — the trie analysis, CIDR
 # range stats, and clustering are unaffected.
-jailFile = "cidrx_jail.json"
-banFile  = "cidrx_ban.txt"
+jailFile = "flokbn_jail.json"
+banFile  = "flokbn_ban.txt"
 
 # IP lists: CIDRs never to ban / always to ban. The example whitelist holds
 # private ranges and public DNS; the blacklist holds TEST-NET-2 — neither

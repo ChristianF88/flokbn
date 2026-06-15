@@ -8,16 +8,16 @@ access-test.log
 heatmap.html
 
 # Config files (local/personal)
-cidrx.toml
-cidrx-testing.toml
+flokbn.toml
+flokbn-testing.toml
 CLAUDE.local.md
 
 # Local-only audit tickets (never checked in)
 tickets/
 
 # Output files
-cidrx_ban.txt
-cidrx_jail.json
+flokbn_ban.txt
+flokbn_jail.json
 
 # Python
 .venv

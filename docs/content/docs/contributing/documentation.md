@@ -1,6 +1,6 @@
 ---
 title: "Documentation"
-description: "Guide for updating cidrx documentation"
+description: "Guide for updating flokbn documentation"
 summary: "How to build and update the Hugo-based documentation site"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2025-11-26T10:00:00+00:00
@@ -8,13 +8,13 @@ draft: false
 weight: 510
 toc: true
 seo:
-  title: "Contributing to cidrx Documentation"
-  description: "Learn how to update the cidrx documentation site"
+  title: "Contributing to flokbn Documentation"
+  description: "Learn how to update the flokbn documentation site"
   canonical: ""
   noindex: false
 ---
 
-cidrx documentation uses [Hugo](https://gohugo.io/) extended with the [Thulite/Doks](https://github.com/thuliteio/doks) theme.
+flokbn documentation uses [Hugo](https://gohugo.io/) extended with the [Thulite/Doks](https://github.com/thuliteio/doks) theme.
 
 ## Local Development
 
@@ -74,7 +74,7 @@ Controls page order (lower = first):
 
 ````markdown
 ```bash
-./cidrx static --logfile access.log --plain
+./flokbn static --logfile access.log --plain
 ```
 ````
 

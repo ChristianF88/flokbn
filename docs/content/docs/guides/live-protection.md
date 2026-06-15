@@ -1,6 +1,6 @@
 ---
 title: "Live Protection"
-description: "Step-by-step guide to real-time IP range detection with cidrx"
+description: "Step-by-step guide to real-time IP range detection with flokbn"
 summary: "Complete walkthrough of live mode for continuous monitoring and automatic blocking"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-12T10:00:00+00:00
@@ -9,8 +9,8 @@ weight: 820
 slug: "live-protection-guide"
 toc: true
 seo:
-  title: "cidrx Live Protection Guide"
-  description: "Learn how to deploy cidrx in live mode for real-time IP cluster detection"
+  title: "flokbn Live Protection Guide"
+  description: "Learn how to deploy flokbn in live mode for real-time IP cluster detection"
   canonical: ""
   noindex: false
 ---
@@ -24,14 +24,14 @@ Live mode provides real-time detection by continuously monitoring incoming logs 
 - The sleep between iterations is the **largest** `sleepBetweenIterations` across all configured windows - one loop drives all windows
 - Multiple windows (own filters, sizes, cluster arg sets) share one jail and one ban file
 - Repeat offenders escalate through 5 jail stages: 10 minutes, 4 hours, 7 days, 30 days, 180 days
-- Whitelist/blacklist and User-Agent list files are loaded **once at startup** - restart cidrx to pick up edits
+- Whitelist/blacklist and User-Agent list files are loaded **once at startup** - restart flokbn to pick up edits
 
 ## Quick Start (CLI)
 
 ```bash
-./cidrx live --port 8080 \
-  --jailFile /etc/cidrx/jail.json \
-  --banFile /etc/cidrx/ban.txt \
+./flokbn live --port 8080 \
+  --jailFile /etc/flokbn/jail.json \
+  --banFile /etc/flokbn/ban.txt \
   --slidingWindowMaxTime 2h \
   --slidingWindowMaxSize 100000
 ```
@@ -43,7 +43,7 @@ Flags-only mode runs a single sliding window; multiple windows and the HTTP stat
 For production, use a [config file]({{< relref "/docs/reference/config-file/" >}}) with multiple windows:
 
 ```bash
-./cidrx live --config /etc/cidrx/config.toml
+./flokbn live --config /etc/flokbn/config.toml
 ```
 
 See [Config File]({{< relref "/docs/reference/config-file/" >}}) for the complete live example with multiple windows.
@@ -83,7 +83,7 @@ With multiple windows, the single detection loop sleeps for the **largest** valu
 
 ## Filebeat Integration
 
-Configure Filebeat to ship logs to cidrx:
+Configure Filebeat to ship logs to flokbn:
 
 ```yaml
 # filebeat.yml
@@ -94,7 +94,7 @@ filebeat.inputs:
       - /var/log/nginx/access.log
 
 output.logstash:
-  hosts: ["cidrx-host:8080"]
+  hosts: ["flokbn-host:8080"]
   compression_level: 3
 ```
 
@@ -110,7 +110,7 @@ Live mode parses each event's `message` field itself and expects the standard **
 192.0.2.1 - - [09/Oct/2025:10:15:23 +0000] "GET / HTTP/1.1" 200 1234 "-" "curl/8.5.0"
 ```
 
-The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion. If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the cidrx side, which live mode does not support). Lines that don't parse are counted as parse errors in `/stats` and skipped.
+The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion. If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the flokbn side, which live mode does not support). Lines that don't parse are counted as parse errors in `/stats` and skipped.
 
 ## Firewall Integration
 
@@ -119,15 +119,15 @@ Monitor the ban file and update iptables rules when it changes:
 ```bash
 #!/bin/bash
 # watch-banfile.sh
-BANFILE="/etc/cidrx/ban.txt"
+BANFILE="/etc/flokbn/ban.txt"
 LAST_HASH=""
 
 while true; do
   CURRENT_HASH=$(md5sum "$BANFILE" | cut -d' ' -f1)
   if [ "$CURRENT_HASH" != "$LAST_HASH" ]; then
-    iptables -F CIDRX-BLOCK 2>/dev/null || iptables -N CIDRX-BLOCK
+    iptables -F FLOKBN-BLOCK 2>/dev/null || iptables -N FLOKBN-BLOCK
     grep -v '^#' "$BANFILE" | while read -r cidr; do
-      [ -n "$cidr" ] && iptables -A CIDRX-BLOCK -s "$cidr" -j DROP
+      [ -n "$cidr" ] && iptables -A FLOKBN-BLOCK -s "$cidr" -j DROP
     done
     LAST_HASH="$CURRENT_HASH"
   fi
@@ -141,19 +141,19 @@ The ban file contains `#` comment lines alongside the CIDRs (hence the `grep -v 
 
 ### systemd Service
 
-Create `/etc/systemd/system/cidrx.service`:
+Create `/etc/systemd/system/flokbn.service`:
 
 ```ini
 [Unit]
-Description=cidrx IP Cluster Detection
+Description=flokbn IP Cluster Detection
 After=network.target filebeat.service
 Wants=filebeat.service
 
 [Service]
 Type=simple
-User=cidrx
-Group=cidrx
-ExecStart=/usr/local/bin/cidrx live --config /etc/cidrx/config.toml
+User=flokbn
+Group=flokbn
+ExecStart=/usr/local/bin/flokbn live --config /etc/flokbn/config.toml
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -162,32 +162,32 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/cidrx /etc/cidrx
+ReadWritePaths=/var/lib/flokbn /etc/flokbn
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
-sudo useradd -r -s /bin/false cidrx
-sudo mkdir -p /var/lib/cidrx /etc/cidrx
-sudo chown cidrx:cidrx /var/lib/cidrx /etc/cidrx
+sudo useradd -r -s /bin/false flokbn
+sudo mkdir -p /var/lib/flokbn /etc/flokbn
+sudo chown flokbn:flokbn /var/lib/flokbn /etc/flokbn
 sudo systemctl daemon-reload
-sudo systemctl enable cidrx
-sudo systemctl start cidrx
+sudo systemctl enable flokbn
+sudo systemctl start flokbn
 ```
 
 ### Log Rotation
 
 ```
-# /etc/logrotate.d/cidrx
-/var/log/cidrx/*.log {
+# /etc/logrotate.d/flokbn
+/var/log/flokbn/*.log {
     daily
     rotate 14
     compress
     delaycompress
     notifempty
-    create 0640 cidrx cidrx
+    create 0640 flokbn flokbn
 }
 ```
 
@@ -216,7 +216,7 @@ topTalkers = 5   # optional: top-N IPs per window in /stats
 |----------|---------|
 | `GET /stats` | JSON snapshot of the last iteration: `ingest` (connection, queue, totals, parse errors), `windows` (size, accepted/rejected counts, per-set detections and timings, optional `top_talkers`), `jail` (active bans per stage with start/expiry), `lists`, `loop` |
 | `GET /bans` | The ban file content last written to disk, verbatim (`text/plain`) |
-| `GET /metrics` | Prometheus exposition format; all metrics are prefixed `cidrx_` (ingest, window, cluster, jail, ban-file, and loop families) |
+| `GET /metrics` | Prometheus exposition format; all metrics are prefixed `flokbn_` (ingest, window, cluster, jail, ban-file, and loop families) |
 
 All three return `503` with a `Retry-After` header until the loop has completed its first iteration. The snapshot updates once per iteration, not per request.
 
@@ -224,13 +224,13 @@ All three return `503` with a `Retry-After` header until the loop has completed 
 
 ```bash
 # View live logs
-journalctl -u cidrx -f
+journalctl -u flokbn -f
 
 # Monitor ban file
-tail -f /etc/cidrx/ban.txt
+tail -f /etc/flokbn/ban.txt
 
 # Check jail state
-cat /etc/cidrx/jail.json | jq '.Cells | length'
+cat /etc/flokbn/jail.json | jq '.Cells | length'
 ```
 
 The jail file uses a tiered cell structure with escalating bans (stage 1-5: 10 minutes, 4 hours, 7 days, 30 days, 180 days; re-detection after expiry moves a range to the next stage). See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the jail data model.
@@ -240,7 +240,7 @@ The jail file uses a tiered cell structure with escalating bans (stage 1-5: 10 m
 ### No Logs Received
 
 ```bash
-telnet cidrx-host 8080              # Test port
+telnet flokbn-host 8080              # Test port
 journalctl -u filebeat -f           # Check Filebeat
 netstat -tlnp | grep 8080           # Verify listening
 ```

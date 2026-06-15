@@ -1,7 +1,7 @@
 ---
 title: "Filtering"
 description: "Whitelist, blacklist, regex, and time-based filtering"
-summary: "Complete reference for all cidrx filtering mechanisms and file formats"
+summary: "Complete reference for all flokbn filtering mechanisms and file formats"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
 draft: false
@@ -9,13 +9,13 @@ weight: 250
 slug: "filtering"
 toc: true
 seo:
-  title: "cidrx Filtering Reference"
-  description: "Learn how to configure cidrx filtering with whitelists, blacklists, and regex patterns"
+  title: "flokbn Filtering Reference"
+  description: "Learn how to configure flokbn filtering with whitelists, blacklists, and regex patterns"
   canonical: ""
   noindex: false
 ---
 
-cidrx filters traffic in two distinct layers: **per-request filters** decide which requests enter the analysis (trie/window), and **ban-pipeline filters** shape what the detections turn into bans.
+flokbn filters traffic in two distinct layers: **per-request filters** decide which requests enter the analysis (trie/window), and **ban-pipeline filters** shape what the detections turn into bans.
 
 ## How the Filters Compose
 
@@ -39,14 +39,14 @@ CIDR ranges (`cidrRanges` / `--rangesCidr`) are **not** a filter in either layer
 
 Whitelisted CIDRs can never be banned. The whitelist is applied to detected clusters before the jail update and subtracted from every published ban list - it does not exclude the traffic from analysis or statistics.
 
-All list files (IP and User-Agent, whitelist and blacklist) are loaded **once at startup**. In live mode, restart cidrx to pick up edits; a malformed list file fails loudly at startup rather than silently banning protected ranges.
+All list files (IP and User-Agent, whitelist and blacklist) are loaded **once at startup**. In live mode, restart flokbn to pick up edits; a malformed list file fails loudly at startup rather than silently banning protected ranges.
 
 ### File Format
 
 One CIDR per line. Comments with `#`. Blank lines ignored.
 
 ```
-# /etc/cidrx/whitelist.txt
+# /etc/flokbn/whitelist.txt
 
 # Internal networks
 10.0.0.0/8
@@ -68,12 +68,12 @@ One CIDR per line. Comments with `#`. Blank lines ignored.
 TOML:
 ```toml
 [global]
-whitelist = "/etc/cidrx/whitelist.txt"
+whitelist = "/etc/flokbn/whitelist.txt"
 ```
 
 CLI:
 ```bash
---whitelist /etc/cidrx/whitelist.txt
+--whitelist /etc/flokbn/whitelist.txt
 ```
 
 ## IP Blacklist
@@ -85,7 +85,7 @@ Blacklisted CIDRs are **always banned**: they are appended to the published ban 
 Same format as whitelist:
 
 ```
-# /etc/cidrx/blacklist.txt
+# /etc/flokbn/blacklist.txt
 
 # Known abusive ranges
 203.0.113.0/25
@@ -107,7 +107,7 @@ Requests whose User-Agent is listed are excluded from analysis, and their source
 One **full User-Agent string** per line (the exact value the client sends). Comments with `#`. Blank lines ignored.
 
 ```
-# /etc/cidrx/ua_whitelist.txt
+# /etc/flokbn/ua_whitelist.txt
 
 # Search engine bots (full UA strings as sent by the client)
 Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
@@ -126,7 +126,7 @@ Requests whose User-Agent is listed get their source IP **force-jailed** as a /3
 ### File Format
 
 ```
-# /etc/cidrx/ua_blacklist.txt
+# /etc/flokbn/ua_blacklist.txt
 
 # Exact UA strings of tools you always want banned
 sqlmap/1.7.2#stable (http://sqlmap.org)
@@ -167,7 +167,7 @@ CLI:
 
 ### Required-Literal Prefilter
 
-cidrx automatically derives the literals a regex *must* contain (e.g. `bot` from `.*bot.*`, or `curl`/`wget` from `curl|wget`) and screens each input with fast substring checks before running the full regex engine. Semantics are unchanged - the prefilter only skips inputs the regex would reject anyway - but patterns with distinctive required literals filter large logs considerably faster. Patterns without any required literal (e.g. `.*`) fall back to running the regex directly.
+flokbn automatically derives the literals a regex *must* contain (e.g. `bot` from `.*bot.*`, or `curl`/`wget` from `curl|wget`) and screens each input with fast substring checks before running the full regex engine. Semantics are unchanged - the prefilter only skips inputs the regex would reject anyway - but patterns with distinctive required literals filter large logs considerably faster. Patterns without any required literal (e.g. `.*`) fall back to running the regex directly.
 
 ## Endpoint Regex
 
@@ -241,8 +241,8 @@ Useful for keeping an eye on known problematic ASNs or following up on previousl
 
 ```toml
 [global]
-whitelist = "/etc/cidrx/whitelist.txt"
-userAgentWhitelist = "/etc/cidrx/ua_whitelist.txt"
+whitelist = "/etc/flokbn/whitelist.txt"
+userAgentWhitelist = "/etc/flokbn/ua_whitelist.txt"
 
 [static.general]
 clusterArgSets = [[1000, 24, 32, 0.1]]

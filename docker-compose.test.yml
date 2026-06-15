@@ -15,18 +15,18 @@ services:
       net3: {}
       net4: {}
       net5: {}
-  cidrx:
+  flokbn:
     build:
-      context: ./cidrx
+      context: ./flokbn
       dockerfile: Dockerfile
-    container_name: cidrx
+    container_name: flokbn
     restart: unless-stopped
     ports:
     - 9000:9000
     - 8666:8666
     volumes:
-    - ./docker-test-config.toml:/config/cidrx.toml:ro
-    - cidrx_data:/data
+    - ./docker-test-config.toml:/config/flokbn.toml:ro
+    - flokbn_data:/data
     healthcheck:
       test:
       - CMD
@@ -48,14 +48,14 @@ services:
     user: root
     depends_on:
     - proxy
-    - cidrx
+    - flokbn
     restart: unless-stopped
     networks: *id001
     volumes:
     - /tmp:/var/log/nginx:ro
     - filebeat_data:/usr/share/filebeat/data
     environment:
-      INGESTOR_HOST: cidrx:9000
+      INGESTOR_HOST: flokbn:9000
       PROXY_CONTAINER_NAME: proxy
   clients_net1:
     build: &id002
@@ -177,4 +177,4 @@ networks:
         ip_range: 172.30.99.0/27
 volumes:
   filebeat_data: {}
-  cidrx_data: {}
+  flokbn_data: {}

@@ -1,6 +1,6 @@
 ---
 title: "Performance"
-description: "Performance benchmarks and optimization guide for cidrx"
+description: "Performance benchmarks and optimization guide for flokbn"
 summary: "Benchmarks, memory management, scaling approaches, and optimization techniques"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
@@ -8,13 +8,13 @@ draft: false
 weight: 420
 toc: true
 seo:
-  title: "cidrx Performance Guide"
-  description: "Learn about cidrx performance benchmarks and how to optimize for maximum throughput"
+  title: "flokbn Performance Guide"
+  description: "Learn about flokbn performance benchmarks and how to optimize for maximum throughput"
   canonical: ""
   noindex: false
 ---
 
-cidrx processes millions of log entries per second on commodity hardware.
+flokbn processes millions of log entries per second on commodity hardware.
 
 ## Benchmarks
 
@@ -84,7 +84,7 @@ Typical: <1ms for most datasets, scales linearly with unique IPs.
 
 ### Avoid Unneeded Fields
 
-If the analysis only clusters IPs (no UA/endpoint/time filters, no status breakdown), cidrx parses just the IP from each line - the fastest path by far. Every filter that needs another field forces the full parse.
+If the analysis only clusters IPs (no UA/endpoint/time filters, no status breakdown), flokbn parses just the IP from each line - the fastest path by far. Every filter that needs another field forces the full parse.
 
 ### Regex Patterns
 
@@ -129,7 +129,7 @@ Live mode memory is bounded by `slidingWindowMaxSize` (~50MB per window at 50,00
 ### Monitoring Memory
 
 ```bash
-/usr/bin/time -v ./cidrx static --logfile access.log \
+/usr/bin/time -v ./flokbn static --logfile access.log \
   --clusterArgSets 1000,24,32,0.1 --plain
 # Look for: Maximum resident set size
 ```
@@ -139,7 +139,7 @@ Live mode memory is bounded by `slidingWindowMaxSize` (~50MB per window at 50,00
 ### Go Benchmarks
 
 ```bash
-cd cidrx/src
+cd flokbn/src
 
 go test -bench=. ./...              # Run all benchmarks
 go test -bench=. -benchmem ./...    # With memory stats
@@ -157,10 +157,10 @@ For timing full runs against a real log file, use the recipe in the [Developer G
 For very large datasets, split by time range:
 
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --startTime "2025-10-09" --endTime "2025-10-09 06" &
 
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --startTime "2025-10-09 06" --endTime "2025-10-09 12" &
 
 wait  # Merge results
@@ -168,7 +168,7 @@ wait  # Merge results
 
 ### Vertical Scaling
 
-cidrx benefits from:
+flokbn benefits from:
 
 - **Fast CPU**: Faster parsing and clustering
 - **Fast storage**: SSD for faster file I/O
@@ -189,7 +189,7 @@ Possible causes: slow disk I/O, complex regex patterns, large whitelist.
 Debug by testing without filters first:
 
 ```bash
-time ./cidrx static --logfile access.log \
+time ./flokbn static --logfile access.log \
   --clusterArgSets 10000,24,32,0.5 --plain
 ```
 

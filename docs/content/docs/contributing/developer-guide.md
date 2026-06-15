@@ -1,20 +1,20 @@
 ---
 title: "Developer Guide"
-description: "Developer guide for contributing to cidrx"
-summary: "Performance requirements, testing, and development workflow for cidrx contributors"
+description: "Developer guide for contributing to flokbn"
+summary: "Performance requirements, testing, and development workflow for flokbn contributors"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
 draft: false
 weight: 500
 toc: true
 seo:
-  title: "Contributing to cidrx"
-  description: "Developer guide for contributing to the cidrx IP clustering tool"
+  title: "Contributing to flokbn"
+  description: "Developer guide for contributing to the flokbn IP clustering tool"
   canonical: ""
   noindex: false
 ---
 
-cidrx is open source and welcomes contributions. This guide covers cidrx-specific development requirements.
+flokbn is open source and welcomes contributions. This guide covers flokbn-specific development requirements.
 
 ## Quick Start
 
@@ -26,10 +26,10 @@ cidrx is open source and welcomes contributions. This guide covers cidrx-specifi
 ### 2. Clone and Build
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/cidrx.git
-cd cidrx/cidrx/src
+git clone https://github.com/YOUR_USERNAME/flokbn.git
+cd flokbn/flokbn/src
 go mod download
-go build -o cidrx .
+go build -o flokbn .
 ```
 
 ### 3. Verify Setup
@@ -37,12 +37,12 @@ go build -o cidrx .
 ```bash
 go test ./...
 staticcheck ./...
-./cidrx --version
+./flokbn --version
 ```
 
 ## Performance Requirements
 
-**cidrx is performance-critical.** All changes must maintain or improve these benchmarks:
+**flokbn is performance-critical.** All changes must maintain or improve these benchmarks:
 
 - **Parse Rate**: >=1.3M requests/sec
 - **End-to-end Processing**: >=1M requests/sec
@@ -56,7 +56,7 @@ See [Performance]({{< relref "/docs/architecture/performance/" >}}) for benchmar
 ### Making Changes
 
 ```bash
-cd cidrx/src
+cd flokbn/src
 
 # 1. Make your changes
 
@@ -93,7 +93,7 @@ diff bench-before.txt bench-after.txt
 ### Real-World Performance Test
 
 ```bash
-cd cidrx/src
+cd flokbn/src
 time go run . static --logfile /var/log/nginx/access.log \
   --clusterArgSets 1000,24,32,0.1 \
   --clusterArgSets 10000,16,24,0.2 \
@@ -214,8 +214,8 @@ func BenchmarkParseIPAddress(b *testing.B) {
 ## Repository Structure
 
 ```
-cidrx/
-├── cidrx/src/          # Main Go application
+flokbn/
+├── flokbn/src/          # Main Go application
 │   ├── analysis/       # Analysis orchestration
 │   ├── cidr/           # CIDR parsing utilities
 │   ├── cli/            # CLI commands and API
@@ -261,8 +261,8 @@ go tool pprof mem.prof
 ### Race Detector
 
 ```bash
-go build -race -o cidrx .
-./cidrx static --logfile test.log --clusterArgSets 1000,24,32,0.1
+go build -race -o flokbn .
+./flokbn static --logfile test.log --clusterArgSets 1000,24,32,0.1
 ```
 
 ### Delve Debugger
@@ -275,8 +275,8 @@ dlv test ./logparser - -test.run TestParseLogLine
 ## Cleanup
 
 ```bash
-cd cidrx/src
-rm -f cidrx
+cd flokbn/src
+rm -f flokbn
 rm -f *.prof *.out
 go clean -cache
 ```
@@ -299,6 +299,6 @@ go clean -cache
 
 ## Resources
 
-- [GitHub Repository](https://github.com/ChristianF88/cidrx)
-- [Issue Tracker](https://github.com/ChristianF88/cidrx/issues)
-- [Discussions](https://github.com/ChristianF88/cidrx/discussions)
+- [GitHub Repository](https://github.com/ChristianF88/flokbn)
+- [Issue Tracker](https://github.com/ChristianF88/flokbn/issues)
+- [Discussions](https://github.com/ChristianF88/flokbn/discussions)

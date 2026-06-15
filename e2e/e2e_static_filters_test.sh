@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SRC_DIR="$REPO_ROOT/cidrx/src"
+SRC_DIR="$REPO_ROOT/flokbn/src"
 
 PASS=0
 FAIL=0
@@ -18,8 +18,8 @@ pass() { PASS=$((PASS + 1)); log "PASS: $1"; }
 fail() { FAIL=$((FAIL + 1)); log "FAIL: $1"; }
 
 # --- Build ---
-log "Building cidrx binary..."
-(cd "$SRC_DIR" && go build -o "$TMPDIR/cidrx" .)
+log "Building flokbn binary..."
+(cd "$SRC_DIR" && go build -o "$TMPDIR/flokbn" .)
 
 # --- Generate rich test log with varied UAs, endpoints, and timestamps ---
 log "Generating test log with varied traffic patterns..."
@@ -121,7 +121,7 @@ LOG_FORMAT='%h %^ %^ [%t] "%r" %s %b "%^" "%u"'
 # --- Test 1: User-Agent regex filter (Googlebot only) ---
 log "Test 1: User-Agent regex filter..."
 JSON1="$TMPDIR/ua_filter.json"
-"$TMPDIR/cidrx" static \
+"$TMPDIR/flokbn" static \
     --logfile "$LOG_FILE" \
     --logFormat "$LOG_FORMAT" \
     --useragentRegex '.*Googlebot.*' \
@@ -144,7 +144,7 @@ fi
 # --- Test 2: Endpoint regex filter (/api/*) ---
 log "Test 2: Endpoint regex filter..."
 JSON2="$TMPDIR/ep_filter.json"
-"$TMPDIR/cidrx" static \
+"$TMPDIR/flokbn" static \
     --logfile "$LOG_FILE" \
     --logFormat "$LOG_FORMAT" \
     --endpointRegex '/api/.*' \
@@ -167,7 +167,7 @@ fi
 # --- Test 3: Time range filter (Feb 3-5 only) ---
 log "Test 3: Time range filter..."
 JSON3="$TMPDIR/time_filter.json"
-"$TMPDIR/cidrx" static \
+"$TMPDIR/flokbn" static \
     --logfile "$LOG_FILE" \
     --logFormat "$LOG_FORMAT" \
     --startTime "2025-02-03" \
@@ -191,7 +191,7 @@ fi
 # --- Test 4: CIDR range counting ---
 log "Test 4: CIDR range counting..."
 JSON4="$TMPDIR/cidr_ranges.json"
-"$TMPDIR/cidrx" static \
+"$TMPDIR/flokbn" static \
     --logfile "$LOG_FILE" \
     --logFormat "$LOG_FORMAT" \
     --rangesCidr 10.50.0.0/16 \
@@ -265,7 +265,7 @@ useForJail = [true]
 TOML
 
 JSON5="$TMPDIR/multitrie.json"
-"$TMPDIR/cidrx" static \
+"$TMPDIR/flokbn" static \
     --config "$CONFIG_FILE" \
     > "$JSON5" 2>/dev/null
 
@@ -364,6 +364,6 @@ log "============================="
 log "Results: $PASS passed, $FAIL failed"
 log "============================="
 
-rm -f "$TMPDIR/cidrx"
+rm -f "$TMPDIR/flokbn"
 
 [ "$FAIL" -eq 0 ]

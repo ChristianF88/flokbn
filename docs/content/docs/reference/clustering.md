@@ -1,7 +1,7 @@
 ---
 title: "Clustering"
 description: "Cluster detection parameters and tuning guide"
-summary: "Complete reference for cidrx cluster detection parameters, CIDR sizes, and tuning guidance"
+summary: "Complete reference for flokbn cluster detection parameters, CIDR sizes, and tuning guidance"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2026-06-11T10:00:00+00:00
 draft: false
@@ -9,8 +9,8 @@ weight: 240
 slug: "clustering"
 toc: true
 seo:
-  title: "cidrx Clustering Reference"
-  description: "Learn how to configure and tune cidrx cluster detection parameters"
+  title: "flokbn Clustering Reference"
+  description: "Learn how to configure and tune flokbn cluster detection parameters"
   canonical: ""
   noindex: false
 ---
@@ -193,10 +193,10 @@ Detected Threat Ranges:
 
 Test parameters on known data:
 ```bash
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --clusterArgSets 1000,24,32,0.1 --plain > results-1.txt
 
-./cidrx static --logfile access.log \
+./flokbn static --logfile access.log \
   --clusterArgSets 500,24,32,0.05 --plain > results-2.txt
 
 diff results-1.txt results-2.txt
@@ -206,7 +206,7 @@ Sweep thresholds:
 ```bash
 for threshold in 0.05 0.1 0.2 0.3; do
   echo "threshold=$threshold"
-  ./cidrx static --logfile access.log \
+  ./flokbn static --logfile access.log \
     --clusterArgSets 1000,24,32,$threshold --plain | grep "Detected"
 done
 ```

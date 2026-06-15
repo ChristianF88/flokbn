@@ -1,22 +1,22 @@
 ---
 title: "Introduction"
-description: "Overview of cidrx - High-performance IP clustering and blacklist generation tool"
-summary: "Learn what cidrx does, its key features, and how it groups IPs into CIDR ranges"
+description: "Overview of flokbn - High-performance IP clustering and blacklist generation tool"
+summary: "Learn what flokbn does, its key features, and how it groups IPs into CIDR ranges"
 date: 2025-10-09T10:00:00+00:00
 lastmod: 2025-11-26T10:00:00+00:00
 draft: false
 weight: 100
 toc: true
 seo:
-  title: "Introduction to cidrx"
-  description: "Discover cidrx - a high-performance tool for IP clustering and blacklist generation through intelligent log analysis"
+  title: "Introduction to flokbn"
+  description: "Discover flokbn - a high-performance tool for IP clustering and blacklist generation through intelligent log analysis"
   canonical: ""
   noindex: false
 ---
 
-## What is cidrx?
+## What is flokbn?
 
-cidrx is an IP clustering tool that analyzes HTTP logs and groups IP addresses into CIDR ranges for blacklist generation. Inspired by fail2ban.
+flokbn is an IP clustering tool that analyzes HTTP logs and groups IP addresses into CIDR ranges for blacklist generation. Inspired by fail2ban.
 
 ## Key Features
 
@@ -51,4 +51,4 @@ cidrx is an IP clustering tool that analyzes HTTP logs and groups IP addresses i
 
 ## Next Steps
 
-Ready to get started? Check out the [Installation Guide]({{< relref "/docs/getting-started/installation/" >}}) to install cidrx, or jump straight to the [Quick Start]({{< relref "/docs/getting-started/quick-start/" >}}) to see it in action.
+Ready to get started? Check out the [Installation Guide]({{< relref "/docs/getting-started/installation/" >}}) to install flokbn, or jump straight to the [Quick Start]({{< relref "/docs/getting-started/quick-start/" >}}) to see it in action.

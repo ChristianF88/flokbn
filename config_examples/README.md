@@ -1,10 +1,10 @@
-# cidrx Configuration Examples
+# flokbn Configuration Examples
 
-This directory contains example configuration files for the cidrx threat detection system.
+This directory contains example configuration files for the flokbn threat detection system.
 
 ## Overview
 
-cidrx uses various filtering mechanisms to identify and block malicious traffic:
+flokbn uses various filtering mechanisms to identify and block malicious traffic:
 
 1. **IP-based filtering** - Whitelist/blacklist specific IP addresses and CIDR ranges
 2. **User-Agent filtering** - Whitelist/blacklist based on exact User-Agent strings
@@ -66,7 +66,7 @@ Contains exact User-Agent strings that **blacklist** the source IP:
 ## Usage
 
 ### In Configuration File
-Reference these files in your `cidrx.toml` configuration:
+Reference these files in your `flokbn.toml` configuration:
 
 ```toml
 [global]
@@ -76,7 +76,7 @@ userAgentWhitelist = "config_examples/ua_whitelist.txt"
 userAgentBlacklist = "config_examples/ua_blacklist.txt"
 ```
 
-Note: relative paths are resolved from the directory you run cidrx in (the
+Note: relative paths are resolved from the directory you run flokbn in (the
 current working directory), not from the config file location.
 
 ### File Format
@@ -106,7 +106,7 @@ is literally `Googlebot`.
 
 ## Processing Order
 
-cidrx processes filtering in this order:
+flokbn processes filtering in this order:
 
 1. **Parse log entries** using configured log format
 2. **Apply time and regex filters** from trie configuration
@@ -200,7 +200,7 @@ userAgentBlacklist = "config_examples/ua_blacklist.txt"
 ## Support
 
 For questions and issues:
-1. Check the main cidrx documentation
+1. Check the main flokbn documentation
 2. Review log output for error messages
 3. Test configurations with sample data
 4. Validate file formats and permissions

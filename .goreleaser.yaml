@@ -1,4 +1,4 @@
-# GoReleaser configuration for cidrx
+# GoReleaser configuration for flokbn
 # Documentation: https://goreleaser.com
 
 version: 2
@@ -6,15 +6,15 @@ version: 2
 before:
   hooks:
     # Run tests before building
-    - sh -c "cd cidrx/src && go test ./..."
+    - sh -c "cd flokbn/src && go test ./..."
     # Run static analysis
-    - sh -c "cd cidrx/src && go run honnef.co/go/tools/cmd/staticcheck@latest ./..."
+    - sh -c "cd flokbn/src && go run honnef.co/go/tools/cmd/staticcheck@latest ./..."
 
 builds:
-  - id: cidrx
+  - id: flokbn
     main: .
-    binary: cidrx
-    dir: cidrx/src
+    binary: flokbn
+    dir: flokbn/src
 
     # Build for multiple platforms
     goos:
@@ -37,9 +37,9 @@ builds:
     # Build flags
     ldflags:
       - -s -w  # Strip debug info
-      - -X github.com/ChristianF88/cidrx/version.Version={{.Version}}
-      - -X github.com/ChristianF88/cidrx/version.Commit={{.Commit}}
-      - -X github.com/ChristianF88/cidrx/version.Date={{.Date}}
+      - -X github.com/ChristianF88/flokbn/version.Version={{.Version}}
+      - -X github.com/ChristianF88/flokbn/version.Commit={{.Commit}}
+      - -X github.com/ChristianF88/flokbn/version.Date={{.Date}}
 
     # Ignore certain combinations
     ignore:
@@ -49,7 +49,7 @@ builds:
         goarch: arm64
 
 archives:
-  - id: cidrx
+  - id: flokbn
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
@@ -66,7 +66,7 @@ archives:
     files:
       - README.md
       - LICENSE
-      - cidrx.toml.example
+      - flokbn.toml.example
 
 checksum:
   name_template: 'checksums.txt'
@@ -101,13 +101,13 @@ changelog:
 release:
   github:
     owner: ChristianF88
-    name: cidrx
+    name: flokbn
 
-  name_template: "cidrx {{.Version}}"
+  name_template: "flokbn {{.Version}}"
 
   # Header and footer for release notes
   header: |
-    ## cidrx {{.Version}}
+    ## flokbn {{.Version}}
 
     High-performance IP clustering tool for web-server access logs.
 
@@ -116,7 +116,7 @@ release:
     Download the appropriate binary for your platform below.
 
   footer: |
-    **Full Changelog**: https://github.com/ChristianF88/cidrx/compare/{{ .PreviousTag }}...{{ .Tag }}
+    **Full Changelog**: https://github.com/ChristianF88/flokbn/compare/{{ .PreviousTag }}...{{ .Tag }}
 
     ---
 
