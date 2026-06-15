@@ -1,0 +1,18 @@
+# IP/CIDR Whitelist Configuration
+# This file contains IP addresses and CIDR ranges that should never be banned
+# These are typically internal networks, trusted sources, or essential services
+# Format: One IP/CIDR per line, comments start with '#'
+
+# Internal Networks - Never ban these
+192.168.0.0/16
+10.0.0.0/8
+172.16.0.0/12
+127.0.0.0/8
+
+# Known Good Services - Whitelist essential services
+8.8.8.8/32
+8.8.4.4/32
+1.1.1.1/32
+1.0.0.1/32
+
+

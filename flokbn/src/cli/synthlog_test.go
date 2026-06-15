@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -13,21 +13,21 @@ import (
 	"time"
 )
 
-const testLines = 10_000
+const synthTestLines = 10_000
 
-// lineRe matches the exact generated line shape, capturing the leading IP,
-// the timestamp, and the trailing quoted IP.
-var lineRe = regexp.MustCompile(
+// synthLineRe matches the exact generated line shape, capturing the leading
+// IP, the timestamp, and the trailing quoted IP.
+var synthLineRe = regexp.MustCompile(
 	`^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(\d{2}/[A-Z][a-z]{2}/\d{4}:\d{2}:\d{2}:\d{2} \+0000)\] ` +
 		`"GET /fake-endpoint-(\d{1,3}) HTTP/1\.[01]" (200|301|304|404|500) \d+ "-" "([^"]+)" "(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"$`)
 
-func TestGenerateShapeAndDistributions(t *testing.T) {
+func TestGenerateSyntheticLogShapeAndDistributions(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "fake.log")
 	f, err := os.Create(out)
 	if err != nil {
 		t.Fatalf("create temp log: %v", err)
 	}
-	if err := generate(f, testLines, 42); err != nil {
+	if err := generateSyntheticLog(f, synthTestLines, 42); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	if err := f.Close(); err != nil {
@@ -40,8 +40,8 @@ func TestGenerateShapeAndDistributions(t *testing.T) {
 	}
 	defer f.Close()
 
-	minTime := startTime.Add(-jitter)
-	maxTime := startTime.Add(logSpan + jitter)
+	minTime := synthStartTime.Add(-synthJitter)
+	maxTime := synthStartTime.Add(synthLogSpan + synthJitter)
 
 	var (
 		total        int
@@ -49,8 +49,8 @@ func TestGenerateShapeAndDistributions(t *testing.T) {
 		uaSeen       = make(map[string]bool)
 		endpointHits = make(map[string]int)
 	)
-	hotspotSet := make(map[uint32]bool, len(hotspots))
-	for _, h := range hotspots {
+	hotspotSet := make(map[uint32]bool, len(synthHotspots))
+	for _, h := range synthHotspots {
 		hotspotSet[h.base>>16] = true
 	}
 
@@ -58,7 +58,7 @@ func TestGenerateShapeAndDistributions(t *testing.T) {
 	sc.Buffer(make([]byte, 0, 1<<16), 1<<16)
 	for sc.Scan() {
 		line := sc.Text()
-		m := lineRe.FindStringSubmatch(line)
+		m := synthLineRe.FindStringSubmatch(line)
 		if m == nil {
 			t.Fatalf("line %d does not match expected shape: %q", total+1, line)
 		}
@@ -93,12 +93,12 @@ func TestGenerateShapeAndDistributions(t *testing.T) {
 	if err := sc.Err(); err != nil {
 		t.Fatalf("scan: %v", err)
 	}
-	if total != testLines {
-		t.Fatalf("got %d lines, want %d", total, testLines)
+	if total != synthTestLines {
+		t.Fatalf("got %d lines, want %d", total, synthTestLines)
 	}
 
 	// Both exact UA-whitelist strings must be present (intentional collision
-	// with config_examples/ua_whitelist.txt).
+	// with the example UA whitelist).
 	for _, ua := range []string{
 		"Googlebot/2.1 (+http://www.google.com/bot.html)",
 		"Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
@@ -131,19 +131,19 @@ func TestGenerateShapeAndDistributions(t *testing.T) {
 	}
 }
 
-func TestGenerateDeterministic(t *testing.T) {
+func TestGenerateSyntheticLogDeterministic(t *testing.T) {
 	var a, b bytes.Buffer
-	if err := generate(&a, 1000, 7); err != nil {
+	if err := generateSyntheticLog(&a, 1000, 7); err != nil {
 		t.Fatalf("generate a: %v", err)
 	}
-	if err := generate(&b, 1000, 7); err != nil {
+	if err := generateSyntheticLog(&b, 1000, 7); err != nil {
 		t.Fatalf("generate b: %v", err)
 	}
 	if !bytes.Equal(a.Bytes(), b.Bytes()) {
 		t.Error("same seed produced different output")
 	}
 	var c bytes.Buffer
-	if err := generate(&c, 1000, 8); err != nil {
+	if err := generateSyntheticLog(&c, 1000, 8); err != nil {
 		t.Fatalf("generate c: %v", err)
 	}
 	if bytes.Equal(a.Bytes(), c.Bytes()) {
@@ -151,10 +151,18 @@ func TestGenerateDeterministic(t *testing.T) {
 	}
 }
 
-func BenchmarkGenerate(b *testing.B) {
+func TestGenerateSyntheticLogRejectsNonPositive(t *testing.T) {
+	for _, n := range []int64{0, -1} {
+		if err := generateSyntheticLog(io.Discard, n, 42); err == nil {
+			t.Errorf("generateSyntheticLog(n=%d) = nil error, want error", n)
+		}
+	}
+}
+
+func BenchmarkGenerateSyntheticLog(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		if err := generate(io.Discard, testLines, 42); err != nil {
+		if err := generateSyntheticLog(io.Discard, synthTestLines, 42); err != nil {
 			b.Fatal(err)
 		}
 	}

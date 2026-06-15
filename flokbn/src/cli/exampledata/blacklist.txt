@@ -1,0 +1,8 @@
+# IP/CIDR Blacklist Configuration
+# This file contains IP addresses and CIDR ranges that should always be banned
+# These are typically known malicious sources, spam networks, or blocked regions
+# Format: One IP/CIDR per line, comments start with '#'
+
+# Known Malicious Networks - Always ban these
+198.51.100.0/24
+

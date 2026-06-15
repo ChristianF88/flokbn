@@ -512,5 +512,6 @@ var App = &cli.App{
 			},
 			Action: handleStaticCommand,
 		},
+		exampleCommand,
 	},
 }
