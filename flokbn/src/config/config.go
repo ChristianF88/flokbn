@@ -712,8 +712,17 @@ func loadCIDRFile(filename string) ([]string, error) {
 		}
 
 		// Validate CIDR format
-		if _, _, err := net.ParseCIDR(line); err != nil {
+		_, ipNet, err := net.ParseCIDR(line)
+		if err != nil {
 			return nil, fmt.Errorf("invalid CIDR format at line %d in %s: %s", lineNum, filename, line)
+		}
+		// IPv4-only tool: reject IPv6 at the boundary (fail-loud). net.ParseCIDR
+		// accepts IPv6, which would otherwise reach the uint32 numeric hot path.
+		// Gate on mask length, not To4(): IPv4-mapped IPv6 (::ffff:a.b.c.d/120) has
+		// a non-nil To4() but a 16-byte mask; the mask is 4 bytes only for
+		// IPv4-notation CIDRs, so len != 4 rejects every IPv6 form.
+		if len(ipNet.Mask) != 4 {
+			return nil, fmt.Errorf("IPv6 CIDR not supported (IPv4-only tool) at line %d in %s: %s", lineNum, filename, line)
 		}
 
 		cidrs = append(cidrs, line)

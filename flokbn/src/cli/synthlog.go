@@ -64,6 +64,11 @@ type synthHotspot struct {
 // synthHotspots are the 10 weighted /16 hotspots; weights are the shares
 // measured in the original fake_nginx_2m.log. IPs inside a hotspot are uniform
 // within its /16.
+//
+// NOTE: mirrored (with the UA weights, seed, byte range and the per-line draw
+// order in generateSyntheticLog) in cidr/demo_compose_bench_test.go, which
+// can't import this package offline. Keep the two in sync — a draw-order or
+// weight change here silently desyncs that benchmark's derived data.
 var synthHotspots = []synthHotspot{
 	{synthIPv4(23, 253, 0, 0), 0.01988},
 	{synthIPv4(143, 173, 0, 0), 0.01788},

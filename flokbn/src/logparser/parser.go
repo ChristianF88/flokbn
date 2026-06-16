@@ -362,6 +362,17 @@ func (pp *Parser) parseFileIPsConcurrentIOChunked(file *os.File, fileSize int64,
 // Batching amortizes channel lock/unlock overhead: 1M lines = ~1K channel ops instead of 1M.
 const parseBatchSize = 1024
 
+// requestBatchPool recycles the per-batch []Request buffers that workers fill
+// and the collector drains, so the batches cycle instead of being freshly
+// allocated. The single pre-sized collector slice still owns the final result;
+// the pool only removes the per-batch allocation churn.
+var requestBatchPool = sync.Pool{
+	New: func() any {
+		s := make([]ingestor.Request, 0, parseBatchSize)
+		return &s
+	},
+}
+
 // parseFileWithStreamingIO uses streaming I/O with batched parallel parsing workers (internal method)
 func (pp *Parser) parseFileWithStreamingIO(filename string) ([]ingestor.Request, error) {
 	file, err := os.Open(filename)
@@ -382,7 +393,7 @@ func (pp *Parser) parseFileWithStreamingIO(filename string) ([]ingestor.Request,
 	// Batched channels — each send/receive moves parseBatchSize items at once,
 	// reducing channel operations from O(lines) to O(lines/batchSize).
 	linesChan := make(chan [][]byte, pp.workers*2)
-	resultsChan := make(chan []ingestor.Request, pp.workers*2)
+	resultsChan := make(chan *[]ingestor.Request, pp.workers*2)
 
 	var wg sync.WaitGroup
 
@@ -390,36 +401,44 @@ func (pp *Parser) parseFileWithStreamingIO(filename string) ([]ingestor.Request,
 	skipStrings := pp.SkipStringFields
 	skipNonIP := pp.SkipNonIPFields
 
-	// Start parser workers — each worker reuses a single Request for parsing
+	// Start parser workers — each reuses a single Request for parsing and fills a
+	// pooled batch buffer, shipped to the collector which drains it and returns it
+	// to the pool (so the buffers cycle instead of being freshly allocated).
 	for i := 0; i < pp.workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			req := &ingestor.Request{}
 			for batch := range linesChan {
-				resBatch := make([]ingestor.Request, 0, len(batch))
+				bp := requestBatchPool.Get().(*[]ingestor.Request)
+				resBatch := (*bp)[:0]
 				for _, line := range batch {
 					*req = ingestor.Request{}
 					if err := pp.compiled.parseLineReuseOpt(line, req, skipStrings, skipNonIP); err == nil {
 						resBatch = append(resBatch, *req)
 					}
 				}
+				*bp = resBatch
 				if len(resBatch) > 0 {
-					resultsChan <- resBatch
+					resultsChan <- bp
+				} else {
+					requestBatchPool.Put(bp)
 				}
 			}
 		}()
 	}
 
-	// Start result collector with pre-allocated slice
+	// Start result collector with pre-allocated slice. It copies each pooled
+	// batch out, then returns the buffer to the pool for a worker to refill.
 	results := make([]ingestor.Request, 0, estimatedLines)
 	var collectorWG sync.WaitGroup
 	collectorWG.Add(1)
 
 	go func() {
 		defer collectorWG.Done()
-		for batch := range resultsChan {
-			results = append(results, batch...)
+		for bp := range resultsChan {
+			results = append(results, (*bp)...)
+			requestBatchPool.Put(bp)
 		}
 	}()
 

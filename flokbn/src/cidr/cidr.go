@@ -314,7 +314,17 @@ func IsWhitelisted(cidr string, whitelist []string) bool {
 // IsWhitelistedIPNet checks if an IPNet is covered by any whitelist IPNet
 // High-performance version that works directly with IPNets
 func IsWhitelistedIPNet(candidateNet *net.IPNet, whitelistNets []*net.IPNet) bool {
+	// IPv4-only tool: the uint32 comparison below reads the mask via
+	// BigEndian.Uint32, which misreads a 16-byte (IPv6/IPv4-mapped) mask. A CIDR
+	// parsed from IPv4 dotted-quad notation always has a 4-byte mask; anything
+	// else is non-IPv4 and is treated as "not whitelisted" (kept verbatim).
+	if len(candidateNet.Mask) != 4 {
+		return false
+	}
 	for _, whitelistNet := range whitelistNets {
+		if len(whitelistNet.Mask) != 4 {
+			continue
+		}
 		// Check if the candidate CIDR is completely contained within the whitelist CIDR
 		if whitelistNet.Contains(candidateNet.IP) {
 			// Check if the candidate network is a subset of the whitelist network
@@ -485,10 +495,9 @@ func GenerateOptimalNumeric(start, end uint32) []NumericCIDR {
 		return nil
 	}
 
-	// Full address space: end-start+1 would overflow uint32; emit the single optimal /0.
-	if start == 0 && end == 0xFFFFFFFF {
-		return []NumericCIDR{{IP: 0, PrefixLen: 0}}
-	}
+	// The full-address-space case (end-start+1 overflows uint32) is handled by
+	// appendOptimalNumeric below; estimatedSize stays correct because the
+	// LargestCIDRSize(start, 0) call returns 0 for that overflowed length.
 
 	// Estimate result size to reduce allocations
 	// In worst case (all single IPs), we need (end-start+1) entries
@@ -504,14 +513,29 @@ func GenerateOptimalNumeric(start, end uint32) []NumericCIDR {
 	}
 
 	result := make([]NumericCIDR, 0, estimatedSize)
-	current := start
+	return appendOptimalNumeric(result, start, end)
+}
 
+// appendOptimalNumeric appends the minimal set of CIDRs covering [start, end] to
+// dst and returns the extended slice. It is the allocation-free core used by the
+// hot RemoveWhitelisted loop so a single scratch buffer can be reused across all
+// blacklist CIDRs instead of allocating a fresh slice per range gap.
+func appendOptimalNumeric(dst []NumericCIDR, start, end uint32) []NumericCIDR {
+	if start > end {
+		return dst
+	}
+
+	// Full address space: end-start+1 would overflow; emit the single /0.
+	if start == 0 && end == 0xFFFFFFFF {
+		return append(dst, NumericCIDR{IP: 0, PrefixLen: 0})
+	}
+
+	current := start
 	for current <= end && current >= start { // Overflow protection
-		// Find the largest CIDR that fits
 		remaining := end - current + 1
 		cidrSize := LargestCIDRSize(current, remaining)
 		if cidrSize > 0 {
-			result = append(result, NumericCIDR{
+			dst = append(dst, NumericCIDR{
 				IP:        current,
 				PrefixLen: uint8(32 - cidrSize),
 			})
@@ -521,19 +545,17 @@ func GenerateOptimalNumeric(start, end uint32) []NumericCIDR {
 			}
 			current = next
 		} else {
-			// Handle single IP case
-			result = append(result, NumericCIDR{
+			dst = append(dst, NumericCIDR{
 				IP:        current,
 				PrefixLen: 32,
 			})
-			if current == 0xFFFFFFFF { // Avoid overflow on max uint32
+			if current == 0xFFFFFFFF {
 				break
 			}
 			current++
 		}
 	}
-
-	return result
+	return dst
 }
 
 // GenerateOptimal generates the minimal set of CIDRs covering the range [start, end]
@@ -547,28 +569,206 @@ func GenerateOptimal(start, end uint32) []string {
 	return result
 }
 
+// rng32 is a closed numeric interval [start, end] over the IPv4 address space.
+type rng32 struct {
+	start, end uint32
+}
+
+// parseWhitelistRanges parses every whitelist CIDR ONCE into a sorted, merged
+// set of numeric [start,end] intervals. Invalid entries are skipped, matching
+// IsWhitelisted / SubtractMultiple. The merged+sorted invariant means that
+// clipping the set to any sub-range stays sorted+merged, so per-blacklist-CIDR
+// subtraction is byte-identical to subtracting the raw (unmerged) whitelist.
+//
+// This replaces the O(B*W) net.ParseCIDR storm in RemoveWhitelisted: the
+// whitelist is parsed once (O(W)) instead of once per blacklist CIDR.
+func parseWhitelistRanges(whitelist []string) []rng32 {
+	ranges := make([]rng32, 0, len(whitelist))
+	for _, entry := range whitelist {
+		_, wn, err := net.ParseCIDR(entry)
+		if err != nil {
+			continue // skip invalid entries
+		}
+		// IPv4-only tool: a non-IPv4 whitelist entry would inject garbage uint32
+		// ranges (IPToUint32 returns 0, BigEndian.Uint32 reads the top 4 mask
+		// bytes), e.g. ::/0 -> {0,0xFFFFFFFF} drops every IPv4 ban. Skip it.
+		// Gate on mask length, not To4(): To4() is non-nil for IPv4-mapped IPv6
+		// (::ffff:a.b.c.d) but net.ParseCIDR gives it a 16-byte mask, which
+		// BigEndian.Uint32 would misread. The mask is 4 bytes only for IPv4-notation.
+		if len(wn.Mask) != 4 {
+			continue
+		}
+		start := iputils.IPToUint32(wn.IP)
+		end := start | ^binary.BigEndian.Uint32(wn.Mask)
+		ranges = append(ranges, rng32{start, end})
+	}
+	if len(ranges) <= 1 {
+		return ranges
+	}
+
+	sort.Slice(ranges, func(i, j int) bool {
+		return ranges[i].start < ranges[j].start
+	})
+
+	// Merge overlapping/adjacent intervals in place.
+	merged := 0
+	for i := 1; i < len(ranges); i++ {
+		curr := &ranges[merged]
+		next := ranges[i]
+		// next.start <= curr.end+1 means overlap or adjacency. Guard against
+		// curr.end == 0xFFFFFFFF (the +1 would wrap) — in that case curr already
+		// covers the whole tail, so anything is absorbed.
+		if curr.end == 0xFFFFFFFF || next.start <= curr.end+1 {
+			if next.end > curr.end {
+				curr.end = next.end
+			}
+		} else {
+			merged++
+			ranges[merged] = next
+		}
+	}
+	return ranges[:merged+1]
+}
+
+// subtractRanges subtracts the pre-sorted, pre-merged whitelist intervals from
+// the blacklist range [blackStart, blackEnd], appending the resulting numeric
+// CIDRs to dst. The whitelist ranges are clipped to the blacklist bounds; since
+// they are already globally sorted+merged, the clipped overlap stays sorted and
+// merged, so the emitted gaps (and therefore the CIDRs) are identical to what
+// SubtractMultiple produces for this blacklist CIDR.
+func subtractRanges(dst []NumericCIDR, blackStart, blackEnd uint32, whiteRanges []rng32) []NumericCIDR {
+	pos := blackStart
+	for _, wr := range whiteRanges {
+		// Skip ranges entirely before the blacklist window.
+		if wr.end < blackStart {
+			continue
+		}
+		// Sorted: once a range starts past the window, none of the rest overlap.
+		if wr.start > blackEnd {
+			break
+		}
+
+		s := wr.start
+		if s < blackStart {
+			s = blackStart
+		}
+		e := wr.end
+		if e > blackEnd {
+			e = blackEnd
+		}
+
+		// Emit the gap before this exclusion.
+		if pos < s {
+			dst = appendOptimalNumeric(dst, pos, s-1)
+		}
+		if e == 0xFFFFFFFF {
+			// Exclusion reaches the top of the address space; pos would wrap.
+			// Sorted+merged, so the remaining tail is fully covered.
+			return dst
+		}
+		if e+1 > pos {
+			pos = e + 1
+		}
+	}
+
+	if pos <= blackEnd {
+		dst = appendOptimalNumeric(dst, pos, blackEnd)
+	}
+	return dst
+}
+
+// rangeFullyCovered reports whether [start,end] is completely contained within a
+// SINGLE whitelist interval. This mirrors IsWhitelisted/IsWhitelistedIPNet,
+// which require coverage by one entry (not the union). whiteRanges is sorted by
+// start, so a binary search finds the only candidate that could contain start.
+func rangeFullyCovered(start, end uint32, whiteRanges []rng32) bool {
+	// Find the last range whose start <= start.
+	i := sort.Search(len(whiteRanges), func(i int) bool {
+		return whiteRanges[i].start > start
+	}) - 1
+	if i < 0 {
+		return false
+	}
+	return whiteRanges[i].start <= start && whiteRanges[i].end >= end
+}
+
+// rangeIntersects reports whether any whitelist interval overlaps [start,end].
+// whiteRanges is sorted by start and merged (non-overlapping), so the first
+// interval whose end >= start is the only candidate that can intersect.
+func rangeIntersects(start, end uint32, whiteRanges []rng32) bool {
+	i := sort.Search(len(whiteRanges), func(i int) bool {
+		return whiteRanges[i].end >= start
+	})
+	return i < len(whiteRanges) && whiteRanges[i].start <= end
+}
+
 // RemoveWhitelisted removes any CIDRs from the blacklist that are covered by whitelist entries
-// and performs CIDR subtraction when whitelist entries are contained within blacklist entries
+// and performs CIDR subtraction when whitelist entries are contained within blacklist entries.
+//
+// The whitelist is parsed exactly once (parseWhitelistRanges) and reused for
+// every blacklist CIDR, replacing the previous O(B*W) net.ParseCIDR allocation
+// storm (IsWhitelisted + SubtractMultiple each re-parsed the whole whitelist per
+// candidate) with O(B + W) parsing.
+//
+// The result is read-only: on a no-op whitelist (empty, or only invalid/non-IPv4
+// entries) it returns the input slice unchanged rather than a fresh copy, so
+// callers must not append to or mutate it.
 func RemoveWhitelisted(blacklist []string, whitelist []string) []string {
 	if len(whitelist) == 0 {
 		return blacklist
 	}
 
+	whiteRanges := parseWhitelistRanges(whitelist)
+	if len(whiteRanges) == 0 {
+		// Whitelist had only invalid entries — nothing to subtract or remove.
+		return blacklist
+	}
+
 	var result []string
+	// Scratch buffer for per-CIDR numeric subtraction, reused across iterations.
+	var scratch []NumericCIDR
 
 	for _, blackCidr := range blacklist {
-		// Check if this blacklist CIDR should be completely removed (case 1: blacklist ⊆ whitelist)
-		if IsWhitelisted(blackCidr, whitelist) {
-			continue // Skip this CIDR entirely
+		_, blackNet, err := net.ParseCIDR(blackCidr)
+		if err != nil {
+			// Matches the old behavior: IsWhitelisted(invalid) == false and
+			// SubtractMultiple(invalid) returns the original string unchanged.
+			result = append(result, blackCidr)
+			continue
 		}
 
-		// Subtract all applicable whitelist entries at once
-		remainingCidrs, err := SubtractMultiple(blackCidr, whitelist)
-		if err != nil {
-			// If subtraction fails, keep the original
+		// IPv4-only tool: a non-IPv4 CIDR can't go through the uint32 numeric path
+		// (IPToUint32 returns 0). Keep it verbatim rather than corrupting it. Config
+		// load rejects IPv6 (config.loadCIDRFile), so this is defense-in-depth.
+		// Gate on mask length, not To4(): IPv4-mapped IPv6 (::ffff:a.b.c.d) has a
+		// non-nil To4() but a 16-byte mask, which BigEndian.Uint32 would misread.
+		// The mask is 4 bytes only for IPv4-notation CIDRs.
+		if len(blackNet.Mask) != 4 {
 			result = append(result, blackCidr)
-		} else {
-			result = append(result, remainingCidrs...)
+			continue
+		}
+
+		blackStart := iputils.IPToUint32(blackNet.IP)
+		blackEnd := blackStart | ^binary.BigEndian.Uint32(blackNet.Mask)
+
+		// Fully covered by a single whitelist entry — drop. (Covered only by the
+		// UNION of several entries still subtracts to empty below, same outcome.)
+		if rangeFullyCovered(blackStart, blackEnd, whiteRanges) {
+			continue
+		}
+
+		// No whitelist entry intersects this CIDR — keep it VERBATIM. The old
+		// SubtractMultiple returned the original string unchanged here, so preserve
+		// the exact bytes (including any non-canonical host-bits form) rather than
+		// re-emitting a canonicalized NumericCIDR.String().
+		if !rangeIntersects(blackStart, blackEnd, whiteRanges) {
+			result = append(result, blackCidr)
+			continue
+		}
+
+		scratch = subtractRanges(scratch[:0], blackStart, blackEnd, whiteRanges)
+		for _, nc := range scratch {
+			result = append(result, nc.String())
 		}
 	}
 
