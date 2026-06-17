@@ -83,7 +83,7 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 	}
 
 	// Generate heatmap if plotPath is provided - reuse parsed requests
-	if cfg.Static.PlotPath != "" && requests != nil {
+	if requests != nil {
 		plotStart := time.Now()
 		if err := output.PlotHeatmap(requests, cfg.Static.PlotPath); err != nil {
 			result.AddError("heatmap", fmt.Sprintf("failed to generate heatmap: %v", err), 1)
@@ -882,9 +882,6 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 			}
 		}
 
-		if len(jsonOutput.Warnings) == 0 && len(jsonOutput.Errors) == 0 {
-			fmt.Printf("✅ No issues detected\n")
-		}
 		fmt.Printf("\n")
 	}
 

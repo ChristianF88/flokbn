@@ -102,6 +102,59 @@ func TestStaticFlagsModeJailsDetections(t *testing.T) {
 	}
 }
 
+// TestStaticFlagsModeInjectsDefaultClusterSet is a regression test for the
+// undocumented live-vs-static divergence: live flags mode injected a default
+// cluster set ({1000,30,32,0.2} UseForJail=true) when none was given, but static
+// flags mode left ClusterArgSets/UseForJail nil, so `flokbn static --logfile X`
+// with no --clusterArgSets performed no detection/jailing. Static flags mode
+// must now inject the SAME default as live, detecting and jailing by default.
+func TestStaticFlagsModeInjectsDefaultClusterSet(t *testing.T) {
+	tmpDir := t.TempDir()
+	logFile := filepath.Join(tmpDir, "cluster.log")
+	jailFile := filepath.Join(tmpDir, "jail.json")
+	banFile := filepath.Join(tmpDir, "ban.txt")
+
+	// The injected default {1000,30,32,0.2} clusters at depth 30-32, so a
+	// detectable cluster needs >=1000 requests concentrated in a /30-/32. Emit
+	// 2000 requests from a single IP (10.20.30.40) to form a 10.20.30.40/32
+	// cluster with count >= minClusterSize at maxDepth.
+	var b strings.Builder
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&b, "10.20.30.40 - - [01/Feb/2025:00:00:00 +0000] \"GET / HTTP/1.1\" 200 100 \"-\" \"test\"\n")
+	}
+	if err := os.WriteFile(logFile, []byte(b.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No --clusterArgSets: the default must be injected.
+	output, err := runAppCaptured(t, []string{"flokbn", "static",
+		"--logfile", logFile,
+		"--logFormat", "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"",
+		"--jailFile", jailFile,
+		"--banFile", banFile,
+		"--plain"})
+	if err != nil {
+		t.Fatalf("static command failed: %v. Output: %s", err, output)
+	}
+
+	// The injected default must have detected and jailed the 10.20.x.x cluster.
+	jailData, err := os.ReadFile(jailFile)
+	if err != nil {
+		t.Fatalf("jail file was not created (default cluster set not injected/jailed): %v", err)
+	}
+	if !strings.Contains(string(jailData), "10.20.") {
+		t.Errorf("jail file does not contain the detected 10.20.x.x range. Content: %s", jailData)
+	}
+
+	banData, err := os.ReadFile(banFile)
+	if err != nil {
+		t.Fatalf("ban file was not created: %v", err)
+	}
+	if !strings.Contains(string(banData), "10.20.") {
+		t.Errorf("ban file does not contain the detected 10.20.x.x range (header-only ban file). Content: %s", banData)
+	}
+}
+
 // TestLiveCommandRejectsStaticOnlyFlags verifies that the live command does
 // not accept static-only output/analysis flags. These used to be defined on
 // live but had no effect there; they must now be rejected just like --tui.

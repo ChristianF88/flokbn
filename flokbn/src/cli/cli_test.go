@@ -244,6 +244,23 @@ func TestStaticCommandValidation(t *testing.T) {
 	}
 }
 
+// TestValidateLogFileExistsEmpty is a regression test for the misleading
+// "logfile does not exist:" (blank path) error shown in static CONFIG mode when
+// cfg.Static.LogFile == "". An empty logFile must now report "logFile is
+// required" and must not fall through to the os.Stat "does not exist" path.
+func TestValidateLogFileExistsEmpty(t *testing.T) {
+	err := validateLogFileExists("")
+	if err == nil {
+		t.Fatal("expected error for empty logFile, got nil")
+	}
+	if !strings.Contains(err.Error(), "logFile is required") {
+		t.Errorf("expected error to contain 'logFile is required', got: %v", err)
+	}
+	if strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("empty logFile must not produce a 'does not exist' error, got: %v", err)
+	}
+}
+
 func TestCLIFlags(t *testing.T) {
 	// Test that all expected flags are present
 	staticCmd := App.Commands[1] // static command is second

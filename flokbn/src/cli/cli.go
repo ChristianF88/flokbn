@@ -125,7 +125,7 @@ var (
 	}
 	logFormatFlag = &cli.StringFlag{
 		Name:  "logFormat",
-		Usage: "Log format string (e.g., '%h %^ %^ [%t] \"r\" %s %b %^ \"%u\"')",
+		Usage: "Log format string (e.g., '%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"')",
 		Value: "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\"",
 	}
 	startTimeFlag = &cli.StringFlag{
@@ -201,6 +201,9 @@ func validatePlotPath(plotPath string) error {
 }
 
 func validateLogFileExists(logfilePath string) error {
+	if logfilePath == "" {
+		return fmt.Errorf("logFile is required")
+	}
 	if _, err := os.Stat(logfilePath); os.IsNotExist(err) {
 		return fmt.Errorf("logfile does not exist: %s", logfilePath)
 	}
@@ -425,12 +428,20 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	trieConfig.ClusterArgSets = clusterArgs
-	// CLI-provided cluster sets default to jailing (parity with live flags
-	// mode); TOML configs keep explicit per-set control via useForJail.
-	for range clusterArgs {
-		trieConfig.UseForJail = append(trieConfig.UseForJail, true)
+	if len(clusterArgs) == 0 {
+		// Default cluster config when none provided (parity with live flags mode).
+		clusterArgs = []config.ClusterArgSet{{
+			MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2,
+		}}
+		trieConfig.UseForJail = []bool{true}
+	} else {
+		// CLI-provided cluster sets default to jailing (parity with live flags
+		// mode); TOML configs keep explicit per-set control via useForJail.
+		for range clusterArgs {
+			trieConfig.UseForJail = append(trieConfig.UseForJail, true)
+		}
 	}
+	trieConfig.ClusterArgSets = clusterArgs
 
 	// Validate CIDR ranges
 	if err := validateCIDRRanges(c); err != nil {
