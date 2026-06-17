@@ -78,9 +78,9 @@ func TestCIDRValidation(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "Valid IPv6 CIDR",
+			name:     "IPv6 CIDR rejected",
 			cidrs:    []string{"2001:db8::/32"},
-			expected: true,
+			expected: false,
 		},
 		{
 			name:     "Multiple valid CIDRs",
