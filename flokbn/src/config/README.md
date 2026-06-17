@@ -9,7 +9,7 @@ flokbn supports two configuration approaches:
 1. **CLI Flags**: For quick one-off analysis
 2. **TOML Config File**: For complex setups with multiple tries
 
-**Note**: CLI flags and config file are mutually exclusive. Use `--config` OR individual flags, not both.
+**Note**: `--config` is mostly exclusive with individual flags, but a few output/log flags may be combined with it. In static mode, only `--tui`, `--compact`, and `--plain` are allowed alongside `--config`; in live mode, only `--logLevel` is. All other per-run flags are rejected when `--config` is used.
 
 ## CLI Configuration
 
@@ -150,7 +150,6 @@ Real-time traffic analysis with automatic banning.
 ```bash
 --useragentRegex value  # Filter by User-Agent regex
 --endpointRegex value   # Filter by endpoint regex
---rangesCidr value      # Monitor specific CIDR ranges (repeatable)
 ```
 
 #### Whitelist/Blacklist
@@ -169,14 +168,6 @@ Real-time traffic analysis with automatic banning.
 --banFile value         # Ban list output file (required)
 ```
 
-#### Output Options
-
-```bash
---plotPath value        # Heatmap HTML output path
---compact               # Output compact JSON (default: false)
---plain                 # Output plain text format (default: false)
-```
-
 #### Complete Live Mode Example
 
 ```bash
@@ -189,12 +180,10 @@ Real-time traffic analysis with automatic banning.
   --clusterArgSet 5000,20,28,0.2 \
   --useragentRegex ".*scanner.*" \
   --endpointRegex "/admin.*" \
-  --rangesCidr "203.0.113.0/24" \
   --whitelist /etc/flokbn/whitelist.txt \
   --blacklist /etc/flokbn/blacklist.txt \
   --jailFile /tmp/jail.json \
-  --banFile /tmp/ban.txt \
-  --plain
+  --banFile /tmp/ban.txt
 ```
 
 ## TOML Configuration File
@@ -454,24 +443,29 @@ clusterArgSets = [
 ### IP/CIDR Format
 
 ```
-# Comments start with #
-192.168.0.0/16     # Internal network
-10.0.0.0/8         # Private network
-203.0.113.42/32    # Specific IP
+# Comments start with # and must be on their own line.
+# Inline comments after a CIDR are not supported and will fail the load.
+
+# Internal network
+192.168.0.0/16
+# Private network
+10.0.0.0/8
+# Specific IP
+203.0.113.42/32
 ```
 
-### User-Agent Regex Format
+### User-Agent Whitelist/Blacklist Files (Exact Match)
+
+User-Agent whitelist/blacklist files are matched by **case-insensitive full-string equality** (not substrings, not regex). Each line is a complete User-Agent header value. Comments start with `#`. To match by pattern/wildcard instead, use the per-trie `--useragentRegex` flag (or the `useragentRegex` config key), which is the actual regex mechanism.
 
 ```
-# Legitimate crawlers
-.*GoogleBot.*
-.*BingBot.*
+# Legitimate crawlers (whitelist) - exact full User-Agent strings
+Googlebot/2.1 (+http://www.google.com/bot.html)
+Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)
 
-# Security scanners (blacklist)
-.*scanner.*
-.*nikto.*
-.*sqlmap.*
-curl/.*
+# Security scanners (blacklist) - exact full User-Agent strings
+sqlmap/1.7.2#stable (https://sqlmap.org)
+Mozilla/5.00 (Nikto/2.1.6) (Evasions:None) (Test:Port Check)
 ```
 
 ## Log Format Configuration

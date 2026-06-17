@@ -36,7 +36,7 @@ userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-
 # 2. IP Blacklist: IPs matching these CIDRs are always added to ban file
 # 3. User-Agent Whitelist: IPs with these exact UA strings are excluded from analysis
 # 4. User-Agent Blacklist: IPs with these exact UA strings are immediately banned
-# 5. Processing order: UA filters → IP filters → clustering → jail → ban file
+# 5. Processing order: UA filters → clustering → IP whitelist/blacklist (ban pipeline) → jail → ban file
 
 #################################################################################
 # LOGGING CONFIGURATION (live mode)                                            #
@@ -155,8 +155,9 @@ useForJail = [true, true, false]    # Use first two cluster results for jail
 # Filter for administrative endpoints
 endpointRegex = "/(admin|api|dashboard|login|auth|config|setup|install).*"
 
-# Analyze traffic to admin endpoints
-cidrRanges = ["192.168.0.0/16"]          # Analyze all IP ranges
+# Admin-endpoint filtering is done by endpointRegex above; cidrRanges is
+# reporting-only and just adds a per-range request count to the report.
+cidrRanges = ["192.168.0.0/16"]          # Report request volume in the 192.168.0.0/16 range
 
 # More aggressive clustering for admin endpoints
 clusterArgSets = [
