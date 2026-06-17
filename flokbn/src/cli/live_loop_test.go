@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -32,6 +33,10 @@ type fakeIngestor struct {
 	closeCalls      int
 	acceptCalls     int
 	closeAfterDrain bool
+	// readErr, when non-nil, makes ReadBatch fail on the first call. The
+	// production TCPIngestor.ReadBatch never returns a non-nil error today, so
+	// this is the only way to exercise runLiveLoop's error-propagation path.
+	readErr error
 }
 
 var _ ingestor.Ingestor = (*fakeIngestor)(nil)
@@ -46,6 +51,9 @@ func (f *fakeIngestor) Accept() error {
 func (f *fakeIngestor) ReadBatch() ([]ingestor.Request, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
 	if len(f.batches) == 0 {
 		if f.closeAfterDrain {
 			f.closed = true
@@ -847,6 +855,29 @@ func TestRunLiveLoop_NoLiveTriesErrors(t *testing.T) {
 	}
 	if got := fake.acceptCallCount(); got != 0 {
 		t.Errorf("Accept calls = %d, want 0", got)
+	}
+}
+
+// TestRunLiveLoop_ReadBatchErrorPropagates is the error-propagation regression
+// test: a ReadBatch failure must surface as a wrapped, non-nil error from
+// runLiveLoop (so `flokbn live` exits non-zero) rather than being logged and
+// swallowed with a nil return.
+func TestRunLiveLoop_ReadBatchErrorPropagates(t *testing.T) {
+	sentinel := errors.New("boom")
+	fake := &fakeIngestor{readErr: sentinel}
+	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
+		"w": newWindowConfig(t, "", true),
+	})
+
+	err := runLiveLoop(context.Background(), fake, cfg, discardLogger(t), nil)
+	if err == nil {
+		t.Fatal("runLiveLoop returned nil, want a non-nil error from ReadBatch failure")
+	}
+	if !strings.Contains(err.Error(), "reading batch") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "reading batch")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("error = %v, want it to wrap the sentinel via errors.Is", err)
 	}
 }
 

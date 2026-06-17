@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"runtime"
@@ -19,8 +20,21 @@ import (
 	"github.com/ChristianF88/flokbn/trie"
 )
 
-// StaticWithRequests runs static analysis from config and also returns the parsed requests
+// StaticWithRequests runs static analysis from config and also returns the parsed requests.
+// It is a thin wrapper around StaticWithRequestsCtx using a background context
+// (no cancellation), preserving the signature for the ~dozen existing call sites.
 func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
+	return StaticWithRequestsCtx(context.Background(), cfg)
+}
+
+// StaticWithRequestsCtx runs static analysis from config and also returns the
+// parsed requests. The context provides coarse-grained cancellation for
+// interactive callers (the TUI): cancelling it short-circuits before the heavy
+// trie work materialises results and, critically, before the jail/ban-file side
+// effects, so a quit-mid-analysis run never mutates on-disk state. The hot
+// trie/clustering internals are NOT context-threaded (out of scope, and on the
+// measured path); the checks below bracket the CPU-bound phase only.
+func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
 	analysisStart := time.Now()
 	jsonOutput := output.NewJSONOutput("static", analysisStart)
 
@@ -33,6 +47,11 @@ func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Requ
 	if cfg.Static == nil {
 		jsonOutput.AddError("config_error", "static configuration section is missing", 1)
 		return jsonOutput, nil, fmt.Errorf("static configuration section is missing")
+	}
+
+	// Early cancellation check: bail before any parsing/trie work begins.
+	if err := ctx.Err(); err != nil {
+		return jsonOutput, nil, err
 	}
 
 	if len(cfg.StaticTries) == 0 {
@@ -161,6 +180,13 @@ func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Requ
 
 	// Wait for all tries to complete
 	trieWG.Wait()
+
+	// Cancellation check after the CPU-bound trie phase, before the jail/ban-file
+	// side effects below. A cancelled (quit) TUI run must not mutate on-disk
+	// jail/ban state.
+	if err := ctx.Err(); err != nil {
+		return jsonOutput, requests, err
+	}
 
 	// Sort results by name for consistency with sequential version
 	sort.Slice(trieResults, func(i, j int) bool {

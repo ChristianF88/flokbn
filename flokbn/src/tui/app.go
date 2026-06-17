@@ -59,7 +59,11 @@ type App struct {
 	// Atomic flags for cross-goroutine signaling (no mutex needed)
 	analysisComplete atomic.Bool
 	switchingTrie    atomic.Bool
-	requestsReady    chan struct{} // closed when requests are available
+	// shuttingDown is set true when Run() returns (the tview application has
+	// stopped). The analysis setters check it first so a late-finishing
+	// background analysis cannot QueueUpdateDraw on a stopped application.
+	shuttingDown  atomic.Bool
+	requestsReady chan struct{} // closed when requests are available
 
 	// Multi-trie support (immutable after construction)
 	cfg        *config.Config
@@ -91,6 +95,9 @@ func NewAppFromConfig(cfg *config.Config, configPath string) *App {
 
 // SetAnalysisResults sets the complete analysis results from StaticFromConfig
 func (a *App) SetAnalysisResults(multiResult *output.JSONOutput) {
+	if a.shuttingDown.Load() {
+		return
+	}
 	if multiResult == nil {
 		return
 	}
@@ -130,6 +137,9 @@ func (a *App) SetAnalysisResults(multiResult *output.JSONOutput) {
 
 // ShowError displays an error message in the TUI and stops the progress animation
 func (a *App) ShowError(message string) {
+	if a.shuttingDown.Load() {
+		return
+	}
 	a.app.QueueUpdateDraw(func() {
 		// Update progress view to show error
 		a.progressView.SetText(fmt.Sprintf("[red]Error:[white] %s\n\n[yellow]Press 'q' to quit[white]", message))
@@ -172,6 +182,9 @@ func (a *App) preInitializeVisualization() {
 
 // SetRequestData sets the real request data for visualization and pre-caches all tries
 func (a *App) SetRequestData(requests []ingestor.Request) {
+	if a.shuttingDown.Load() {
+		return
+	}
 	a.mu.Lock()
 	a.requests = requests
 	a.mu.Unlock()
@@ -529,8 +542,12 @@ func (a *App) Run() error {
 	// Just start the progress animation until results arrive
 	go a.animateProgress()
 
-	// Run the TUI
-	return a.app.Run()
+	// Run the TUI. Once it returns the application is stopped, so flag shutdown
+	// to make the analysis setters no-ops (defends against a background analysis
+	// finishing after the user quits).
+	err := a.app.Run()
+	a.shuttingDown.Store(true)
+	return err
 }
 
 // animateProgress shows a fake progress animation

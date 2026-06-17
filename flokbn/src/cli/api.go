@@ -101,13 +101,29 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 func executeTUI(cfg *config.Config) error {
 	app := tui.NewAppFromConfig(cfg, "")
 
+	// Tie the analysis goroutine's lifetime to the TUI: cancelling when app.Run
+	// returns stops the analysis short-circuiting before its jail/ban-file side
+	// effects, and the ctx guards below make the app setters no-ops once the TUI
+	// has exited (so a late-finishing analysis never drives a stopped app).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Run the complete analysis first (like non-TUI mode), then pass results to TUI
 	go func() {
 		// Do the same complete analysis as non-TUI mode
-		multiTrieResult, requests, err := analysis.StaticWithRequests(cfg)
+		multiTrieResult, requests, err := analysis.StaticWithRequestsCtx(ctx, cfg)
 		if err != nil {
+			// The TUI has already exited (quit mid-analysis): nothing to show.
+			if ctx.Err() != nil {
+				return
+			}
 			// Show error in TUI instead of silent failure
 			app.ShowError(fmt.Sprintf("Analysis failed: %v", err))
+			return
+		}
+
+		// TUI exited while the analysis was finishing: do not drive a stopped app.
+		if ctx.Err() != nil {
 			return
 		}
 
@@ -168,6 +184,12 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("creating ingestor: %w", err)
 	}
+	// Free the bound listener on every early return below (whitelist/blacklist/
+	// UA list/jail load failures all return before runLiveLoop reaches Accept,
+	// which is where the cancellation watcher's Close lives). Close is
+	// idempotent via closeOnce and tolerates server==nil, so this collapses with
+	// the watcher's Close on the normal path — no double-close.
+	defer ing.Close()
 
 	totalClusterSets := 0
 	for _, trie := range cfg.LiveTries {
@@ -387,8 +409,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 
 		batch, err := ing.ReadBatch()
 		if err != nil {
-			logger.Error("batch read error", "err", err)
-			break
+			return fmt.Errorf("reading batch: %w", err)
 		}
 
 		if len(batch) == 0 {

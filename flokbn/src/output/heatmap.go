@@ -104,10 +104,20 @@ func PlotHeatmap(requests []ingestor.Request, filename string) error {
 	if err != nil {
 		return fmt.Errorf("could not create heatmap file %s: %w", filename, err)
 	}
+	// Fallback close: covers a panic / early return inside Render. On the normal
+	// path the explicit Close below runs first; this deferred call then returns
+	// an already-closed error which is correctly discarded.
 	defer f.Close()
 
 	if err := page.Render(f); err != nil {
 		return fmt.Errorf("rendering heatmap: %w", err)
+	}
+
+	// Close explicitly and propagate: page.Render is a single unbuffered write,
+	// so a Close failure (ENOSPC / NFS commit) means the file on disk is
+	// truncated. Surface that as an error instead of printing a false success.
+	if cerr := f.Close(); cerr != nil {
+		return fmt.Errorf("closing heatmap file %s: %w", filename, cerr)
 	}
 
 	fmt.Printf("Heatmap saved to %s\n", filename)
