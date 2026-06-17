@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadConfig_StatsListenAndTopTalkers(t *testing.T) {
@@ -60,7 +61,14 @@ func TestValidateLive_StatsListen(t *testing.T) {
 			Global: &GlobalConfig{JailFile: "jail.json", BanFile: "ban.txt"},
 			Live:   &LiveConfig{Port: "8080"},
 			LiveTries: map[string]*SlidingTrieConfig{
-				"w": {},
+				// Per-window required fields (slidingWindowMaxSize/MaxTime/
+				// clusterArgSets) so ValidateLive's window checks pass and this
+				// test stays focused on statsListen/topTalkers.
+				"w": {
+					SlidingWindowMaxSize: 100,
+					SlidingWindowMaxTime: time.Hour,
+					ClusterArgSets:       []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
+				},
 			},
 		}
 	}

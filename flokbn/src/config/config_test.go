@@ -14,9 +14,6 @@ import (
 func TestLoadConfig(t *testing.T) {
 	testConfigContent := `
 [global]
-logFile = "/var/log/flokbn.log"
-logLevel = "info"
-logFileSizeMax = "100MB"
 jailFile = "/etc/flokbn/jail.json"
 banFile = "/etc/flokbn/ban.txt"
 
@@ -301,6 +298,9 @@ func TestLiveConfigValidation(t *testing.T) {
 						SlidingWindowMaxTime:   2 * time.Hour,
 						SlidingWindowMaxSize:   100000,
 						SleepBetweenIterations: 10,
+						// clusterArgSets is now a per-window required field
+						// (an empty window clusters nothing — a silent no-op).
+						ClusterArgSets: []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
 					},
 				},
 			},
@@ -433,8 +433,14 @@ port = "8080"
 [static.trie_1]
 # No optional fields specified - should work fine
 
-[live.sliding_trie_1]  
-# No optional fields specified - should work fine
+[live.sliding_trie_1]
+# Filters (useragentRegex/endpointRegex) are optional and omitted here, but the
+# per-window window/cluster fields are required by ValidateLive (an omitted
+# window size would silently produce an inert empty window).
+slidingWindowMaxTime = "1h"
+slidingWindowMaxSize = 10000
+clusterArgSets = [[100, 24, 32, 0.1]]
+useForJail = [true]
 `
 
 	configPath := filepath.Join(tmpDir, "minimal_config.toml")

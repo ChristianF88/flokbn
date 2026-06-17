@@ -443,20 +443,18 @@ clusterArgSets = [
 ### IP/CIDR Format
 
 ```
-# Comments start with # and must be on their own line.
-# Inline comments after a CIDR are not supported and will fail the load.
+# Comments start with #, on their own line or trailing a CIDR.
+# A trailing inline # comment is stripped; the bare CIDR before it is loaded.
 
 # Internal network
 192.168.0.0/16
-# Private network
-10.0.0.0/8
-# Specific IP
-203.0.113.42/32
+10.0.0.0/8        # Private network
+203.0.113.42/32   # Specific IP
 ```
 
 ### User-Agent Whitelist/Blacklist Files (Exact Match)
 
-User-Agent whitelist/blacklist files are matched by **case-insensitive full-string equality** (not substrings, not regex). Each line is a complete User-Agent header value. Comments start with `#`. To match by pattern/wildcard instead, use the per-trie `--useragentRegex` flag (or the `useragentRegex` config key), which is the actual regex mechanism.
+User-Agent whitelist/blacklist files are matched by **case-insensitive full-string equality** (not substrings, not regex). Each line is a complete User-Agent header value. Comments start with `#`, on their own line or trailing a value, and a trailing `#...` is stripped from the value before matching. Because the first `#` ends the value, a User-Agent that itself contains a literal `#` cannot be listed here — match it with the per-trie `--useragentRegex` flag (or the `useragentRegex` config key) instead, which is the actual regex mechanism.
 
 ```
 # Legitimate crawlers (whitelist) - exact full User-Agent strings
@@ -464,8 +462,8 @@ Googlebot/2.1 (+http://www.google.com/bot.html)
 Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)
 
 # Security scanners (blacklist) - exact full User-Agent strings
-sqlmap/1.7.2#stable (https://sqlmap.org)
-Mozilla/5.00 (Nikto/2.1.6) (Evasions:None) (Test:Port Check)
+sqlmap/1.7.2 (https://sqlmap.org)
+Mozilla/5.00 (Nikto/2.1.6) (Evasions:None) (Test:Port Check)   # web scanner
 ```
 
 ## Log Format Configuration

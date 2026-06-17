@@ -104,13 +104,74 @@ type LogConfig struct {
 // [live] section does not specify a readTimeout.
 const DefaultLiveReadTimeout = 5 * time.Second
 
+// staticScalarKeys are the recognized scalar keys of the [static] section.
+// Any other [static] sub-key is treated as a trie sub-table. This set is the
+// single source of truth shared by LoadConfig's dispatch and parseStaticConfig's
+// strict unknown-key check, so the two cannot drift.
+var staticScalarKeys = map[string]struct{}{
+	"logFile":   {},
+	"logFormat": {},
+	"plotPath":  {},
+}
+
+// liveScalarKeys are the recognized scalar keys of the [live] section. Any
+// other [live] sub-key is treated as a sliding-trie sub-table. Shared by
+// LoadConfig's dispatch and parseLiveConfig's strict unknown-key check.
+var liveScalarKeys = map[string]struct{}{
+	"port":                   {},
+	"readTimeout":            {},
+	"statsListen":            {},
+	"topTalkers":             {},
+	"slidingWindowMaxTime":   {},
+	"slidingWindowMaxSize":   {},
+	"sleepBetweenIterations": {},
+}
+
+// trieKeys are the recognized keys of a [static.<name>] trie sub-table.
+var trieKeys = map[string]struct{}{
+	"useragentRegex": {},
+	"endpointRegex":  {},
+	"startTime":      {},
+	"endTime":        {},
+	"cidrRanges":     {},
+	"clusterArgSets": {},
+	"useForJail":     {},
+}
+
+// slidingTrieKeys are the recognized keys of a [live.<name>] sliding-trie
+// sub-table: the trie filter keys plus the per-window sliding parameters.
+// startTime/endTime/cidrRanges are accepted (parity with the static trie key
+// surface) but not consumed by sliding tries; this matches the prior tolerant
+// behavior so a config that set them does not start failing now.
+var slidingTrieKeys = map[string]struct{}{
+	"useragentRegex":         {},
+	"endpointRegex":          {},
+	"startTime":              {},
+	"endTime":                {},
+	"cidrRanges":             {},
+	"clusterArgSets":         {},
+	"useForJail":             {},
+	"slidingWindowMaxTime":   {},
+	"slidingWindowMaxSize":   {},
+	"sleepBetweenIterations": {},
+}
+
 type Config struct {
-	Global      *GlobalConfig                 `toml:"global"`
-	Static      *StaticConfig                 `toml:"static"`
-	Live        *LiveConfig                   `toml:"live"`
-	Log         *LogConfig                    `toml:"log"`
-	StaticTries map[string]*TrieConfig        `toml:",remain"`
-	LiveTries   map[string]*SlidingTrieConfig `toml:",remain"`
+	Global *GlobalConfig `toml:"global"`
+	Static *StaticConfig `toml:"static"`
+	Live   *LiveConfig   `toml:"live"`
+	Log    *LogConfig    `toml:"log"`
+
+	// StaticTries and LiveTries are NOT struct-decoded. They are the trie
+	// sub-tables nested under [static.<name>] / [live.<name>], which LoadConfig
+	// parses by hand from a map[string]any (see the dispatch loops there). The
+	// `toml:"-"` tag documents that these fields are never populated by
+	// toml.Decode; a previous `,remain` tag here was dead and misleading —
+	// BurntSushi/toml populated neither (two `,remain` fields cannot both win),
+	// so a refactor to toml.Decode(data, cfg) would have silently lost every
+	// trie. Keep the hand-parsing; do not reintroduce a decode tag.
+	StaticTries map[string]*TrieConfig        `toml:"-"`
+	LiveTries   map[string]*SlidingTrieConfig `toml:"-"`
 }
 
 func LoadConfig(configPath string) (*Config, error) {
@@ -133,23 +194,35 @@ func LoadConfig(configPath string) (*Config, error) {
 		switch key {
 		case "global":
 			if globalMap, ok := value.(map[string]any); ok {
-				config.Global = parseGlobalConfig(globalMap)
+				globalConfig, err := parseGlobalConfig(globalMap)
+				if err != nil {
+					return nil, fmt.Errorf("parsing global config: %w", err)
+				}
+				config.Global = globalConfig
 			}
 		case "static":
 			if staticMap, ok := value.(map[string]any); ok {
-				config.Static = parseStaticConfig(staticMap)
-				// Parse static tries from nested config
+				staticConfig, err := parseStaticConfig(staticMap)
+				if err != nil {
+					return nil, fmt.Errorf("parsing static config: %w", err)
+				}
+				config.Static = staticConfig
+				// Parse static tries from nested config. Only the recognized
+				// scalar keys (staticScalarKeys — the same set parseStaticConfig
+				// checks against) are section fields; everything else is a trie
+				// sub-table. Deriving both from one set keeps the strict
+				// unknown-key check and this dispatch from drifting apart.
 				for subKey, subValue := range staticMap {
-					// Skip static configuration fields and only process trie configurations
-					if subKey != "logFormat" && subKey != "logFile" && subKey != "plotPath" {
-						if trieMap, ok := subValue.(map[string]any); ok {
-							trieConfig, err := parseTrieConfig(trieMap)
-							if err != nil {
-								return nil, fmt.Errorf("parsing trie config %q: %w", subKey, err)
-							}
-							if trieConfig != nil {
-								config.StaticTries[subKey] = trieConfig
-							}
+					if _, isScalar := staticScalarKeys[subKey]; isScalar {
+						continue
+					}
+					if trieMap, ok := subValue.(map[string]any); ok {
+						trieConfig, err := parseTrieConfig(trieMap)
+						if err != nil {
+							return nil, fmt.Errorf("parsing trie config %q: %w", subKey, err)
+						}
+						if trieConfig != nil {
+							config.StaticTries[subKey] = trieConfig
 						}
 					}
 				}
@@ -169,18 +242,22 @@ func LoadConfig(configPath string) (*Config, error) {
 					return nil, fmt.Errorf("parsing live config: %w", err)
 				}
 				config.Live = liveConfig
-				// Parse live tries from nested config
+				// Parse live tries from nested config. Only the recognized
+				// scalar keys (liveScalarKeys — the same set parseLiveConfig
+				// checks against) are section fields; everything else is a
+				// sliding-trie sub-table. One shared set keeps dispatch and the
+				// strict unknown-key check aligned.
 				for subKey, subValue := range liveMap {
-					// Skip live configuration fields and only process trie configurations
-					if subKey != "port" && subKey != "readTimeout" && subKey != "statsListen" && subKey != "topTalkers" && subKey != "slidingWindowMaxTime" && subKey != "slidingWindowMaxSize" && subKey != "sleepBetweenIterations" {
-						if trieMap, ok := subValue.(map[string]any); ok {
-							trieConfig, err := parseSlidingTrieConfig(trieMap)
-							if err != nil {
-								return nil, fmt.Errorf("parsing sliding trie config %q: %w", subKey, err)
-							}
-							if trieConfig != nil {
-								config.LiveTries[subKey] = trieConfig
-							}
+					if _, isScalar := liveScalarKeys[subKey]; isScalar {
+						continue
+					}
+					if trieMap, ok := subValue.(map[string]any); ok {
+						trieConfig, err := parseSlidingTrieConfig(trieMap)
+						if err != nil {
+							return nil, fmt.Errorf("parsing sliding trie config %q: %w", subKey, err)
+						}
+						if trieConfig != nil {
+							config.LiveTries[subKey] = trieConfig
 						}
 					}
 				}
@@ -204,60 +281,124 @@ func LoadConfig(configPath string) (*Config, error) {
 	return config, nil
 }
 
-func parseGlobalConfig(m map[string]any) *GlobalConfig {
+// parseGlobalConfig parses the [global] section. Wrong-typed recognized keys
+// and unknown/misspelled keys are hard errors at load time (mirroring
+// parseLogConfig) so an operator mistake fails loud at startup instead of
+// silently falling back to defaults.
+func parseGlobalConfig(m map[string]any) (*GlobalConfig, error) {
 	config := &GlobalConfig{}
-	if v, ok := m["jailFile"].(string); ok {
-		config.JailFile = v
+	stringField := func(key string, dst *string) error {
+		v, ok := m[key].(string)
+		if !ok {
+			return fmt.Errorf("%s must be a string, got %T", key, m[key])
+		}
+		*dst = v
+		return nil
 	}
-	if v, ok := m["banFile"].(string); ok {
-		config.BanFile = v
+	for key := range m {
+		var err error
+		switch key {
+		case "jailFile":
+			err = stringField(key, &config.JailFile)
+		case "banFile":
+			err = stringField(key, &config.BanFile)
+		case "whitelist":
+			err = stringField(key, &config.Whitelist)
+		case "blacklist":
+			err = stringField(key, &config.Blacklist)
+		case "userAgentWhitelist":
+			err = stringField(key, &config.UserAgentWhitelist)
+		case "userAgentBlacklist":
+			err = stringField(key, &config.UserAgentBlacklist)
+		default:
+			return nil, fmt.Errorf("unknown key %q in [global] section", key)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	if v, ok := m["whitelist"].(string); ok {
-		config.Whitelist = v
-	}
-	if v, ok := m["blacklist"].(string); ok {
-		config.Blacklist = v
-	}
-	if v, ok := m["userAgentWhitelist"].(string); ok {
-		config.UserAgentWhitelist = v
-	}
-	if v, ok := m["userAgentBlacklist"].(string); ok {
-		config.UserAgentBlacklist = v
-	}
-	return config
+	return config, nil
 }
 
-func parseStaticConfig(m map[string]any) *StaticConfig {
+// parseStaticConfig parses the [static] section's scalar fields. Trie
+// sub-tables (map values) are handled by LoadConfig; only the recognized
+// scalar keys are validated here. Wrong-typed scalars are hard errors.
+func parseStaticConfig(m map[string]any) (*StaticConfig, error) {
 	config := &StaticConfig{}
-	if v, ok := m["logFile"].(string); ok {
-		config.LogFile = v
+	stringField := func(key string, dst *string) error {
+		v, ok := m[key].(string)
+		if !ok {
+			return fmt.Errorf("%s must be a string, got %T", key, m[key])
+		}
+		*dst = v
+		return nil
 	}
-	if v, ok := m["logFormat"].(string); ok {
-		config.LogFormat = v
+	for key, value := range m {
+		// Sub-tables are trie sections, dispatched separately by LoadConfig.
+		if _, isTable := value.(map[string]any); isTable {
+			continue
+		}
+		var err error
+		switch key {
+		case "logFile":
+			err = stringField(key, &config.LogFile)
+		case "logFormat":
+			err = stringField(key, &config.LogFormat)
+		case "plotPath":
+			err = stringField(key, &config.PlotPath)
+		default:
+			return nil, fmt.Errorf("unknown key %q in [static] section", key)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	if v, ok := m["plotPath"].(string); ok {
-		config.PlotPath = v
-	}
-	return config
+	return config, nil
 }
 
+// parseLiveConfig parses the [live] section's scalar fields. Sliding-trie
+// sub-tables are handled by LoadConfig. Wrong-typed recognized scalars and
+// unknown keys are hard errors: e.g. port = 8080 (an integer) now fails at load
+// instead of leaving Port="" and surfacing a misleading "port is required".
 func parseLiveConfig(m map[string]any) (*LiveConfig, error) {
 	config := &LiveConfig{}
-	if v, ok := m["port"].(string); ok {
-		config.Port = v
-	}
-	if v, ok := m["readTimeout"].(string); ok {
-		duration, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("invalid readTimeout %q: %w", v, err)
+	for key, value := range m {
+		// Sub-tables are sliding-trie sections, dispatched separately.
+		if _, isTable := value.(map[string]any); isTable {
+			continue
 		}
-		config.ReadTimeout = duration
-	}
-	if v, ok := m["statsListen"].(string); ok {
-		config.StatsListen = v
-	}
-	if v, ok := m["topTalkers"].(int64); ok {
-		config.TopTalkers = int(v)
+		switch key {
+		case "port":
+			v, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("port must be a string, got %T", value)
+			}
+			config.Port = v
+		case "readTimeout":
+			v, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("readTimeout must be a string, got %T", value)
+			}
+			duration, err := time.ParseDuration(v)
+			if err != nil {
+				return nil, fmt.Errorf("invalid readTimeout %q: %w", v, err)
+			}
+			config.ReadTimeout = duration
+		case "statsListen":
+			v, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("statsListen must be a string, got %T", value)
+			}
+			config.StatsListen = v
+		case "topTalkers":
+			v, ok := value.(int64)
+			if !ok {
+				return nil, fmt.Errorf("topTalkers must be an integer, got %T", value)
+			}
+			config.TopTalkers = int(v)
+		default:
+			return nil, fmt.Errorf("unknown key %q in [live] section", key)
+		}
 	}
 	return config, nil
 }
@@ -293,27 +434,58 @@ func parseLogConfig(m map[string]any) (*LogConfig, error) {
 }
 
 // parseRegexFields extracts and sets regex strings from a TOML map.
-func parseRegexFields(m map[string]any) (useragentRegex, endpointRegex string) {
-	if v, ok := m["useragentRegex"].(string); ok {
-		useragentRegex = v
+// A present-but-wrong-typed value is a hard error (fail-loud at load).
+func parseRegexFields(m map[string]any) (useragentRegex, endpointRegex string, err error) {
+	if v, present := m["useragentRegex"]; present {
+		s, ok := v.(string)
+		if !ok {
+			return "", "", fmt.Errorf("useragentRegex must be a string, got %T", v)
+		}
+		useragentRegex = s
 	}
-	if v, ok := m["endpointRegex"].(string); ok {
-		endpointRegex = v
+	if v, present := m["endpointRegex"]; present {
+		s, ok := v.(string)
+		if !ok {
+			return "", "", fmt.Errorf("endpointRegex must be a string, got %T", v)
+		}
+		endpointRegex = s
 	}
-	return
+	return useragentRegex, endpointRegex, nil
 }
 
-// parseClusterArgSetsFromTOML parses cluster argument sets from TOML nested arrays.
-func parseClusterArgSetsFromTOML(m map[string]any) []ClusterArgSet {
-	v, ok := m["clusterArgSets"].([]any)
+// checkUnknownKeys returns an error if m contains any key not in allowed,
+// naming the offending key and section. Shared by the trie parsers so a
+// misspelled key (e.g. useForjail, clusterArgSet) fails loud at load time.
+func checkUnknownKeys(m map[string]any, allowed map[string]struct{}, section string) error {
+	for key := range m {
+		if _, ok := allowed[key]; !ok {
+			return fmt.Errorf("unknown key %q in %s section", key, section)
+		}
+	}
+	return nil
+}
+
+// parseClusterArgSetsFromTOML parses cluster argument sets from TOML nested
+// arrays. It is fail-loud at config-load time, mirroring the CLI path
+// (ParseClusterArgSetsFromStrings): a malformed, under-specified, or
+// out-of-range row is a hard error naming the offending row index, never a
+// silent drop. Silent drops previously shifted the positional useForJail
+// alignment (cli/api.go, analysis/static.go index argSet[i] against
+// useForJail[i]) and disabled operator-requested jail rules.
+func parseClusterArgSetsFromTOML(m map[string]any) ([]ClusterArgSet, error) {
+	raw, present := m["clusterArgSets"]
+	if !present {
+		return nil, nil
+	}
+	v, ok := raw.([]any)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("clusterArgSets must be an array of [minClusterSize,minDepth,maxDepth,meanSubnetDifference] rows, got %T", raw)
 	}
 	var sets []ClusterArgSet
-	for _, item := range v {
+	for i, item := range v {
 		arr, ok := item.([]any)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("clusterArgSets row %d must be an array of 4 numbers, got %T", i, item)
 		}
 		var argSet []float64
 		for _, val := range arr {
@@ -322,105 +494,203 @@ func parseClusterArgSetsFromTOML(m map[string]any) []ClusterArgSet {
 				argSet = append(argSet, f)
 			case int64:
 				argSet = append(argSet, float64(f))
+			default:
+				return nil, fmt.Errorf("clusterArgSets row %d contains a non-numeric value %v (%T)", i, val, val)
 			}
 		}
-		if len(argSet) >= 4 {
-			minDepth := uint32(argSet[1])
-			maxDepth := uint32(argSet[2])
-			// Silently skip invalid sets (existing TOML contract); the 32 ceiling
-			// (IPv4 bit width) is enforced here as defense-in-depth so an
-			// out-of-range set never reaches collectCIDRsNode. The fail-loud
-			// REJECT for CLI/runtime surfaces is handled in
-			// ParseClusterArgSetsFromStrings and processClustering.
-			if minDepth > maxDepth || maxDepth > 32 {
-				continue
-			}
-			sets = append(sets, ClusterArgSet{
-				MinClusterSize:       uint32(argSet[0]),
-				MinDepth:             minDepth,
-				MaxDepth:             maxDepth,
-				MeanSubnetDifference: argSet[3],
-			})
+		if len(argSet) != 4 {
+			return nil, fmt.Errorf("clusterArgSets row %d requires exactly 4 numeric values (minClusterSize,minDepth,maxDepth,meanSubnetDifference), got %d", i, len(argSet))
 		}
+		minDepth := uint32(argSet[1])
+		maxDepth := uint32(argSet[2])
+		// 32 is the IPv4 bit width ceiling. Mirror the CLI fail-loud REJECT
+		// (ParseClusterArgSetsFromStrings) so an invalid set never reaches
+		// collectCIDRsNode and the positional useForJail alignment is preserved.
+		if minDepth > maxDepth {
+			return nil, fmt.Errorf("clusterArgSets row %d: minDepth (%d) must be <= maxDepth (%d)", i, minDepth, maxDepth)
+		}
+		if maxDepth > 32 {
+			return nil, fmt.Errorf("clusterArgSets row %d: maxDepth (%d) must be <= 32", i, maxDepth)
+		}
+		sets = append(sets, ClusterArgSet{
+			MinClusterSize:       uint32(argSet[0]),
+			MinDepth:             minDepth,
+			MaxDepth:             maxDepth,
+			MeanSubnetDifference: argSet[3],
+		})
 	}
-	return sets
+	return sets, nil
 }
 
 // parseUseForJail parses the useForJail boolean array from a TOML map.
-func parseUseForJail(m map[string]any) []bool {
-	v, ok := m["useForJail"].([]any)
+// A present-but-wrong-typed value (non-array, or a non-bool element) is a hard
+// error so a malformed array can't silently shrink and misalign with
+// clusterArgSets (which is positionally indexed downstream).
+func parseUseForJail(m map[string]any) ([]bool, error) {
+	raw, present := m["useForJail"]
+	if !present {
+		return nil, nil
+	}
+	v, ok := raw.([]any)
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("useForJail must be an array of booleans, got %T", raw)
 	}
-	var result []bool
-	for _, item := range v {
-		if b, ok := item.(bool); ok {
-			result = append(result, b)
+	result := make([]bool, 0, len(v))
+	for i, item := range v {
+		b, ok := item.(bool)
+		if !ok {
+			return nil, fmt.Errorf("useForJail[%d] must be a boolean, got %T", i, item)
 		}
+		result = append(result, b)
 	}
-	return result
+	return result, nil
 }
 
 func parseTrieConfig(m map[string]any) (*TrieConfig, error) {
-	uaRegex, epRegex := parseRegexFields(m)
+	if err := checkUnknownKeys(m, trieKeys, "trie"); err != nil {
+		return nil, err
+	}
+	uaRegex, epRegex, err := parseRegexFields(m)
+	if err != nil {
+		return nil, err
+	}
+	clusterArgSets, err := parseClusterArgSetsFromTOML(m)
+	if err != nil {
+		return nil, err
+	}
+	useForJail, err := parseUseForJail(m)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateUseForJailAlignment(clusterArgSets, useForJail); err != nil {
+		return nil, err
+	}
 	tc := &TrieConfig{
 		UserAgentRegex: uaRegex,
 		EndpointRegex:  epRegex,
-		ClusterArgSets: parseClusterArgSetsFromTOML(m),
-		UseForJail:     parseUseForJail(m),
+		ClusterArgSets: clusterArgSets,
+		UseForJail:     useForJail,
 	}
 	if err := tc.CompileRegex(); err != nil {
 		return nil, err
 	}
-	if v, ok := m["startTime"].(string); ok && v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			tc.StartTime = &t
-		} else {
-			tc.StartTimeRaw = v
+	if v, present := m["startTime"]; present {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("startTime must be a string, got %T", v)
 		}
-	}
-	if v, ok := m["endTime"].(string); ok && v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			tc.EndTime = &t
-		} else {
-			tc.EndTimeRaw = v
-		}
-	}
-	if v, ok := m["cidrRanges"].([]any); ok {
-		for _, item := range v {
-			if str, ok := item.(string); ok {
-				tc.CIDRRanges = append(tc.CIDRRanges, str)
+		if s != "" {
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				tc.StartTime = &t
+			} else {
+				tc.StartTimeRaw = s
 			}
+		}
+	}
+	if v, present := m["endTime"]; present {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("endTime must be a string, got %T", v)
+		}
+		if s != "" {
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				tc.EndTime = &t
+			} else {
+				tc.EndTimeRaw = s
+			}
+		}
+	}
+	if v, present := m["cidrRanges"]; present {
+		arr, ok := v.([]any)
+		if !ok {
+			return nil, fmt.Errorf("cidrRanges must be an array of strings, got %T", v)
+		}
+		for i, item := range arr {
+			str, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
+			}
+			tc.CIDRRanges = append(tc.CIDRRanges, str)
 		}
 	}
 	return tc, nil
 }
 
 func parseSlidingTrieConfig(m map[string]any) (*SlidingTrieConfig, error) {
-	uaRegex, epRegex := parseRegexFields(m)
+	if err := checkUnknownKeys(m, slidingTrieKeys, "sliding trie"); err != nil {
+		return nil, err
+	}
+	uaRegex, epRegex, err := parseRegexFields(m)
+	if err != nil {
+		return nil, err
+	}
+	clusterArgSets, err := parseClusterArgSetsFromTOML(m)
+	if err != nil {
+		return nil, err
+	}
+	useForJail, err := parseUseForJail(m)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateUseForJailAlignment(clusterArgSets, useForJail); err != nil {
+		return nil, err
+	}
 	stc := &SlidingTrieConfig{
 		UserAgentRegex: uaRegex,
 		EndpointRegex:  epRegex,
-		ClusterArgSets: parseClusterArgSetsFromTOML(m),
-		UseForJail:     parseUseForJail(m),
+		ClusterArgSets: clusterArgSets,
+		UseForJail:     useForJail,
 	}
 	if err := stc.CompileRegex(); err != nil {
 		return nil, err
 	}
-	if v, ok := m["slidingWindowMaxTime"].(string); ok {
-		duration, err := time.ParseDuration(v)
+	if v, present := m["slidingWindowMaxTime"]; present {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("slidingWindowMaxTime must be a string, got %T", v)
+		}
+		duration, err := time.ParseDuration(s)
 		if err != nil {
-			return nil, fmt.Errorf("invalid slidingWindowMaxTime %q: %w", v, err)
+			return nil, fmt.Errorf("invalid slidingWindowMaxTime %q: %w", s, err)
 		}
 		stc.SlidingWindowMaxTime = duration
 	}
-	if v, ok := m["slidingWindowMaxSize"].(int64); ok {
-		stc.SlidingWindowMaxSize = int(v)
+	if v, present := m["slidingWindowMaxSize"]; present {
+		n, ok := v.(int64)
+		if !ok {
+			return nil, fmt.Errorf("slidingWindowMaxSize must be an integer, got %T", v)
+		}
+		stc.SlidingWindowMaxSize = int(n)
 	}
-	if v, ok := m["sleepBetweenIterations"].(int64); ok {
-		stc.SleepBetweenIterations = int(v)
+	if v, present := m["sleepBetweenIterations"]; present {
+		n, ok := v.(int64)
+		if !ok {
+			return nil, fmt.Errorf("sleepBetweenIterations must be an integer, got %T", v)
+		}
+		stc.SleepBetweenIterations = int(n)
 	}
 	return stc, nil
+}
+
+// validateUseForJailAlignment enforces that a PRESENT useForJail array lines up
+// positionally with clusterArgSets. Downstream (cli/api.go, analysis/static.go)
+// indexes argSet[i] against useForJail[i], so a present-but-mismatched array
+// silently shifts and disables operator-requested jail rules — that is the
+// landmine the ticket calls out, and it is a hard load error here.
+//
+// An OMITTED useForJail (len 0) is valid regardless of clusterArgSets length:
+// it is the explicit "cluster but never jail" default (every set is treated as
+// useForJail=false downstream), an omitted-optional-field, not a misalignment.
+// This keeps the OWNER's "don't over-fail on omitted optional fields" rule
+// while still catching the genuine length-mismatch bug.
+func validateUseForJailAlignment(clusterArgSets []ClusterArgSet, useForJail []bool) error {
+	if len(useForJail) == 0 {
+		return nil
+	}
+	if len(useForJail) != len(clusterArgSets) {
+		return fmt.Errorf("useForJail has %d entries but clusterArgSets has %d; they must match one-to-one (omit useForJail to apply no jail rules)", len(useForJail), len(clusterArgSets))
+	}
+	return nil
 }
 
 func (c *Config) GetJailFile() string {
@@ -482,6 +752,24 @@ func (c *Config) ValidateLive() error {
 	// Validate that at least one LiveTries configuration exists
 	if len(c.LiveTries) == 0 {
 		return fmt.Errorf("at least one sliding window configuration is required in live mode (e.g., [live.window_name])")
+	}
+
+	// Per-window required fields. These default to zero values when omitted,
+	// which silently produces an inert window: slidingWindowMaxSize=0 makes
+	// NewSlidingWindowTrie store maxEntries=0, so eviction trims the window to
+	// zero entries every iteration and clustering runs on an empty window.
+	// Fail loud at load instead (filters remain optional per OWNER). Naming the
+	// window keeps the diagnostic actionable.
+	for name, win := range c.LiveTries {
+		if win.SlidingWindowMaxSize <= 0 {
+			return fmt.Errorf("slidingWindowMaxSize must be > 0 in [live.%s]", name)
+		}
+		if win.SlidingWindowMaxTime <= 0 {
+			return fmt.Errorf("slidingWindowMaxTime must be > 0 in [live.%s]", name)
+		}
+		if len(win.ClusterArgSets) == 0 {
+			return fmt.Errorf("at least one clusterArgSets entry is required in [live.%s]", name)
+		}
 	}
 
 	return nil
@@ -667,6 +955,24 @@ func (c *Config) LoadUserAgentBlacklistPatterns() ([]string, error) {
 	return loadPatternFile(c.Global.UserAgentBlacklist)
 }
 
+// stripCommentLine normalizes one raw line from a pattern/CIDR list file:
+// trims surrounding whitespace, drops a full-line comment (empty or leading
+// '#'), strips a trailing inline '#...' comment, and re-trims. It returns the
+// cleaned token and whether the line carries content (false = skip this line).
+func stripCommentLine(raw string) (string, bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	if i := strings.IndexByte(line, '#'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+		if line == "" {
+			return "", false
+		}
+	}
+	return line, true
+}
+
 // loadPatternFile loads patterns from a file (for User-Agent whitelist/blacklist)
 func loadPatternFile(filename string) ([]string, error) {
 	file, err := os.Open(filename)
@@ -677,18 +983,13 @@ func loadPatternFile(filename string) ([]string, error) {
 
 	var patterns []string
 	scanner := bufio.NewScanner(file)
-	lineNum := 0
 
 	for scanner.Scan() {
-		lineNum++
-		line := strings.TrimSpace(scanner.Text())
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
+		pattern, ok := stripCommentLine(scanner.Text())
+		if !ok {
 			continue
 		}
-
-		patterns = append(patterns, line)
+		patterns = append(patterns, pattern)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -712,17 +1013,20 @@ func loadCIDRFile(filename string) ([]string, error) {
 
 	for scanner.Scan() {
 		lineNum++
-		line := strings.TrimSpace(scanner.Text())
+		raw := scanner.Text()
 
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
+		// Skip empty/comment lines and strip any trailing inline '#' comment.
+		// lineNum tracks physical lines; the original line text is echoed in
+		// diagnostics for operator clarity (ipv4_only_test.go relies on this).
+		line, ok := stripCommentLine(raw)
+		if !ok {
 			continue
 		}
 
 		// Validate CIDR format
 		_, ipNet, err := net.ParseCIDR(line)
 		if err != nil {
-			return nil, fmt.Errorf("invalid CIDR format at line %d in %s: %s", lineNum, filename, line)
+			return nil, fmt.Errorf("invalid CIDR format at line %d in %s: %s", lineNum, filename, strings.TrimSpace(raw))
 		}
 		// IPv4-only tool: reject IPv6 at the boundary (fail-loud). net.ParseCIDR
 		// accepts IPv6, which would otherwise reach the uint32 numeric hot path.
