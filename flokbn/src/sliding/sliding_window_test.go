@@ -507,12 +507,9 @@ func TestAddIPStat(t *testing.T) {
 		if stat.Last != now {
 			t.Errorf("Expected Last to be %v, got %v", now, stat.Last)
 		}
-		if len(stat.DeltaT) != 0 {
-			t.Errorf("Expected DeltaT to be empty, got %v", stat.DeltaT)
-		}
 	})
 
-	t.Run("Insert same IP again, DeltaT is set", func(t *testing.T) {
+	t.Run("Insert same IP again, count and Last update", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		ti1 := TimedIP{
 			IP:   ip1,
@@ -532,10 +529,8 @@ func TestAddIPStat(t *testing.T) {
 		if stat.Count != 2 {
 			t.Errorf("Expected count 2, got %d", stat.Count)
 		}
-		if len(stat.DeltaT) != 1 {
-			t.Errorf("Expected DeltaT length 1, got %d", len(stat.DeltaT))
-		} else if stat.DeltaT[0] != 2*time.Second {
-			t.Errorf("Expected DeltaT[0] to be 2s, got %v", stat.DeltaT[0])
+		if stat.Last != now.Add(2*time.Second) {
+			t.Errorf("Expected Last to be %v, got %v", now.Add(2*time.Second), stat.Last)
 		}
 	})
 
@@ -558,19 +553,6 @@ func TestAddIPStat(t *testing.T) {
 			t.Errorf("Expected ip2 to exist in map")
 		}
 	})
-
-	t.Run("DeltaT is not appended for first insert", func(t *testing.T) {
-		m := haxmap.New[uint32, IPStat](8)
-		ti := TimedIP{
-			IP:   ip1,
-			Time: now,
-		}
-		addIPStat(m, ip1, ti)
-		stat, _ := m.Get(iputils.IPToUint32(ip1))
-		if len(stat.DeltaT) != 0 {
-			t.Errorf("Expected DeltaT to be empty for first insert, got %v", stat.DeltaT)
-		}
-	})
 }
 func TestRemoveIPStat(t *testing.T) {
 	now := time.Now()
@@ -588,9 +570,8 @@ func TestRemoveIPStat(t *testing.T) {
 	t.Run("Delete single entry removes from map", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		stat := IPStat{
-			Last:   now,
-			DeltaT: []time.Duration{},
-			Count:  1,
+			Last:  now,
+			Count: 1,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
 		removeIPStat(m, ip1)
@@ -599,12 +580,11 @@ func TestRemoveIPStat(t *testing.T) {
 		}
 	})
 
-	t.Run("Delete decrements count and slices for multiple entries", func(t *testing.T) {
+	t.Run("Delete decrements count for multiple entries", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		stat := IPStat{
-			Last:   now,
-			DeltaT: []time.Duration{1 * time.Second, 2 * time.Second},
-			Count:  3,
+			Last:  now,
+			Count: 3,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
 		removeIPStat(m, ip1)
@@ -615,17 +595,13 @@ func TestRemoveIPStat(t *testing.T) {
 		if got.Count != 2 {
 			t.Errorf("Expected count 2, got %d", got.Count)
 		}
-		if len(got.DeltaT) != 1 || got.DeltaT[0] != 2*time.Second {
-			t.Errorf("Expected DeltaT to be [2s], got %v", got.DeltaT)
-		}
 	})
 
-	t.Run("Delete when count becomes zero resets DeltaT", func(t *testing.T) {
+	t.Run("Delete when count becomes zero removes entry", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		stat := IPStat{
-			Last:   now,
-			DeltaT: []time.Duration{1 * time.Second},
-			Count:  1,
+			Last:  now,
+			Count: 1,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat)
 		removeIPStat(m, ip1)
@@ -637,14 +613,12 @@ func TestRemoveIPStat(t *testing.T) {
 	t.Run("Delete handles multiple IPs independently", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		stat1 := IPStat{
-			Last:   now,
-			DeltaT: []time.Duration{},
-			Count:  1,
+			Last:  now,
+			Count: 1,
 		}
 		stat2 := IPStat{
-			Last:   now,
-			DeltaT: []time.Duration{},
-			Count:  1,
+			Last:  now,
+			Count: 1,
 		}
 		m.Set(iputils.IPToUint32(ip1), stat1)
 		m.Set(iputils.IPToUint32(ip2), stat2)
@@ -657,22 +631,19 @@ func TestRemoveIPStat(t *testing.T) {
 		}
 	})
 }
-func TestRemoveIPStat_EmptyDeltaTNoPanic(t *testing.T) {
-	// Verify that removeIPStat doesn't panic when DeltaT is empty
-	// (previously it would index the empty slice without bounds checking)
+func TestRemoveIPStat_DecrementKeepsEntry(t *testing.T) {
+	// Verify that removeIPStat decrements the count and keeps the entry when
+	// the count stays above zero.
 	m := haxmap.New[uint32, IPStat](8)
 	ip := net.ParseIP("10.0.0.1")
 	ipUint32 := iputils.IPToUint32(ip)
 
-	// Create a stat with count > 1 but empty DeltaT (edge case)
 	stat := IPStat{
-		Last:   time.Now(),
-		DeltaT: []time.Duration{},
-		Count:  2,
+		Last:  time.Now(),
+		Count: 2,
 	}
 	m.Set(ipUint32, stat)
 
-	// This should not panic
 	removeIPStat(m, ip)
 
 	got, exists := m.Get(ipUint32)
@@ -900,7 +871,7 @@ func TestSlidingWindow_EvictionBySize_OldestFirst(t *testing.T) {
 }
 
 // TestSlidingWindow_IPStatAccumulation verifies that repeated inserts of the
-// same IP correctly accumulate count and DeltaT.
+// same IP correctly accumulate count.
 func TestSlidingWindow_IPStatAccumulation(t *testing.T) {
 	s := NewSlidingWindowTrie(60*time.Second, 100)
 	now := time.Now()
@@ -919,15 +890,6 @@ func TestSlidingWindow_IPStatAccumulation(t *testing.T) {
 	}
 	if stat.Count != 3 {
 		t.Errorf("Expected count 3, got %d", stat.Count)
-	}
-	if len(stat.DeltaT) != 2 {
-		t.Errorf("Expected 2 DeltaT entries, got %d", len(stat.DeltaT))
-	}
-	if stat.DeltaT[0] != 2*time.Second {
-		t.Errorf("Expected DeltaT[0] = 2s, got %v", stat.DeltaT[0])
-	}
-	if stat.DeltaT[1] != 3*time.Second {
-		t.Errorf("Expected DeltaT[1] = 3s, got %v", stat.DeltaT[1])
 	}
 }
 

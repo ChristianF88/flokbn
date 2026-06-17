@@ -17,9 +17,8 @@ type TimedIP struct {
 }
 
 type IPStat struct {
-	Last   time.Time
-	DeltaT []time.Duration
-	Count  int
+	Last  time.Time
+	Count int
 }
 
 type SlidingWindow struct {
@@ -44,7 +43,7 @@ func NewSlidingWindowTrie(window time.Duration, maxEntries int) *SlidingWindow {
 		// chunks then become unreferenced and GC reclaims the whole generation).
 		Trie:       trie.NewTrieSeq(),
 		IPQueue:    make([]TimedIP, 0),
-		IPStats:    haxmap.New[uint32, IPStat](1 << 21), // 256M entries preallocated
+		IPStats:    haxmap.New[uint32, IPStat](1 << 21), // ~2M initial buckets (size hint)
 		timeLimit:  window,
 		maxEntries: maxEntries,
 	}
@@ -76,20 +75,13 @@ func (s *SlidingWindow) rebuildTrie() {
 }
 
 func addIPStat(m *haxmap.Map[uint32, IPStat], ip net.IP, timedIP TimedIP) {
-	var skipDeltaT bool = false
 	ipUint32 := iputils.IPToUint32(ip)
 	stat, exists := m.Get(ipUint32)
 	if !exists {
 		stat = IPStat{
-			Last:   timedIP.Time,
-			DeltaT: make([]time.Duration, 0),
-			Count:  0,
+			Last:  timedIP.Time,
+			Count: 0,
 		}
-		skipDeltaT = true
-	}
-
-	if !skipDeltaT {
-		stat.DeltaT = append(stat.DeltaT, timedIP.Time.Sub(stat.Last))
 	}
 	stat.Last = timedIP.Time
 	stat.Count++
@@ -106,10 +98,6 @@ func removeIPStat(m *haxmap.Map[uint32, IPStat], ip net.IP) {
 	if stat.Count <= 0 {
 		m.Del(ipUint32)
 		return
-	}
-	// Remove the first element from DeltaT
-	if len(stat.DeltaT) > 0 {
-		stat.DeltaT = stat.DeltaT[1:]
 	}
 	m.Set(ipUint32, stat)
 }
