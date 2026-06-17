@@ -66,10 +66,8 @@ func TestParseTimestamp_EOLBounds(t *testing.T) {
 			{"unterminated bracket, exactly 20 ts bytes at EOL", "1.2.3.4 [06/Jul/2025:19:57:26", wallClock},
 			{"unterminated bracket, 19 ts bytes at EOL", "1.2.3.4 [06/Jul/2025:19:57:2", time.Time{}},
 			{"garbage month", "1.2.3.4 [06/Xyz/2025:19:57:26 +0000]", time.Time{}},
-			// Decided behavior (Variant A): a timezone offset is IGNORED — the
-			// wall-clock digits are returned as UTC, so +0200 parses to the same
-			// instant string as +0000.
-			{"TZ offset ignored, wall-clock as UTC", "1.2.3.4 [06/Jul/2025:19:57:26 +0200]", wallClock},
+			// URGENT-09: +0000 is real UTC and equals the UTC wall-clock instant.
+			{"explicit +0000 == UTC wall-clock", "1.2.3.4 [06/Jul/2025:19:57:26 +0000]", wallClock},
 		}
 		for _, tc := range cases {
 			req, err := parseLineForTest(p, []byte(tc.line))
@@ -81,6 +79,53 @@ func TestParseTimestamp_EOLBounds(t *testing.T) {
 			}
 			if req.IPUint32 != ipStringToUint32("1.2.3.4") {
 				t.Errorf("%s: IPUint32 = %d, want 1.2.3.4", tc.name, req.IPUint32)
+			}
+		}
+	})
+
+	// URGENT-09 (live<->static timestamp parity): the static parser must RETAIN
+	// the log's timezone offset instead of mislabeling the wall-clock as UTC.
+	// The wall-clock digits are unchanged (06:00 stays 06:00 — the OWNER
+	// constraint), but the absolute instant now reflects the real offset, so the
+	// same line yields the same Request.Timestamp under both the live ingestor
+	// (already offset-aware) and the static parser. This case encodes the very
+	// bug being fixed (it previously asserted "+0200 == UTC wall-clock").
+	t.Run("retains timezone offset", func(t *testing.T) {
+		p := mustNewParser(t, "%h [%t]")
+		cases := []struct {
+			name      string
+			line      string
+			offsetHrs int // signed hours of the log offset
+		}{
+			{"+0200", "1.2.3.4 [06/Jul/2025:19:57:26 +0200]", 2},
+			{"-0700", "1.2.3.4 [06/Jul/2025:19:57:26 -0700]", -7},
+		}
+		for _, tc := range cases {
+			req, err := parseLineForTest(p, []byte(tc.line))
+			if err != nil {
+				t.Fatalf("%s: parse error: %v", tc.name, err)
+			}
+			// Wall-clock digits unchanged: still 19:57:26 on 2025-07-06.
+			if req.Timestamp.Year() != 2025 || req.Timestamp.Month() != time.July ||
+				req.Timestamp.Day() != 6 || req.Timestamp.Hour() != 19 ||
+				req.Timestamp.Minute() != 57 || req.Timestamp.Second() != 26 {
+				t.Errorf("%s: wall-clock changed: got %v, want 2025-07-06 19:57:26", tc.name, req.Timestamp)
+			}
+			// Zone offset is retained, not UTC.
+			if _, off := req.Timestamp.Zone(); off != tc.offsetHrs*3600 {
+				t.Errorf("%s: zone offset = %ds, want %ds", tc.name, off, tc.offsetHrs*3600)
+			}
+			// Absolute instant = UTC wall-clock minus the offset (a +0200 local
+			// 19:57 is 17:57 UTC; a -0700 local 19:57 is 26:57 == next-day UTC).
+			wantInstant := wallClock.Add(time.Duration(-tc.offsetHrs) * time.Hour)
+			if !req.Timestamp.Equal(wantInstant) {
+				t.Errorf("%s: instant = %v, want %v (UTC wall-clock %+dh)",
+					tc.name, req.Timestamp.UTC(), wantInstant, -tc.offsetHrs)
+			}
+			// The +0200 instant must NOT equal the UTC wall-clock (it is 2h earlier
+			// as an instant) — proves the offset is no longer discarded.
+			if tc.offsetHrs != 0 && req.Timestamp.Equal(wallClock) {
+				t.Errorf("%s: instant equals UTC wall-clock — offset was discarded", tc.name)
 			}
 		}
 	})

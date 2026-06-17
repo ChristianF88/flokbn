@@ -3,6 +3,7 @@ package ingestor
 import (
 	"net"
 	"testing"
+	"time"
 
 	lj "github.com/elastic/go-lumber/lj"
 )
@@ -100,6 +101,108 @@ func TestParseEvent_InvalidTimestamp(t *testing.T) {
 	_, err := parseEvent(evt, &req)
 	if err == nil {
 		t.Errorf("expected error for invalid timestamp, got nil")
+	}
+}
+
+// TestParseEvent_RetainsTimezoneOffset documents the live side of the URGENT-09
+// timestamp-parity fix: the live ingestor parses the log offset (-0700/+0200)
+// and retains it on Request.Timestamp. The wall-clock digits are unchanged
+// (06:00 stays 06:00) and the absolute instant reflects the real offset — which
+// is now exactly what the STATIC parser also produces for the same line, so live
+// and static agree (the previous 7h skew came from the static side discarding
+// the offset). A -0700 06:00 line is 13:00 UTC; a +0200 06:00 line is 04:00 UTC.
+func TestParseEvent_RetainsTimezoneOffset(t *testing.T) {
+	wallClockUTC := func() time.Time { return time.Date(2025, 7, 6, 6, 0, 0, 0, time.UTC) }
+	cases := []struct {
+		name      string
+		log       string
+		offsetSec int
+	}{
+		{"-0700", `1.2.3.4 - - [06/Jul/2025:06:00:00 -0700] "GET / HTTP/1.1" 200 1 "-" "UA"`, -7 * 3600},
+		{"+0200", `1.2.3.4 - - [06/Jul/2025:06:00:00 +0200] "GET / HTTP/1.1" 200 1 "-" "UA"`, 2 * 3600},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var req Request
+			if _, err := parseEvent(map[string]interface{}{"message": tc.log}, &req); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			// Wall-clock digits unchanged.
+			if req.Timestamp.Hour() != 6 || req.Timestamp.Minute() != 0 {
+				t.Errorf("wall-clock changed: got %v, want 06:00", req.Timestamp)
+			}
+			if _, off := req.Timestamp.Zone(); off != tc.offsetSec {
+				t.Errorf("zone offset = %ds, want %ds", off, tc.offsetSec)
+			}
+			// Absolute instant = UTC wall-clock minus the offset.
+			wantInstant := wallClockUTC().Add(time.Duration(-tc.offsetSec) * time.Second)
+			if !req.Timestamp.Equal(wantInstant) {
+				t.Errorf("instant = %v, want %v", req.Timestamp.UTC(), wantInstant)
+			}
+		})
+	}
+}
+
+// TestParseEvent_DashStatusBytesAreZeroNotMalformed is the URGENT-09 repro: a
+// "-" (absent) status or bytes field must be treated as a silent zero, NOT
+// counted as malformed — parity with the static log parser. Previously
+// strconv.Atoi("-") errored and incremented malformed, systematically inflating
+// MalformedFieldsTotal (304s and many proxies log "-" for bytes routinely).
+func TestParseEvent_DashStatusBytesAreZeroNotMalformed(t *testing.T) {
+	cases := []struct {
+		name          string
+		log           string
+		wantStatus    uint16
+		wantBytes     uint32
+		wantMalformed int
+	}{
+		{
+			name:          "dash bytes (304 with no body)",
+			log:           `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 304 - "-" "UA"`,
+			wantStatus:    304,
+			wantBytes:     0,
+			wantMalformed: 0,
+		},
+		{
+			name:          "dash status and dash bytes",
+			log:           `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" - - "-" "UA"`,
+			wantStatus:    0,
+			wantBytes:     0,
+			wantMalformed: 0,
+		},
+		{
+			name:          "genuinely bad status still counts as malformed",
+			log:           `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 2XX 100 "-" "UA"`,
+			wantStatus:    0,
+			wantBytes:     100,
+			wantMalformed: 1,
+		},
+		{
+			name:          "genuinely bad bytes still counts as malformed",
+			log:           `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 12x4 "-" "UA"`,
+			wantStatus:    200,
+			wantBytes:     0,
+			wantMalformed: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			evt := map[string]interface{}{"message": tc.log}
+			var req Request
+			malformed, err := parseEvent(evt, &req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if malformed != tc.wantMalformed {
+				t.Errorf("malformed = %d, want %d", malformed, tc.wantMalformed)
+			}
+			if req.Status != tc.wantStatus {
+				t.Errorf("Status = %d, want %d", req.Status, tc.wantStatus)
+			}
+			if req.Bytes != tc.wantBytes {
+				t.Errorf("Bytes = %d, want %d", req.Bytes, tc.wantBytes)
+			}
+		})
 	}
 }
 

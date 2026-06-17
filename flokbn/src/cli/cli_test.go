@@ -16,24 +16,43 @@ import (
 
 func TestParseFlexibleTime(t *testing.T) {
 	tests := []struct {
-		input   string
-		want    time.Time
-		wantErr bool
+		input         string
+		want          time.Time
+		wantHasOffset bool
+		wantOffsetSec int // expected zone offset (only meaningful when wantHasOffset)
+		wantErr       bool
 	}{
 		{
-			input:   "2024-06-01 13:45",
-			want:    time.Date(2024, 6, 1, 13, 45, 0, 0, time.UTC),
-			wantErr: false,
+			input: "2024-06-01 13:45",
+			want:  time.Date(2024, 6, 1, 13, 45, 0, 0, time.UTC),
 		},
 		{
-			input:   "2024-06-01 13",
-			want:    time.Date(2024, 6, 1, 13, 0, 0, 0, time.UTC),
-			wantErr: false,
+			input: "2024-06-01 13",
+			want:  time.Date(2024, 6, 1, 13, 0, 0, 0, time.UTC),
 		},
 		{
-			input:   "2024-06-01",
-			want:    time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
-			wantErr: false,
+			input: "2024-06-01",
+			want:  time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		},
+		// URGENT-09 offset-bearing layouts: parsed as a true instant with an
+		// explicit offset flag.
+		{
+			input:         "2024-06-01 13:45 +0100",
+			want:          time.Date(2024, 6, 1, 13, 45, 0, 0, time.FixedZone("", 3600)),
+			wantHasOffset: true,
+			wantOffsetSec: 3600,
+		},
+		{
+			input:         "2024-06-01 13 -0700",
+			want:          time.Date(2024, 6, 1, 13, 0, 0, 0, time.FixedZone("", -7*3600)),
+			wantHasOffset: true,
+			wantOffsetSec: -7 * 3600,
+		},
+		{
+			input:         "2024-06-01 +0200",
+			want:          time.Date(2024, 6, 1, 0, 0, 0, 0, time.FixedZone("", 2*3600)),
+			wantHasOffset: true,
+			wantOffsetSec: 2 * 3600,
 		},
 		{
 			input:   "2024/06/01",
@@ -50,20 +69,27 @@ func TestParseFlexibleTime(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got, err := parseFlexibleTime(tt.input)
+		got, hasOffset, err := parseFlexibleTime(tt.input)
 		if tt.wantErr {
 			if err == nil {
 				t.Errorf("parseFlexibleTime(%q) expected error, got nil", tt.input)
 			}
-		} else {
-			if err != nil {
-				t.Errorf("parseFlexibleTime(%q) unexpected error: %v", tt.input, err)
-			} else {
-				// Compare time in UTC for consistency
-				got = got.UTC()
-				if !got.Equal(tt.want) {
-					t.Errorf("parseFlexibleTime(%q) = %v, want %v", tt.input, got, tt.want)
-				}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseFlexibleTime(%q) unexpected error: %v", tt.input, err)
+			continue
+		}
+		if hasOffset != tt.wantHasOffset {
+			t.Errorf("parseFlexibleTime(%q) hasOffset = %v, want %v", tt.input, hasOffset, tt.wantHasOffset)
+		}
+		// The two times must denote the same instant.
+		if !got.Equal(tt.want) {
+			t.Errorf("parseFlexibleTime(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+		if tt.wantHasOffset {
+			if _, off := got.Zone(); off != tt.wantOffsetSec {
+				t.Errorf("parseFlexibleTime(%q) zone offset = %d, want %d", tt.input, off, tt.wantOffsetSec)
 			}
 		}
 	}

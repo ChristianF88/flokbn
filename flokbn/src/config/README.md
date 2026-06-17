@@ -39,9 +39,13 @@ Analyze historical log files.
 --startTime value       # Start time for analysis
                         # Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM
                         # Example: --startTime "2025-01-15 10:00"
+                        # Zone-less bounds match a log line's local wall-clock
+                        # regardless of its timezone offset. Append an offset
+                        # (e.g. "2025-01-15 10:00 +0100") to compare as a true
+                        # instant instead.
 
 --endTime value         # End time for analysis
-                        # Same formats as startTime
+                        # Same formats as startTime (incl. optional ±HHMM offset)
 ```
 
 #### Pattern Filtering
@@ -234,7 +238,9 @@ Each `[static.NAME]` section creates an independent trie.
 
 ```toml
 [static.trie_name]
-# Optional: Time range filtering
+# Optional: Time range filtering. Config bounds are RFC3339 (they carry a zone)
+# and are compared as a true instant against each log line's offset-aware
+# timestamp.
 startTime = "2025-01-15T00:00:00Z"
 endTime = "2025-01-15T23:59:59Z"
 

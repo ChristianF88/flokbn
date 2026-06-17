@@ -173,6 +173,42 @@ func TestTCPIngestor_CloseTransitionsIsClosed(t *testing.T) {
 	}
 }
 
+// TestTCPIngestor_CloseNoSpuriousError is the URGENT-09 repro: Close() used to
+// close the lumber server (which already closes the listener) and THEN close
+// the listener a second time, storing a spurious "use of closed network
+// connection" error and discarding the real server error. Close must now return
+// nil for a healthy shutdown and stay idempotent across repeated calls.
+func TestTCPIngestor_CloseNoSpuriousError(t *testing.T) {
+	t.Run("after Accept", func(t *testing.T) {
+		ing := newTestIngestor(t)
+		if err := ing.Accept(); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+		if err := ing.Close(); err != nil {
+			t.Errorf("first Close() = %v, want nil (no double-close error)", err)
+		}
+		// Idempotent: repeated Close calls return the same (nil) result.
+		if err := ing.Close(); err != nil {
+			t.Errorf("second Close() = %v, want nil (idempotent)", err)
+		}
+		if !ing.IsClosed() {
+			// IsClosed flips once the pump goroutine observes the closed channel.
+			waitFor(t, 5*time.Second, "ingestor to report closed", ing.IsClosed)
+		}
+	})
+
+	t.Run("without Accept (listener-only path)", func(t *testing.T) {
+		ing := newTestIngestor(t)
+		// server is nil: Close must close the listener and report no error.
+		if err := ing.Close(); err != nil {
+			t.Errorf("Close() without Accept = %v, want nil", err)
+		}
+		if err := ing.Close(); err != nil {
+			t.Errorf("second Close() = %v, want nil (idempotent)", err)
+		}
+	})
+}
+
 func TestTCPIngestor_IsClosedBeforeAccept(t *testing.T) {
 	ing := newTestIngestor(t)
 	if !ing.IsClosed() {

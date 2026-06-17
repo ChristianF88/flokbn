@@ -20,6 +20,6 @@ func FuzzParseFlexibleTime(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, s string) {
 		// Should not panic
-		parseFlexibleTime(s)
+		_, _, _ = parseFlexibleTime(s)
 	})
 }

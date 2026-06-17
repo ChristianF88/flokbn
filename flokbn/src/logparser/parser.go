@@ -1259,8 +1259,14 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 //
 // Expected format: "06/Jul/2025:19:57:26 +0000" within line[start:end], where
 // end is the field's exclusive end (e.g. the position of the closing ']').
-// Only the first 20 bytes (date and time) are read; a trailing timezone offset
-// is ignored and the wall-clock time is returned as UTC.
+// The first 20 bytes (date and time) are the wall-clock fields. When a trailing
+// "+HHMM"/"-HHMM" zone offset is present (end-start >= 26), that offset is
+// RETAINED on the returned time: the wall-clock digits are unchanged (06:00
+// stays 06:00) but the location reflects the log's real offset instead of being
+// mislabeled UTC. This is URGENT-09 live<->static timestamp parity: the live
+// ingestor already parses offset-aware, so the static parser must too. When no
+// offset is present (the 20-byte EOL forms), the wall-clock is returned as UTC
+// (unchanged behavior).
 //
 // Performance optimizations:
 //   - Direct byte-to-int conversion using bit masking: (b & 0x0F)
@@ -1322,7 +1328,54 @@ func parseTimestamp(line []byte, start, end int) time.Time {
 	minute := int(line[start+15]&0x0F)*10 + int(line[start+16]&0x0F)
 	second := int(line[start+18]&0x0F)*10 + int(line[start+19]&0x0F)
 
-	return time.Date(year, month, day, hour, minute, second, 0, time.UTC)
+	// Retain the log's timezone offset when present (URGENT-09 parity). The
+	// offset suffix is " +HHMM"/" -HHMM": space at start+20, sign at start+21,
+	// four digits at start+22..25 — 6 bytes after the 20-byte core, so it is
+	// in-bounds only when end-start >= 26. Shorter (20-byte EOL) fields keep the
+	// historical UTC behavior.
+	loc := time.UTC
+	if end-start >= 26 {
+		loc = offsetLocation(line[start+21 : start+26])
+	}
+
+	return time.Date(year, month, day, hour, minute, second, 0, loc)
+}
+
+// offsetCache memoizes *time.Location values keyed by the 5 offset bytes
+// ("+HHMM"/"-HHMM"), so parseTimestamp stays allocation-free after warmup
+// (time.FixedZone allocates and must never be called per line). Realistic logs
+// use a single offset, so the cache holds a handful of entries. A sync.Map read
+// for an existing key allocates nothing.
+var offsetCache sync.Map // map[[5]byte]*time.Location
+
+// offsetLocation returns a cached *time.Location for the "+HHMM"/"-HHMM" offset
+// bytes. "+0000" fast-paths to time.UTC (no map hit, no alloc) so UTC logs —
+// including the generated demo — see zero new allocations on the hot path. Any
+// malformed offset falls back to UTC, preserving the wall-clock digits.
+func offsetLocation(b []byte) *time.Location {
+	// b is exactly 5 bytes: sign + HHMM.
+	sign := b[0]
+	h0, h1 := b[1]-'0', b[2]-'0'
+	m0, m1 := b[3]-'0', b[4]-'0'
+	// Validate digits and sign; on anything unexpected keep UTC wall-clock.
+	if h0 > 9 || h1 > 9 || m0 > 9 || m1 > 9 || (sign != '+' && sign != '-') {
+		return time.UTC
+	}
+	totalSec := (int(h0)*10+int(h1))*3600 + (int(m0)*10+int(m1))*60
+	if totalSec == 0 {
+		return time.UTC // +0000 / -0000: real UTC, fast path
+	}
+	var key [5]byte
+	copy(key[:], b)
+	if v, ok := offsetCache.Load(key); ok {
+		return v.(*time.Location)
+	}
+	if sign == '-' {
+		totalSec = -totalSec
+	}
+	loc := time.FixedZone(string(b), totalSec)
+	actual, _ := offsetCache.LoadOrStore(key, loc)
+	return actual.(*time.Location)
 }
 
 // parseMethod extracts HTTP method using first-character optimization

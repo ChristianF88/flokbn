@@ -235,12 +235,19 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 		fields = strings.Fields(msg[end+2:])
 	}
 	if len(fields) >= 2 {
-		if status, err := strconv.Atoi(fields[0]); err == nil {
+		// "-" = absent (Apache convention): silent zero, NOT malformed — parity
+		// with the static log parser (parser.go status/bytes handling). Anything
+		// else non-numeric stays counted as malformed.
+		if fields[0] == "-" {
+			// absent status: leave out.Status == 0, not counted
+		} else if status, err := strconv.Atoi(fields[0]); err == nil {
 			out.Status = uint16(status)
 		} else {
 			malformed++
 		}
-		if bytesSent, err := strconv.Atoi(fields[1]); err == nil {
+		if fields[1] == "-" {
+			// absent bytes: leave out.Bytes == 0, not counted
+		} else if bytesSent, err := strconv.Atoi(fields[1]); err == nil {
 			out.Bytes = uint32(bytesSent)
 		} else {
 			malformed++
@@ -340,10 +347,22 @@ func (ing *TCPIngestor) IsClosed() bool {
 // cancellation watcher plus a deferred cleanup) are collapsed into one.
 func (ing *TCPIngestor) Close() error {
 	ing.closeOnce.Do(func() {
+		// go-lumber's Server.Close() already closes the underlying listener, so
+		// close the server XOR the listener — never both. Closing both stored a
+		// spurious "use of closed network connection" (net.ErrClosed) and
+		// discarded the real server error (URGENT-09).
+		var err error
 		if ing.server != nil {
-			ing.server.Close()
+			err = ing.server.Close()
+		} else {
+			err = ing.listener.Close()
 		}
-		ing.closeErr = ing.listener.Close()
+		// An already-closed listener is a benign no-op, not an operator-visible
+		// error: map net.ErrClosed to nil.
+		if errors.Is(err, net.ErrClosed) {
+			err = nil
+		}
+		ing.closeErr = err
 	})
 	return ing.closeErr
 }

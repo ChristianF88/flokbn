@@ -130,11 +130,11 @@ var (
 	}
 	startTimeFlag = &cli.StringFlag{
 		Name:  "startTime",
-		Usage: "Start time (formats: YYYY-MM-DD, YYYY-MM-DD HH, or YYYY-MM-DD HH:MM)",
+		Usage: "Start time. Zone-less (e.g. '2025-07-06 06:00') matches a log line's local clock regardless of its offset; add an offset (e.g. '2025-07-06 06:00 +0100') to compare as a true instant. Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM, optionally + ' ±HHMM'",
 	}
 	endTimeFlag = &cli.StringFlag{
 		Name:  "endTime",
-		Usage: "End time (formats: YYYY-MM-DD, YYYY-MM-DD HH, or YYYY-MM-DD HH:MM)",
+		Usage: "End time. Zone-less (e.g. '2025-07-06 06:00') matches a log line's local clock regardless of its offset; add an offset (e.g. '2025-07-06 06:00 +0100') to compare as a true instant. Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM, optionally + ' ±HHMM'",
 	}
 	clusterArgSetsFlag = &cli.StringSliceFlag{
 		Name:  "clusterArgSets",
@@ -210,20 +210,36 @@ func validateLogFileExists(logfilePath string) error {
 	return nil
 }
 
-func parseFlexibleTime(input string) (time.Time, error) {
-	formats := []string{
+// parseFlexibleTime parses a CLI --startTime/--endTime bound. It returns the
+// parsed time and whether the bound carried an EXPLICIT timezone offset
+// (URGENT-09). Zone-less bounds (no offset layout matched) are compared
+// wall-clock / zone-agnostically against log lines; offset-bearing bounds are
+// compared as a true instant. Offset layouts are tried first so a trailing
+// "-0700" is not mis-parsed by a zone-less layout.
+func parseFlexibleTime(input string) (t time.Time, hasOffset bool, err error) {
+	offsetFormats := []string{
+		"2006-01-02 15:04 -0700", // full datetime + offset
+		"2006-01-02 15 -0700",    // date + hour + offset
+		"2006-01-02 -0700",       // date + offset
+	}
+	for _, layout := range offsetFormats {
+		if parsed, perr := time.Parse(layout, input); perr == nil {
+			return parsed, true, nil
+		}
+	}
+
+	zonelessFormats := []string{
 		"2006-01-02 15:04", // full datetime
 		"2006-01-02 15",    // date + hour
 		"2006-01-02",       // just date
 	}
-
-	for _, layout := range formats {
-		if t, err := time.Parse(layout, input); err == nil {
-			return t, nil
+	for _, layout := range zonelessFormats {
+		if parsed, perr := time.Parse(layout, input); perr == nil {
+			return parsed, false, nil
 		}
 	}
 
-	return time.Time{}, fmt.Errorf("invalid time format: %s", input)
+	return time.Time{}, false, fmt.Errorf("invalid time format: %s", input)
 }
 
 // Command handler functions to reduce deep nesting
@@ -409,18 +425,20 @@ func handleStaticFlagsMode(c *cli.Context) error {
 
 	// Parse time arguments
 	if start := c.String("startTime"); start != "" {
-		st, err := parseFlexibleTime(start)
+		st, hasOffset, err := parseFlexibleTime(start)
 		if err != nil {
 			return fmt.Errorf("error parsing start time: %w", err)
 		}
 		trieConfig.StartTime = &st
+		trieConfig.StartTimeHasOffset = hasOffset
 	}
 	if end := c.String("endTime"); end != "" {
-		et, err := parseFlexibleTime(end)
+		et, hasOffset, err := parseFlexibleTime(end)
 		if err != nil {
 			return fmt.Errorf("error parsing end time: %w", err)
 		}
 		trieConfig.EndTime = &et
+		trieConfig.EndTimeHasOffset = hasOffset
 	}
 
 	// Parse cluster arguments

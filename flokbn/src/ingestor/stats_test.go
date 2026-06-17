@@ -26,13 +26,16 @@ func TestParseEvent_CountsMalformedStatusAndBytes(t *testing.T) {
 			wantMalformed: 1, wantStatus: 0, wantBytes: 10,
 		},
 		{
+			// URGENT-09: a genuinely non-numeric bytes token (not "-") still counts
+			// as malformed. "-" is now a silent absent zero (covered separately by
+			// TestParseEvent_DashStatusBytesAreZeroNotMalformed).
 			name:          "BadBytes",
-			log:           `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 - "-" "UA"`,
+			log:           `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 12x4 "-" "UA"`,
 			wantMalformed: 1, wantStatus: 200, wantBytes: 0,
 		},
 		{
 			name:          "BothBad",
-			log:           `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" oops - "-" "UA"`,
+			log:           `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" oops 12x4 "-" "UA"`,
 			wantMalformed: 2, wantStatus: 0, wantBytes: 0,
 		},
 	}

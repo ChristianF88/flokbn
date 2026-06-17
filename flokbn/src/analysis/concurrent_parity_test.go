@@ -2,7 +2,6 @@ package analysis
 
 import (
 	"testing"
-	"time"
 
 	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
@@ -28,8 +27,8 @@ func runSequential(reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserA
 	wlIPs := make([]string, 0)
 	blIPs := make([]string, 0)
 	var ips []uint32
-	var zeroTime time.Time // no time filters in this test
-	filterRequests(reqs, tc, zeroTime, zeroTime, m,
+	var noBounds timeBounds // no time filters in this test
+	filterRequests(reqs, tc, noBounds, m,
 		wlSet, blSet, &wlIPs, &blIPs,
 		&fc.filteredRequestCount, &ips, &fc.invalidIPCount, &fc.uaWhitelistExcluded)
 	fc.whitelistIPs = wlIPs
@@ -47,8 +46,8 @@ func runConcurrent(t *testing.T, reqs []ingestor.Request, tc *config.TrieConfig,
 	wlIPs := make([]string, 0)
 	blIPs := make([]string, 0)
 	var ips []uint32
-	var zeroTime time.Time // no time filters in this test
-	if err := filterRequestsConcurrent(reqs, tc, zeroTime, zeroTime, m,
+	var noBounds timeBounds // no time filters in this test
+	if err := filterRequestsConcurrent(reqs, tc, noBounds, m,
 		wlSet, blSet, &wlIPs, &blIPs,
 		&fc.filteredRequestCount, &ips, &fc.invalidIPCount, &fc.uaWhitelistExcluded); err != nil {
 		t.Fatalf("filterRequestsConcurrent error: %v", err)

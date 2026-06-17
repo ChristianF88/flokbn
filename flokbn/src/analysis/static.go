@@ -307,7 +307,9 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	// below), so the lock-free sequential allocator is safe here.
 	trieInstance := trie.NewLockedTrieSeq()
 
-	// Apply filtering and collect IPs for parallel insertion
+	// Apply filtering and collect IPs for parallel insertion. The raw start/end
+	// times feed the TimeRange output below; `bounds` carries the URGENT-09
+	// wall-clock-vs-instant comparison semantics used by the filter loops.
 	var startTime, endTime time.Time
 	if trieConfig.StartTime != nil {
 		startTime = *trieConfig.StartTime
@@ -315,6 +317,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	if trieConfig.EndTime != nil {
 		endTime = *trieConfig.EndTime
 	}
+	bounds := makeTimeBounds(trieConfig)
 
 	// Add regex filters to parameters if they exist
 	if trieConfig.UserAgentRegex != "" {
@@ -400,7 +403,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 		if usesConcurrency {
 			// Concurrent filtering for large datasets with complex patterns
 			if err := filterRequestsConcurrent(
-				requests, trieConfig, startTime, endTime,
+				requests, trieConfig, bounds,
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
 				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
@@ -410,7 +413,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 		} else {
 			// Sequential filtering for simple cases (faster for small datasets)
 			filterRequests(
-				requests, trieConfig, startTime, endTime,
+				requests, trieConfig, bounds,
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
 				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
@@ -754,7 +757,7 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 func filterRequestsConcurrent(
 	requests []ingestor.Request,
 	trieConfig *config.TrieConfig,
-	startTime, endTime time.Time,
+	bounds timeBounds,
 	userAgentMatcher *cidr.UserAgentMatcher,
 	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[string]bool,
 	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
@@ -782,7 +785,7 @@ func filterRequestsConcurrent(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			filterWorker(requestChan, resultChan, trieConfig, startTime, endTime,
+			filterWorker(requestChan, resultChan, trieConfig, bounds,
 				userAgentMatcher)
 		}()
 	}
@@ -880,7 +883,7 @@ func filterRequestsConcurrent(
 func filterRequests(
 	requests []ingestor.Request,
 	trieConfig *config.TrieConfig,
-	startTime, endTime time.Time,
+	bounds timeBounds,
 	userAgentMatcher *cidr.UserAgentMatcher,
 	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[string]bool,
 	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
@@ -892,10 +895,7 @@ func filterRequests(
 	// Single pass through requests with optimized filtering
 	for _, r := range requests {
 		// Apply time filtering
-		if !startTime.IsZero() && r.Timestamp.Before(startTime) {
-			continue
-		}
-		if !endTime.IsZero() && r.Timestamp.After(endTime) {
+		if bounds.excluded(r.Timestamp) {
 			continue
 		}
 

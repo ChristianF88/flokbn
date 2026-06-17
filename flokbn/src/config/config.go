@@ -47,6 +47,14 @@ type TrieConfig struct {
 	ClusterArgSets []ClusterArgSet
 	UseForJail     []bool `toml:"useForJail"`
 
+	// URGENT-09: whether the corresponding bound carried an EXPLICIT timezone
+	// offset. When true, the bound is compared as a TRUE INSTANT; when false
+	// (the default, zone-less bound), comparison is wall-clock / zone-agnostic so
+	// a bound "06:00" matches a log line whose local clock reads 06:00 regardless
+	// of the log's offset.
+	StartTimeHasOffset bool `toml:"-"`
+	EndTimeHasOffset   bool `toml:"-"`
+
 	// Raw values for validation reporting when parsing fails
 	StartTimeRaw string `toml:"-"`
 	EndTimeRaw   string `toml:"-"`
@@ -580,8 +588,11 @@ func parseTrieConfig(m map[string]any) (*TrieConfig, error) {
 			return nil, fmt.Errorf("startTime must be a string, got %T", v)
 		}
 		if s != "" {
+			// RFC3339 inherently carries a zone designator (Z or +hh:mm), so a
+			// config bound is an EXPLICIT-offset / true-instant bound (URGENT-09).
 			if t, err := time.Parse(time.RFC3339, s); err == nil {
 				tc.StartTime = &t
+				tc.StartTimeHasOffset = true
 			} else {
 				tc.StartTimeRaw = s
 			}
@@ -595,6 +606,7 @@ func parseTrieConfig(m map[string]any) (*TrieConfig, error) {
 		if s != "" {
 			if t, err := time.Parse(time.RFC3339, s); err == nil {
 				tc.EndTime = &t
+				tc.EndTimeHasOffset = true
 			} else {
 				tc.EndTimeRaw = s
 			}
