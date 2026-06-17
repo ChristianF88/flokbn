@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ChristianF88/flokbn/iputils"
+	"github.com/ChristianF88/flokbn/trie"
 	"github.com/alphadose/haxmap"
 )
 
@@ -927,5 +928,89 @@ func TestSlidingWindow_IPStatAccumulation(t *testing.T) {
 	}
 	if stat.DeltaT[1] != 3*time.Second {
 		t.Errorf("Expected DeltaT[1] = 3s, got %v", stat.DeltaT[1])
+	}
+}
+
+// countResidentTrieNodes walks the window trie and counts every node still
+// referenced from the Root (excluding the Root). After Delete pruning +
+// periodic rebuild, this reflects only the live window, not every distinct IP
+// ever inserted.
+func countResidentTrieNodes(n *trie.TrieNode) int {
+	if n == nil {
+		return 0
+	}
+	return 1 + countResidentTrieNodes(n.Children[0]) + countResidentTrieNodes(n.Children[1])
+}
+
+// TestSlidingWindowMemoryBoundedByWindow (URGENT-03) proves the live trie's
+// memory tracks WINDOW SIZE, not distinct-IPs-ever-seen. It feeds many distinct
+// IPs across several Update cycles with a small maxEntries so each cycle evicts
+// the previous window's IPs; the resident node count, IPQueue, IPStats, and
+// CountAll must all stay bounded to ~window size rather than growing with the
+// total number of distinct IPs fed.
+func TestSlidingWindowMemoryBoundedByWindow(t *testing.T) {
+	const maxEntries = 500
+	// A long time limit so eviction is driven purely by maxEntries (size),
+	// keeping the test deterministic and time-independent.
+	s := NewSlidingWindowTrie(time.Hour, maxEntries)
+
+	const cycles = 40
+	const perCycle = 1000 // > maxEntries so every cycle forces size eviction
+	now := time.Now()
+
+	// A fully distinct IP for every single insert across all cycles, so a
+	// leaking trie would accumulate cycles*perCycle = 40,000 distinct leaves.
+	var counter uint32 = 1
+	nextIP := func() net.IP {
+		ip := iputils.Uint32ToIP(counter)
+		counter++
+		return ip
+	}
+
+	for c := 0; c < cycles; c++ {
+		batch := make([]TimedIP, 0, perCycle)
+		for i := 0; i < perCycle; i++ {
+			batch = append(batch, TimedIP{IP: nextIP(), Time: now})
+		}
+		s.Update(batch)
+
+		// IPQueue is hard-capped at maxEntries by size eviction.
+		if len(s.IPQueue) > maxEntries {
+			t.Fatalf("cycle %d: IPQueue grew past maxEntries: %d > %d", c, len(s.IPQueue), maxEntries)
+		}
+	}
+
+	totalDistinctFed := uint32(cycles * perCycle)
+
+	// CountAll reflects only the live window.
+	if got := s.Trie.CountAll(); got > uint32(maxEntries) {
+		t.Errorf("CountAll %d exceeds window size %d (leak)", got, maxEntries)
+	}
+
+	// IPStats is bounded to the live window (distinct live IPs <= maxEntries).
+	if got := int(s.IPStats.Len()); got > maxEntries {
+		t.Errorf("IPStats len %d exceeds window size %d (leak)", got, maxEntries)
+	}
+
+	// Resident trie nodes must be bounded by the live window, not by every
+	// distinct IP ever fed. A leaking trie would carry ~32 nodes per distinct
+	// IP (tens of thousands of nodes here); the live window of <=500 distinct
+	// IPs caps it far below that. Use a generous bound (<= maxEntries*33 covers
+	// up to 32 unique-path nodes per live IP plus the root) that is still
+	// orders of magnitude under the leaking count.
+	residentNodes := countResidentTrieNodes(s.Trie.Root)
+	leakingLowerBound := int(totalDistinctFed) // far below true leak (~32x this), but a trivially failing floor
+	if residentNodes >= leakingLowerBound {
+		t.Errorf("resident trie nodes %d not bounded to window (looks like a leak; fed %d distinct IPs)",
+			residentNodes, totalDistinctFed)
+	}
+	if residentNodes > maxEntries*33 {
+		t.Errorf("resident trie nodes %d exceed window-size bound %d", residentNodes, maxEntries*33)
+	}
+
+	// Sanity: the rebuild path must keep the trie answering correctly for the
+	// surviving window. CountAll equals the number of live queue entries.
+	if got, want := int(s.Trie.CountAll()), len(s.IPQueue); got != want {
+		t.Errorf("CountAll %d != live IPQueue len %d after rebuilds", got, want)
 	}
 }

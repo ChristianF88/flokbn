@@ -32,10 +32,24 @@ func NewTrie() *Trie {
 
 // NewTrieSeq creates a binary trie backed by a lock-free sequential bump
 // allocator (single-thread use only). Intended to be paired with
-// BuildSorted for the fastest possible sorted build.
+// BuildSorted for the fastest possible sorted build, but also supports the
+// incremental Insert/Delete API used by the single-goroutine sliding window.
 func NewTrieSeq() *Trie {
 	a := pools.NewSeqNodeAllocator()
 	return &Trie{Root: a.GetNode(), seqAlloc: a}
+}
+
+// newNode returns a fresh zeroed node from whichever allocator backs this
+// trie. A Seq-backed trie (NewTrieSeq) uses the lock-free sequential
+// allocator; a NodeAllocator-backed trie (NewTrie) uses the mutex-guarded
+// one. This lets Insert/InsertUint32/insertUint32WithCount work on either
+// backing, so the live sliding window can be Seq-backed yet still use the
+// incremental Insert/Delete API.
+func (t *Trie) newNode() *TrieNode {
+	if t.seqAlloc != nil {
+		return t.seqAlloc.GetNode()
+	}
+	return t.allocator.GetNode()
 }
 
 // BuildSorted builds the trie from an ASCENDING-sorted slice of uint32
@@ -69,6 +83,9 @@ func (t *Trie) BuildSorted(ips []uint32) {
 			bit := (v >> i) & 1
 			child := node.Children[bit]
 			if child == nil {
+				// BuildSorted requires a Seq-backed trie (t.seqAlloc != nil),
+				// so call the allocator directly here — this is the hottest
+				// allocation loop and must avoid the newNode() branch.
 				child = t.seqAlloc.GetNode()
 				node.Children[bit] = child
 			}
@@ -133,7 +150,7 @@ func (t *Trie) InsertUint32(val uint32) {
 	for i := 31; i >= 0; i-- {
 		bit := (val >> i) & 1
 		if node.Children[bit] == nil {
-			node.Children[bit] = t.allocator.GetNode()
+			node.Children[bit] = t.newNode()
 		}
 		node = node.Children[bit]
 		node.Count++
@@ -176,28 +193,42 @@ func (t *Trie) insertUint32WithCount(val uint32, count uint32) {
 	for i := 31; i >= 0; i-- {
 		bit := (val >> i) & 1
 		if node.Children[bit] == nil {
-			node.Children[bit] = t.allocator.GetNode()
+			node.Children[bit] = t.newNode()
 		}
 		node = node.Children[bit]
 		node.Count += count // Increment by the batch count instead of just 1
 	}
 }
 
-// Delete removes an IP address from the Trie. It traverses the Trie
-// based on the binary representation of the IP address and decrements
-// the count of nodes along the path. If a node's count reaches zero,
-// it removes the corresponding child node to free up memory.
+// Delete removes an IP address from the Trie. It traverses the Trie based on
+// the binary representation of the IP address and decrements the count of
+// nodes along the path. After a successful decrement it prunes: any node whose
+// Count reaches zero AND that has no surviving children is detached from its
+// parent (parent.Children[bit] = nil) so the subtree can be garbage collected.
+// Pruning walks the path from the deepest node upward and stops at the first
+// node that still has a non-zero count or a surviving child, so a deeper
+// still-present IP keeps all of its shared ancestors. The Root is never pruned.
 //
 // Parameters:
 //   - ip: The IP address to be removed, represented as a net.IP.
 //
 // Note:
-//   - If the IP address does not exist in the Trie, the function exits
-//     without making any changes.
+//   - If the IP address does not exist in the Trie, the function exits without
+//     making any changes.
+//   - Detaching the child reference lets the GC reclaim the node only when the
+//     trie is backed by individually-allocated/GC-able nodes. With a bump
+//     allocator (NodeAllocator / SeqNodeAllocator) the backing chunk stays
+//     resident for the allocator's lifetime; the sliding window therefore also
+//     periodically rebuilds its trie from a fresh allocator to bound RSS.
 func (t *Trie) Delete(ip net.IP) {
 	node := t.Root
 	val := iputils.IPToUint32(ip)
-	var stack []*TrieNode
+
+	// path[k] is the node reached after matching bit position (31-k); its
+	// parent is path[k-1] (or Root when k==0). bitAt[k] is the child slot in
+	// the parent that points at path[k].
+	var path [32]*TrieNode
+	var bitAt [32]uint32
 
 	for i := 31; i >= 0; i-- {
 		bit := (val >> i) & 1
@@ -205,15 +236,36 @@ func (t *Trie) Delete(ip net.IP) {
 			return
 		}
 		node = node.Children[bit]
-		stack = append(stack, node)
+		k := 31 - i
+		path[k] = node
+		bitAt[k] = bit
 	}
 
-	// The IP was found, then the counts need to be modified at each node
-	for i := len(stack) - 1; i >= 0; i-- {
-		if stack[i].Count == 0 {
+	// The IP was found; decrement counts along the path. Guard against
+	// underflow on an over-delete (count already 0): bail without wrapping.
+	for k := 31; k >= 0; k-- {
+		if path[k].Count == 0 {
 			return
 		}
-		stack[i].Count--
+		path[k].Count--
+	}
+
+	// Prune from the deepest node upward: detach any node that genuinely
+	// reached Count==0 on this delete and has no surviving children. Stop as
+	// soon as a node must survive (non-zero count or a remaining child), since
+	// every shallower node is then an ancestor of a live node.
+	for k := 31; k >= 0; k-- {
+		n := path[k]
+		if n.Count != 0 || n.Children[0] != nil || n.Children[1] != nil {
+			break
+		}
+		var parent *TrieNode
+		if k == 0 {
+			parent = t.Root
+		} else {
+			parent = path[k-1]
+		}
+		parent.Children[bitAt[k]] = nil
 	}
 }
 

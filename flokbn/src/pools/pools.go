@@ -10,12 +10,15 @@ type TrieNode struct {
 	Count    uint32
 }
 
-// NodeAllocator pre-allocates chunks of nodes for better performance
-// Thread-safe allocator with mutex protection
+// NodeAllocator pre-allocates chunks of nodes for better performance.
+// The mutex is retained for API safety, but in production it is not
+// contended: its sole remaining production user is NewTrie() (the
+// static/test build path), where the trie is built and queried from a
+// single goroutine. The sliding-window live path uses the lock-free
+// SeqNodeAllocator instead (see NewTrieSeq).
 type NodeAllocator struct {
 	mu           sync.Mutex
 	chunks       [][]TrieNode
-	currentChunk int
 	currentIndex int
 	chunkSize    int
 }
@@ -24,19 +27,19 @@ type NodeAllocator struct {
 func NewNodeAllocator() *NodeAllocator {
 	return &NodeAllocator{
 		chunks:    make([][]TrieNode, 0, 10),
-		chunkSize: 16384, // Allocate nodes in chunks of 16K (~320KB per chunk, reduces mutex acquisitions)
+		chunkSize: 16384, // Allocate nodes in chunks of 16K (16384 * 24 bytes = ~384KB per chunk, reduces mutex acquisitions)
 	}
 }
 
 // GetNode returns a pointer to a new zeroed TrieNode.
 // Thread-safe. Chunk allocation happens outside the lock to avoid
-// holding the mutex during a ~49KB heap allocation.
+// holding the mutex during a 16384 * 24 = ~384KB heap allocation.
 func (na *NodeAllocator) GetNode() *TrieNode {
 	na.mu.Lock()
 
-	// Fast path: space available in current chunk
+	// Fast path: space available in current (last) chunk
 	if len(na.chunks) > 0 && na.currentIndex < na.chunkSize {
-		node := &na.chunks[na.currentChunk][na.currentIndex]
+		node := &na.chunks[len(na.chunks)-1][na.currentIndex]
 		na.currentIndex++
 		na.mu.Unlock()
 		return node
@@ -50,11 +53,10 @@ func (na *NodeAllocator) GetNode() *TrieNode {
 	// Double-check: another goroutine may have already allocated a chunk
 	if len(na.chunks) == 0 || na.currentIndex >= na.chunkSize {
 		na.chunks = append(na.chunks, newChunk)
-		na.currentChunk = len(na.chunks) - 1
 		na.currentIndex = 0
 	}
 
-	node := &na.chunks[na.currentChunk][na.currentIndex]
+	node := &na.chunks[len(na.chunks)-1][na.currentIndex]
 	na.currentIndex++
 	na.mu.Unlock()
 	return node

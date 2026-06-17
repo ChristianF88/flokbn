@@ -1743,3 +1743,101 @@ func TestTrie_DeleteNonexistent(t *testing.T) {
 		t.Errorf("Expected CountAll to be 0 after deleting from empty trie, got %d", count)
 	}
 }
+
+// countResidentNodes walks the trie and counts every node reachable from the
+// Root (excluding the Root itself). A pruned subtree is no longer reachable, so
+// this reflects the live node references regardless of allocator backing.
+func countResidentNodes(n *TrieNode) int {
+	if n == nil {
+		return 0
+	}
+	return 1 + countResidentNodes(n.Children[0]) + countResidentNodes(n.Children[1])
+}
+
+// TestTrieDeletePrunesNodes (URGENT-03) verifies that Delete now PRUNES
+// zero-count childless subtrees instead of merely decrementing counts, so the
+// trie no longer leaks dead nodes after IPs are removed.
+func TestTrieDeletePrunesNodes(t *testing.T) {
+	mustIP := func(s string) net.IP {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			t.Fatalf("failed to parse IP %q", s)
+		}
+		return ip
+	}
+
+	t.Run("delete-all leaves the root a leaf and CollectCIDRs empty", func(t *testing.T) {
+		tr := NewTrie()
+		ips := []string{"192.168.1.1", "10.0.0.5", "172.16.3.9"}
+		for _, s := range ips {
+			tr.Insert(mustIP(s))
+		}
+		for _, s := range ips {
+			tr.Delete(mustIP(s))
+		}
+
+		// Root-leaf fast path must now be reachable: both children niled.
+		if tr.Root.Children[0] != nil || tr.Root.Children[1] != nil {
+			t.Fatalf("expected Root to have both children nil after deleting all IPs, got [%v %v]",
+				tr.Root.Children[0], tr.Root.Children[1])
+		}
+		// Only the Root node remains resident.
+		if got := countResidentNodes(tr.Root); got != 1 {
+			t.Errorf("expected exactly 1 resident node (Root) after delete-all, got %d", got)
+		}
+		if got := tr.CountAll(); got != 0 {
+			t.Errorf("expected CountAll 0 after delete-all, got %d", got)
+		}
+		if cidrs := tr.CollectCIDRs(0, 0, 32, 0); len(cidrs) != 0 {
+			t.Errorf("expected no CIDRs from emptied trie, got %v", cidrs)
+		}
+	})
+
+	t.Run("deleting one of two prefix-sharing IPs keeps the survivor's ancestors", func(t *testing.T) {
+		tr := NewTrie()
+		// These two share a long common prefix (differ only in the last octet),
+		// so they share all ancestor nodes down to depth 31.
+		keep := mustIP("192.168.1.10")
+		drop := mustIP("192.168.1.11")
+		tr.Insert(keep)
+		tr.Insert(drop)
+
+		residentBefore := countResidentNodes(tr.Root)
+
+		tr.Delete(drop)
+
+		// Survivor must be fully intact.
+		if got := tr.Count(keep); got != 1 {
+			t.Errorf("expected survivor count 1, got %d", got)
+		}
+		if got := tr.CountAll(); got != 1 {
+			t.Errorf("expected CountAll 1 after dropping one of two IPs, got %d", got)
+		}
+		// The dropped IP must be gone.
+		if got := tr.Count(drop); got != 0 {
+			t.Errorf("expected dropped IP count 0, got %d", got)
+		}
+		// Exactly one node (the dropped IP's unique leaf) should have been
+		// pruned; all shared ancestors survive because the kept IP needs them.
+		residentAfter := countResidentNodes(tr.Root)
+		if residentAfter != residentBefore-1 {
+			t.Errorf("expected exactly 1 node pruned (shared ancestors survive): before=%d after=%d",
+				residentBefore, residentAfter)
+		}
+	})
+
+	t.Run("repeated delete of the same IP does not underflow", func(t *testing.T) {
+		tr := NewTrie()
+		ip := mustIP("8.8.8.8")
+		tr.Insert(ip)
+		tr.Delete(ip)
+		// Second delete must be a no-op (count already 0, node already pruned).
+		tr.Delete(ip)
+		if got := tr.CountAll(); got != 0 {
+			t.Errorf("expected CountAll 0 after over-delete, got %d", got)
+		}
+		if tr.Root.Children[0] != nil || tr.Root.Children[1] != nil {
+			t.Errorf("expected Root to remain a leaf after over-delete")
+		}
+	})
+}
