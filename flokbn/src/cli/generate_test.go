@@ -84,12 +84,13 @@ func TestStaticDemoScaffold(t *testing.T) {
 	}
 }
 
-// TestStaticDemoCleansUpOnError verifies that a failure partway through writing
-// the demo removes only the artifacts the command itself created and leaves any
-// pre-existing user data in the directory untouched. The config write is forced
-// to fail by pre-creating a DIRECTORY where the config file should go, so
-// os.WriteFile on it errors after the four list files have already been written.
-func TestStaticDemoCleansUpOnError(t *testing.T) {
+// TestStaticDemoRefusesAndWritesNothing verifies the refuse-up-front contract:
+// if any target name already exists in --out, the command aborts BEFORE writing
+// anything, so no scaffold artifact is created and pre-existing user data is
+// untouched. Here a DIRECTORY occupies the config path (complex-static.toml);
+// the up-front stat detects it and the command refuses before writing any list
+// file, rather than overwriting the list files and then deleting them.
+func TestStaticDemoRefusesAndWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 
 	// Pre-existing, unrelated user data that must survive.
@@ -98,26 +99,87 @@ func TestStaticDemoCleansUpOnError(t *testing.T) {
 		t.Fatalf("seed keep.txt: %v", err)
 	}
 
-	// Force the config write to fail: a directory cannot be overwritten by
-	// os.WriteFile, so writing complex-static.toml errors out.
+	// A directory occupying a target path is itself a pre-existing target: the
+	// up-front stat returns nil (the path exists), so the command must refuse.
 	if err := os.Mkdir(filepath.Join(dir, demoConfigName), 0o755); err != nil {
 		t.Fatalf("seed blocking directory: %v", err)
 	}
 
 	err := runApp(t, "generate", "static-demo", "--out", dir)
 	if err == nil {
-		t.Fatal("generate static-demo with blocked config write = nil error, want error")
+		t.Fatal("generate static-demo into dir with pre-existing target = nil error, want error")
 	}
 
-	// The four list files were written before the config write failed; they
-	// must have been cleaned up by the failure path.
+	// The refusal happens before any write, so none of the list files were ever
+	// created.
 	for _, name := range demoLists {
 		if _, statErr := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(statErr) {
-			t.Errorf("list file %s should have been cleaned up after failure (stat err: %v)", name, statErr)
+			t.Errorf("list file %s must NOT be written when the command refuses up-front (stat err: %v)", name, statErr)
 		}
+	}
+	// The synthetic log must not have been created either.
+	if _, statErr := os.Stat(filepath.Join(dir, "access.log")); !os.IsNotExist(statErr) {
+		t.Errorf("access.log must NOT be written when the command refuses up-front (stat err: %v)", statErr)
 	}
 
 	// Pre-existing data must be untouched.
+	data, readErr := os.ReadFile(keep)
+	if readErr != nil {
+		t.Fatalf("pre-existing keep.txt was removed or corrupted: %v", readErr)
+	}
+	if string(data) != "precious" {
+		t.Errorf("keep.txt contents = %q, want %q", data, "precious")
+	}
+}
+
+// TestStaticDemoRefusesToOverwriteExistingFile is the URGENT-20 regression: a
+// pre-existing REGULAR file at a target name (whitelist.txt) holding user data
+// must survive byte-for-byte. The pre-fix code overwrote it and, on any later
+// failure, deleted it; the fix stat-refuses all targets up-front, so the file
+// is never touched and nothing else is written.
+func TestStaticDemoRefusesToOverwriteExistingFile(t *testing.T) {
+	dir := t.TempDir()
+
+	const userData = "USER DATA\n"
+	target := filepath.Join(dir, "whitelist.txt")
+	if err := os.WriteFile(target, []byte(userData), 0o644); err != nil {
+		t.Fatalf("seed whitelist.txt: %v", err)
+	}
+
+	// Unrelated user data that must also survive.
+	keep := filepath.Join(dir, "keep.txt")
+	if err := os.WriteFile(keep, []byte("precious"), 0o644); err != nil {
+		t.Fatalf("seed keep.txt: %v", err)
+	}
+
+	err := runApp(t, "generate", "static-demo", "--out", dir)
+	if err == nil {
+		t.Fatal("generate static-demo over pre-existing whitelist.txt = nil error, want error")
+	}
+	if !strings.Contains(err.Error(), "overwrite") || !strings.Contains(err.Error(), "whitelist.txt") {
+		t.Errorf("error %q should mention refusing to overwrite whitelist.txt", err)
+	}
+
+	// The core of the PoC: the pre-existing file survives with original contents.
+	got, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("pre-existing whitelist.txt was removed or corrupted: %v", readErr)
+	}
+	if string(got) != userData {
+		t.Errorf("whitelist.txt contents = %q, want original %q", got, userData)
+	}
+
+	// Refusing up-front means no other scaffold artifact was left behind.
+	for _, name := range []string{
+		"blacklist.txt", "ua_whitelist.txt", "ua_blacklist.txt",
+		demoConfigName, "access.log",
+	} {
+		if _, statErr := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(statErr) {
+			t.Errorf("artifact %s must NOT be written when the command refuses (stat err: %v)", name, statErr)
+		}
+	}
+
+	// Unrelated data must be untouched.
 	data, readErr := os.ReadFile(keep)
 	if readErr != nil {
 		t.Fatalf("pre-existing keep.txt was removed or corrupted: %v", readErr)

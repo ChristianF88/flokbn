@@ -105,6 +105,10 @@ func handleStaticDemo(c *cli.Context) error {
 		if success {
 			return
 		}
+		// Every path in `created` is a target the up-front refusal guard below
+		// proved did not pre-exist, so it is always a file the command itself
+		// wrote — removing it on a partial-write failure never touches user
+		// data.
 		for i := len(created) - 1; i >= 0; i-- {
 			_ = os.Remove(created[i])
 		}
@@ -115,6 +119,24 @@ func handleStaticDemo(c *cli.Context) error {
 			_ = os.Remove(dir)
 		}
 	}()
+
+	// Refuse to overwrite pre-existing files. Every artifact the scaffold writes
+	// is enumerated once via scaffoldTargets, and each is stat-checked here
+	// BEFORE MkdirAll or any write. If any already exists (a regular file OR a
+	// directory), abort without creating or touching anything; a non-IsNotExist
+	// stat error (e.g. a permission problem) is fatal too. This guarantees the
+	// command never overwrites — and therefore the deferred cleanup never
+	// deletes — a file it did not create. The defer is already registered, but
+	// returning here removes nothing: `created` is empty and no directory has
+	// been created yet.
+	for _, path := range scaffoldTargets(absDir) {
+		switch _, statErr := os.Stat(path); {
+		case statErr == nil:
+			return fmt.Errorf("generate static-demo: refusing to overwrite existing %s; remove it or choose a different --out", path)
+		case !os.IsNotExist(statErr):
+			return fmt.Errorf("generate static-demo: %w", statErr)
+		}
+	}
 
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
 		return fmt.Errorf("generate static-demo: %w", err)
@@ -173,6 +195,23 @@ func handleStaticDemo(c *cli.Context) error {
 	fmt.Fprintf(w, "  flokbn static --config %s --plain\n", cfgPath)
 	success = true
 	return nil
+}
+
+// scaffoldTargets returns, in deterministic write order, the absolute paths of
+// every file `generate static-demo` writes into absDir: the four demoLists
+// files, the rewritten config, and the synthetic access log. It is the single
+// source of truth shared by the up-front refusal guard and the writers, so a
+// future added artifact cannot bypass the overwrite check. The config-referenced
+// but never-written paths (flokbn_jail.json, flokbn_ban.txt, heatmap.html) are
+// intentionally excluded — the scaffold does not create them.
+func scaffoldTargets(absDir string) []string {
+	targets := make([]string, 0, len(demoLists)+2)
+	for _, name := range demoLists {
+		targets = append(targets, filepath.Join(absDir, name))
+	}
+	targets = append(targets, filepath.Join(absDir, demoConfigName))
+	targets = append(targets, filepath.Join(absDir, "access.log"))
+	return targets
 }
 
 // dirsToCreate returns the directories that os.MkdirAll(absDir) would create,
