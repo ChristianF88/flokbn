@@ -291,6 +291,17 @@ func TestIsSubRange(t *testing.T) {
 		{"::1/128", "192.168.1.0/24", false},
 	}
 
+	// isSubRange was removed as dead code; its sub-range comparison is
+	// expressed directly via cidrBounds here.
+	isSubRange := func(cidr1, cidr2 string) bool {
+		s1, e1, ok1 := cidrBounds(cidr1)
+		s2, e2, ok2 := cidrBounds(cidr2)
+		if !ok1 || !ok2 {
+			return false
+		}
+		return s1 >= s2 && e1 <= e2
+	}
+
 	for _, tt := range tests {
 		result := isSubRange(tt.cidr1, tt.cidr2)
 		if result != tt.expected {
@@ -360,22 +371,17 @@ func TestFill_SubRangeHandling(t *testing.T) {
 	jail.Cells[0].Prisoners[0].BanStart = time.Now().Add(-jail.Cells[0].BanDuration - time.Minute)
 	jail.Cells[0].Prisoners[0].BanActive = false
 	jail.Fill(parent)
-	// Parent should be in first cell, sub should be removed
-	foundParent := false
-	foundSub := false
-	for _, prisoner := range jail.Cells[0].Prisoners {
-		if prisoner.CIDR == parent {
-			foundParent = true
-		}
-		if prisoner.CIDR == sub {
-			foundSub = true
-		}
+	// The sub-range was expired, so the parent that absorbs it escalates to the
+	// next cell (cell 1); the sub-range must be removed entirely. (Before the
+	// URGENT-04 fix the parent incorrectly landed back in cell 0.)
+	if cidrExistsInJail(jail, sub) {
+		t.Errorf("Expected sub CIDR %s to be removed from jail", sub)
 	}
-	if !foundParent {
+	if !cidrExistsInJail(jail, parent) {
 		t.Errorf("Expected parent CIDR %s in jail", parent)
 	}
-	if foundSub {
-		t.Errorf("Expected sub CIDR %s to be removed from jail", sub)
+	if got := findCellIndex(jail, parent); got != 1 {
+		t.Errorf("Expected parent CIDR %s to escalate to cell 1, got cell %d", parent, got)
 	}
 }
 
@@ -550,6 +556,171 @@ func TestJail_FullProgression(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("Expected prisoner to appear exactly once, found %d times", count)
+	}
+}
+
+// TestFill_ParentAbsorbsExpiredSubRanges_Escalates is the URGENT-04 regression:
+// a parent CIDR that absorbs ONLY expired sub-ranges must escalate to the next
+// cell (maxCellIdx+1), not land back in the deepest sub-range cell. Before the
+// fix the inverted `banActive := true` initializer made the escalation branch
+// dead and the parent re-landed in cell 0.
+func TestFill_ParentAbsorbsExpiredSubRanges_Escalates(t *testing.T) {
+	j := NewJail()
+	sub1 := "10.0.0.0/25"
+	sub2 := "10.0.0.128/25"
+	parent := "10.0.0.0/24"
+
+	// Both sub-ranges land in cell 0.
+	if err := j.Fill(sub1); err != nil {
+		t.Fatalf("Fill(%s): %v", sub1, err)
+	}
+	if err := j.Fill(sub2); err != nil {
+		t.Fatalf("Fill(%s): %v", sub2, err)
+	}
+	if findCellIndex(j, sub1) != 0 || findCellIndex(j, sub2) != 0 {
+		t.Fatalf("expected both sub-ranges in cell 0")
+	}
+
+	// Expire BOTH sub-ranges.
+	for ci := range j.Cells {
+		for pi := range j.Cells[ci].Prisoners {
+			j.Cells[ci].Prisoners[pi].BanStart = time.Now().Add(-j.Cells[ci].BanDuration - time.Minute)
+			j.Cells[ci].Prisoners[pi].BanActive = false
+		}
+	}
+
+	// Fill the parent: it absorbs only expired sub-ranges, so it must escalate.
+	if err := j.Fill(parent); err != nil {
+		t.Fatalf("Fill(%s): %v", parent, err)
+	}
+
+	if findCellIndex(j, sub1) != -1 || findCellIndex(j, sub2) != -1 {
+		t.Errorf("expected sub-ranges to be removed after parent absorbed them")
+	}
+	got := findCellIndex(j, parent)
+	if got != 1 {
+		t.Errorf("expected parent %s to escalate to cell 1, got cell %d", parent, got)
+	}
+	pi := -1
+	for i, p := range j.Cells[got].Prisoners {
+		if p.CIDR == parent {
+			pi = i
+			break
+		}
+	}
+	if pi == -1 || !j.Cells[got].Prisoners[pi].BanActive {
+		t.Errorf("expected escalated parent to have an active ban")
+	}
+}
+
+// TestFill_ParentAbsorbsActiveSubRange_NoEscalation_PreservesProgress verifies
+// that when at least one absorbed sub-range is still active, the parent stays in
+// the deepest cell (maxCellIdx) AND inherits that active sub-range's BanStart
+// (progress preserved, not reset to ~now).
+func TestFill_ParentAbsorbsActiveSubRange_NoEscalation_PreservesProgress(t *testing.T) {
+	j := NewJail()
+	sub1 := "10.0.0.0/25"
+	sub2 := "10.0.0.128/25"
+	parent := "10.0.0.0/24"
+
+	if err := j.Fill(sub1); err != nil {
+		t.Fatalf("Fill(%s): %v", sub1, err)
+	}
+	if err := j.Fill(sub2); err != nil {
+		t.Fatalf("Fill(%s): %v", sub2, err)
+	}
+
+	// Expire sub1, leave sub2 active with a distinct, older-than-now BanStart so
+	// we can detect whether it is carried (preserved) or reset to time.Now().
+	carried := time.Now().Add(-3 * time.Minute).Truncate(time.Millisecond)
+	for ci := range j.Cells {
+		for pi := range j.Cells[ci].Prisoners {
+			switch j.Cells[ci].Prisoners[pi].CIDR {
+			case sub1:
+				j.Cells[ci].Prisoners[pi].BanStart = time.Now().Add(-j.Cells[ci].BanDuration - time.Minute)
+				j.Cells[ci].Prisoners[pi].BanActive = false
+			case sub2:
+				j.Cells[ci].Prisoners[pi].BanStart = carried
+				j.Cells[ci].Prisoners[pi].BanActive = true
+			}
+		}
+	}
+
+	if err := j.Fill(parent); err != nil {
+		t.Fatalf("Fill(%s): %v", parent, err)
+	}
+
+	got := findCellIndex(j, parent)
+	if got != 0 {
+		t.Errorf("expected parent %s to stay in cell 0 (active sub-range present), got cell %d", parent, got)
+	}
+	if findCellIndex(j, sub1) != -1 || findCellIndex(j, sub2) != -1 {
+		t.Errorf("expected sub-ranges to be removed after parent absorbed them")
+	}
+	pi := -1
+	for i, p := range j.Cells[got].Prisoners {
+		if p.CIDR == parent {
+			pi = i
+			break
+		}
+	}
+	if pi == -1 {
+		t.Fatalf("expected parent %s present in cell 0", parent)
+	}
+	if !j.Cells[got].Prisoners[pi].BanStart.Equal(carried) {
+		t.Errorf("expected parent BanStart preserved as %v, got %v (progress reset)", carried, j.Cells[got].Prisoners[pi].BanStart)
+	}
+	if !j.Cells[got].Prisoners[pi].BanActive {
+		t.Errorf("expected parent ban active")
+	}
+}
+
+// TestFill_ParentEscalationCapsAtLastCell verifies the escalation cannot
+// overflow past the last cell: a sub-range driven to the last cell, expired,
+// then absorbed by its parent leaves the parent in the last cell.
+func TestFill_ParentEscalationCapsAtLastCell(t *testing.T) {
+	j := NewJail()
+	sub := "10.0.0.128/25"
+	parent := "10.0.0.0/24"
+	lastIdx := len(j.Cells) - 1
+
+	// Drive the sub-range up to the last cell via repeat offenses.
+	if err := j.Fill(sub); err != nil {
+		t.Fatalf("Fill(%s): %v", sub, err)
+	}
+	for findCellIndex(j, sub) < lastIdx {
+		ci := findCellIndex(j, sub)
+		for pi := range j.Cells[ci].Prisoners {
+			if j.Cells[ci].Prisoners[pi].CIDR == sub {
+				j.Cells[ci].Prisoners[pi].BanStart = time.Now().Add(-j.Cells[ci].BanDuration - time.Minute)
+				j.Cells[ci].Prisoners[pi].BanActive = false
+			}
+		}
+		if err := j.Fill(sub); err != nil {
+			t.Fatalf("Fill(%s) during escalation: %v", sub, err)
+		}
+	}
+	if findCellIndex(j, sub) != lastIdx {
+		t.Fatalf("setup: expected sub-range in last cell %d, got %d", lastIdx, findCellIndex(j, sub))
+	}
+
+	// Expire the sub-range in the last cell, then absorb it with the parent.
+	for pi := range j.Cells[lastIdx].Prisoners {
+		if j.Cells[lastIdx].Prisoners[pi].CIDR == sub {
+			j.Cells[lastIdx].Prisoners[pi].BanStart = time.Now().Add(-j.Cells[lastIdx].BanDuration - time.Minute)
+			j.Cells[lastIdx].Prisoners[pi].BanActive = false
+		}
+	}
+	if err := j.Fill(parent); err != nil {
+		t.Fatalf("Fill(%s): %v", parent, err)
+	}
+
+	got := findCellIndex(j, parent)
+	if got != lastIdx {
+		t.Errorf("expected parent %s to stay capped in last cell %d, got cell %d", parent, lastIdx, got)
+	}
+	if findCellIndex(j, sub) != -1 {
+		t.Errorf("expected sub-range removed after parent absorbed it")
 	}
 }
 

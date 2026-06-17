@@ -146,8 +146,7 @@ func MovePrisonerToNextCell(jail *Jail, cellIndex int, prisonerIndex int) {
 }
 
 // cidrBounds parses an IPv4 CIDR into its inclusive [start,end] numeric range.
-// ok is false for parse errors or IPv6 (unsupported), exactly as the previous
-// isSubRange parsing behaved.
+// ok is false for parse errors or IPv6 (unsupported).
 func cidrBounds(cidr string) (start, end uint32, ok bool) {
 	ip, n, err := net.ParseCIDR(cidr)
 	if err != nil {
@@ -171,15 +170,6 @@ func prisonerBounds(p Prisoner) (start, end uint32, ok bool) {
 		return p.startU, p.endU, true
 	}
 	return cidrBounds(p.CIDR)
-}
-
-func isSubRange(cidr1, cidr2 string) bool {
-	s1, e1, ok1 := cidrBounds(cidr1)
-	s2, e2, ok2 := cidrBounds(cidr2)
-	if !ok1 || !ok2 {
-		return false
-	}
-	return s1 >= s2 && e1 <= e2
 }
 
 func (j *Jail) SubRangesInJail(cidr string) (bool, []int, []int) {
@@ -248,38 +238,41 @@ func (j *Jail) Fill(cidr string) error {
 		}
 
 	} else if present, cellIdxs, prisonerIdxs := j.SubRangesInJail(cidr); present {
-		// Check if CIDR is a parent range to 1 or more ranges in jail
-		if present {
-			maxCellIdx := maxInList(cellIdxs)
-			banStart := time.Now()
-			banActive := true
-			for i := len(cellIdxs) - 1; i >= 0; i-- {
-				if cellIdxs[i] == maxCellIdx {
-					banActive = banActive || j.Cells[cellIdxs[i]].Prisoners[prisonerIdxs[i]].BanActive
+		// CIDR is a parent range to 1 or more ranges in jail. Absorb the
+		// matched sub-ranges into a single prisoner for the parent.
+		maxCellIdx := maxInList(cellIdxs)
+		var banStart time.Time
+		banActive := false
+		for i := len(cellIdxs) - 1; i >= 0; i-- {
+			if cellIdxs[i] == maxCellIdx {
+				// Track whether any matched sub-range in the deepest cell still
+				// has an active ban, and carry its BanStart to preserve progress.
+				if j.Cells[cellIdxs[i]].Prisoners[prisonerIdxs[i]].BanActive {
+					banActive = true
 					banStart = j.Cells[cellIdxs[i]].Prisoners[prisonerIdxs[i]].BanStart
 				}
-				j.RemovePrisoner(cellIdxs[i], prisonerIdxs[i])
 			}
-			if !banActive {
-				idx := maxCellIdx
-				if maxCellIdx < len(j.Cells)-1 {
-					idx = maxCellIdx + 1
-				}
-				ThrowPrisonerInCell(j, idx, Prisoner{
-					CIDR:      cidr,
-					BanStart:  time.Now(),
-					BanActive: true,
-				})
-			} else {
-				ThrowPrisonerInCell(j, maxCellIdx, Prisoner{
-					CIDR:      cidr,
-					BanStart:  banStart,
-					BanActive: true,
-				})
-			}
-			j.AllCIDRs = append(j.AllCIDRs, cidr)
-
+			j.RemovePrisoner(cellIdxs[i], prisonerIdxs[i])
 		}
+		if !banActive {
+			// All matched sub-ranges expired: escalate the parent one cell
+			// (capped at the last cell) with a fresh timer, matching the
+			// single-prisoner repeat-offense path.
+			idx := maxCellIdx
+			if maxCellIdx < len(j.Cells)-1 {
+				idx = maxCellIdx + 1
+			}
+			ThrowPrisonerInCell(j, idx, Prisoner{CIDR: cidr})
+		} else {
+			// At least one matched sub-range is still active: keep the parent in
+			// the deepest cell and preserve the carried ban progress. The
+			// BanStart write must come after ThrowPrisonerInCell, which would
+			// otherwise reset BanStart to time.Now().
+			ThrowPrisonerInCell(j, maxCellIdx, Prisoner{CIDR: cidr})
+			last := len(j.Cells[maxCellIdx].Prisoners) - 1
+			j.Cells[maxCellIdx].Prisoners[last].BanStart = banStart
+		}
+		j.AllCIDRs = append(j.AllCIDRs, cidr)
 
 	} else if parent, cellIdx, prisonerIdx := j.ParentRangeInJail(cidr); parent {
 		// Check if range is a subrange to a range in jail
