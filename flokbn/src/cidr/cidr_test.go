@@ -33,7 +33,7 @@ func TestRemoveWhitelistedLargeScale(t *testing.T) {
 
 	// Verify none of the remaining entries are whitelisted
 	for _, cidr := range result {
-		if IsWhitelisted(cidr, whitelist) {
+		if refIsWhitelisted(cidr, whitelist) {
 			t.Errorf("Found whitelisted CIDR in result: %s", cidr)
 		}
 	}
@@ -49,6 +49,10 @@ func TestRemoveWhitelistedLargeScale(t *testing.T) {
 	}
 }
 
+// TestIsWhitelisted exercises refIsWhitelisted, the package-local reference
+// oracle that is a verbatim copy of the deleted cidr.IsWhitelisted. The
+// differential RemoveWhitelisted test depends on this oracle, so its
+// single-entry-coverage semantics must stay correct.
 func TestIsWhitelisted(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -138,9 +142,9 @@ func TestIsWhitelisted(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := IsWhitelisted(tt.cidr, tt.whitelist)
+			result := refIsWhitelisted(tt.cidr, tt.whitelist)
 			if result != tt.expected {
-				t.Errorf("cidr.IsWhitelisted(%q, %v) = %v, want %v", tt.cidr, tt.whitelist, result, tt.expected)
+				t.Errorf("refIsWhitelisted(%q, %v) = %v, want %v", tt.cidr, tt.whitelist, result, tt.expected)
 			}
 		})
 	}
@@ -736,16 +740,18 @@ func TestIsWhitelistedIPNet(t *testing.T) {
 				t.Errorf("IsWhitelistedIPNet(%s, %v) = %v, want %v", tt.candidate, tt.whitelist, gotIPNet, tt.expected)
 			}
 
-			// Verify it matches string version
-			gotString := IsWhitelisted(tt.candidate, tt.whitelist)
+			// Verify it matches the reference string version
+			gotString := refIsWhitelisted(tt.candidate, tt.whitelist)
 			if gotIPNet != gotString {
-				t.Errorf("IsWhitelistedIPNet(%v) != IsWhitelisted(%v) for candidate %s", gotIPNet, gotString, tt.candidate)
+				t.Errorf("IsWhitelistedIPNet(%v) != refIsWhitelisted(%v) for candidate %s", gotIPNet, gotString, tt.candidate)
 			}
 		})
 	}
 }
 
-// BenchmarkIsWhitelistedComparison compares string vs IPNet whitelist performance
+// BenchmarkIsWhitelistedComparison compares the parse-per-call string path
+// (the reference oracle refIsWhitelisted, a copy of the deleted IsWhitelisted)
+// against the production pre-parsed IPNet hot path IsWhitelistedIPNet.
 func BenchmarkIsWhitelistedComparison(b *testing.B) {
 	candidate := "192.168.50.0/24"
 	whitelist := make([]string, 50)
@@ -760,7 +766,7 @@ func BenchmarkIsWhitelistedComparison(b *testing.B) {
 	b.Run("IsWhitelisted_String", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_ = IsWhitelisted(candidate, whitelist)
+			_ = refIsWhitelisted(candidate, whitelist)
 		}
 	})
 
@@ -1227,7 +1233,7 @@ func TestDropFullyWhitelistedNoFragmentation(t *testing.T) {
 	// though the /16 was jailed whole.
 	publishBans, _ := ComposeBanLists(kept, nil, whitelist)
 	for _, w := range whitelist {
-		if IsWhitelisted(w, publishBans) {
+		if refIsWhitelisted(w, publishBans) {
 			t.Fatalf("whitelisted entry %s is covered by a published ban range %v", w, publishBans)
 		}
 	}

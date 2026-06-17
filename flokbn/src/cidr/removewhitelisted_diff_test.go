@@ -7,18 +7,19 @@ import (
 	"testing"
 )
 
-// oldRemoveWhitelisted is a verbatim copy of the pre-change RemoveWhitelisted
-// (base cidr.go line 552), using the still-present IsWhitelisted + SubtractMultiple.
+// oldRemoveWhitelisted is a verbatim copy of the pre-change RemoveWhitelisted,
+// using the reference oracles refIsWhitelisted + refSubtractMultiple (local
+// copies of the deleted cidr.IsWhitelisted / cidr.SubtractMultiple).
 func oldRemoveWhitelisted(blacklist []string, whitelist []string) []string {
 	if len(whitelist) == 0 {
 		return blacklist
 	}
 	var result []string
 	for _, blackCidr := range blacklist {
-		if IsWhitelisted(blackCidr, whitelist) {
+		if refIsWhitelisted(blackCidr, whitelist) {
 			continue
 		}
-		remainingCidrs, err := SubtractMultiple(blackCidr, whitelist)
+		remainingCidrs, err := refSubtractMultiple(blackCidr, whitelist)
 		if err != nil {
 			result = append(result, blackCidr)
 		} else {

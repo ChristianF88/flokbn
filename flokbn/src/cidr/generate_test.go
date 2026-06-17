@@ -1,7 +1,6 @@
 package cidr
 
 import (
-	"fmt"
 	"math/rand"
 	"testing"
 )
@@ -142,14 +141,14 @@ func TestGenerateOptimalNumeric(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := GenerateOptimalNumeric(tt.start, tt.end)
+			got := refGenerateOptimalNumeric(tt.start, tt.end)
 			if len(got) != len(tt.expected) {
-				t.Fatalf("GenerateOptimalNumeric(%#x, %#x) returned %d CIDRs, want %d: got %v",
+				t.Fatalf("refGenerateOptimalNumeric(%#x, %#x) returned %d CIDRs, want %d: got %v",
 					tt.start, tt.end, len(got), len(tt.expected), got)
 			}
 			for i := range tt.expected {
 				if got[i] != tt.expected[i] {
-					t.Errorf("GenerateOptimalNumeric(%#x, %#x)[%d] = {%#x, %d}, want {%#x, %d}",
+					t.Errorf("refGenerateOptimalNumeric(%#x, %#x)[%d] = {%#x, %d}, want {%#x, %d}",
 						tt.start, tt.end, i,
 						got[i].IP, got[i].PrefixLen,
 						tt.expected[i].IP, tt.expected[i].PrefixLen)
@@ -188,13 +187,13 @@ func TestGenerateOptimal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := GenerateOptimal(tt.start, tt.end)
+			got := refGenerateOptimal(tt.start, tt.end)
 			if len(got) != len(tt.expected) {
-				t.Fatalf("GenerateOptimal(%#x, %#x) = %v, want %v", tt.start, tt.end, got, tt.expected)
+				t.Fatalf("refGenerateOptimal(%#x, %#x) = %v, want %v", tt.start, tt.end, got, tt.expected)
 			}
 			for i := range tt.expected {
 				if got[i] != tt.expected[i] {
-					t.Errorf("GenerateOptimal(%#x, %#x)[%d] = %q, want %q",
+					t.Errorf("refGenerateOptimal(%#x, %#x)[%d] = %q, want %q",
 						tt.start, tt.end, i, got[i], tt.expected[i])
 				}
 			}
@@ -273,16 +272,16 @@ func TestSubtractMultiple(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := SubtractMultiple(tt.blacklist, tt.whitelist)
+			got, err := refSubtractMultiple(tt.blacklist, tt.whitelist)
 			if err != nil {
-				t.Fatalf("SubtractMultiple(%q, %v) returned error: %v", tt.blacklist, tt.whitelist, err)
+				t.Fatalf("refSubtractMultiple(%q, %v) returned error: %v", tt.blacklist, tt.whitelist, err)
 			}
 			if len(got) != len(tt.expected) {
-				t.Fatalf("SubtractMultiple(%q, %v) = %v, want %v", tt.blacklist, tt.whitelist, got, tt.expected)
+				t.Fatalf("refSubtractMultiple(%q, %v) = %v, want %v", tt.blacklist, tt.whitelist, got, tt.expected)
 			}
 			for i := range tt.expected {
 				if got[i] != tt.expected[i] {
-					t.Errorf("SubtractMultiple(%q, %v)[%d] = %q, want %q",
+					t.Errorf("refSubtractMultiple(%q, %v)[%d] = %q, want %q",
 						tt.blacklist, tt.whitelist, i, got[i], tt.expected[i])
 				}
 			}
@@ -372,7 +371,7 @@ func TestGenerateOptimalNumericProperties(t *testing.T) {
 	}
 
 	for _, p := range pairs {
-		result := GenerateOptimalNumeric(p.start, p.end)
+		result := refGenerateOptimalNumeric(p.start, p.end)
 		assertExactTiling(t, p.start, p.end, result)
 		if len(result) > 62 {
 			t.Fatalf("range [%#x, %#x]: %d blocks exceeds bound of 62", p.start, p.end, len(result))
@@ -382,7 +381,7 @@ func TestGenerateOptimalNumericProperties(t *testing.T) {
 	// Minimality spot rows: [0, 2^k - 1] must always be a single block.
 	for k := 0; k <= 32; k++ {
 		end := uint32(uint64(1)<<k - 1)
-		result := GenerateOptimalNumeric(0, end)
+		result := refGenerateOptimalNumeric(0, end)
 		if len(result) != 1 {
 			t.Fatalf("range [0, 2^%d-1]: got %d blocks, want 1: %v", k, len(result), result)
 		}
@@ -394,57 +393,12 @@ func TestGenerateOptimalNumericProperties(t *testing.T) {
 	}
 }
 
-var (
-	benchSinkStrings []string
-	benchSinkNumeric []NumericCIDR
-)
+var benchSinkNumeric []NumericCIDR
 
-func BenchmarkSubtractMultiple(b *testing.B) {
-	b.Run("no_intersection", func(b *testing.B) {
-		whitelist := make([]string, 0, 8)
-		for i := 0; i < 8; i++ {
-			whitelist = append(whitelist, fmt.Sprintf("192.168.%d.0/24", i*10))
-		}
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			benchSinkStrings, _ = SubtractMultiple("10.5.0.0/16", whitelist)
-		}
-	})
-
-	b.Run("24black_8white", func(b *testing.B) {
-		whitelist := []string{
-			"10.5.1.0/24",
-			"10.5.20.0/24",
-			"10.5.40.17/32",
-			"10.5.80.0/24",
-			"10.5.130.5/32",
-			"10.5.131.0/24",
-			"10.5.200.0/24",
-			"10.5.250.99/32",
-		}
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			benchSinkStrings, _ = SubtractMultiple("10.5.0.0/16", whitelist)
-		}
-	})
-
-	b.Run("50whitelist", func(b *testing.B) {
-		whitelist := make([]string, 0, 50)
-		for i := 0; i < 50; i++ {
-			// Pairs of adjacent /24s (x.0.0/24 and x.1.0/24) to exercise merging,
-			// scattered across distinct second octets.
-			whitelist = append(whitelist, fmt.Sprintf("10.%d.%d.0/24", (i/2)*5+1, i%2))
-		}
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			benchSinkStrings, _ = SubtractMultiple("10.0.0.0/8", whitelist)
-		}
-	})
-}
-
+// BenchmarkGenerateOptimalNumeric measures the production allocation-free core
+// appendOptimalNumeric (via the refGenerateOptimalNumeric wrapper). The deleted
+// legacy GenerateOptimalNumeric was a thin pre-allocating shim over this same
+// core, so this keeps the perf signal on the code that still ships.
 func BenchmarkGenerateOptimalNumeric(b *testing.B) {
 	cases := []struct {
 		name  string
@@ -461,7 +415,7 @@ func BenchmarkGenerateOptimalNumeric(b *testing.B) {
 		b.Run(c.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				benchSinkNumeric = GenerateOptimalNumeric(c.start, c.end)
+				benchSinkNumeric = refGenerateOptimalNumeric(c.start, c.end)
 			}
 		})
 	}

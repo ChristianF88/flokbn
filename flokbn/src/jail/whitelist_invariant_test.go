@@ -65,12 +65,40 @@ func rangesOverlap(aS, aE, bS, bE uint32) bool {
 	return aS <= bE && bS <= aE
 }
 
+// refIsWhitelisted is a jail-package-local reference oracle replacing the deleted
+// cidr.IsWhitelisted: it reports whether the IPv4 CIDR is completely contained
+// within a SINGLE whitelist entry (single-entry coverage, not the union),
+// matching the old cidr.IsWhitelisted / IsWhitelistedIPNet semantics. Invalid or
+// non-IPv4 entries are skipped. It is intentionally independent of the cidr
+// package so the invariant test cross-checks production code rather than reusing
+// it as its own oracle.
+func refIsWhitelisted(cidrStr string, whitelist []string) bool {
+	_, cn, err := net.ParseCIDR(cidrStr)
+	if err != nil || cn.IP.To4() == nil || len(cn.Mask) != 4 {
+		return false
+	}
+	cs := binary.BigEndian.Uint32(cn.IP.To4())
+	ce := cs | ^binary.BigEndian.Uint32(cn.Mask)
+	for _, w := range whitelist {
+		_, wn, err := net.ParseCIDR(w)
+		if err != nil || wn.IP.To4() == nil || len(wn.Mask) != 4 {
+			continue
+		}
+		ws := binary.BigEndian.Uint32(wn.IP.To4())
+		we := ws | ^binary.BigEndian.Uint32(wn.Mask)
+		if cs >= ws && ce <= we {
+			return true
+		}
+	}
+	return false
+}
+
 // assertNoWhitelistedAddressBanned is THE invariant check. Given the list of
 // CIDRs actually emitted into the ban file and the set of whitelisted CIDRs, it
 // fails if ANY whitelisted address is contained in ANY emitted ban CIDR.
 //
 // It checks two independent ways for robustness:
-//  1. cidr.IsWhitelisted(banCIDR, whitelist) must be false — i.e. no emitted
+//  1. refIsWhitelisted(banCIDR, whitelist) must be false — i.e. no emitted
 //     ban CIDR is fully inside the whitelist. (This catches a whole ban range
 //     that should have been dropped.)
 //  2. A direct numeric containment test: no whitelisted range may overlap any
@@ -83,7 +111,7 @@ func assertNoWhitelistedAddressBanned(t *testing.T, emittedBans, whitelist []str
 	for _, ban := range emittedBans {
 		// Robustness check (1): a published ban CIDR must never itself be fully
 		// covered by the whitelist — that ban should have been dropped.
-		if cidr.IsWhitelisted(ban, whitelist) {
+		if refIsWhitelisted(ban, whitelist) {
 			t.Errorf("INVARIANT VIOLATED: published ban CIDR %q is fully covered by the whitelist (should have been dropped)", ban)
 		}
 	}
@@ -323,7 +351,7 @@ func TestPublishedBanFile_WhitelistReappliedAfterJailReload(t *testing.T) {
 		"172.16.5.42/32",                       // the scattered /32
 		"172.16.200.0/32", "172.16.200.127/32", // inside whitelisted /25
 	} {
-		if cidr.IsWhitelisted(addr, emitted) {
+		if refIsWhitelisted(addr, emitted) {
 			t.Errorf("INVARIANT VIOLATED after reload: whitelisted address %q is covered by an emitted ban", addr)
 		}
 		aS, aE := cidrBounds(t, addr)

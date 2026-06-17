@@ -120,10 +120,10 @@ func TestRemoveWhitelisted_IPv4PartialOverlapStillSubtracts(t *testing.T) {
 
 	got := RemoveWhitelisted(blacklist, whitelist)
 
-	// Compare against SubtractMultiple, the proven reference for this case.
-	want, err := SubtractMultiple("10.0.0.0/16", []string{"10.0.0.0/24"})
+	// Compare against refSubtractMultiple, the proven reference for this case.
+	want, err := refSubtractMultiple("10.0.0.0/16", []string{"10.0.0.0/24"})
 	if err != nil {
-		t.Fatalf("reference SubtractMultiple errored: %v", err)
+		t.Fatalf("reference refSubtractMultiple errored: %v", err)
 	}
 	if len(want) == 0 {
 		t.Fatal("test setup wrong: expected a non-empty subtraction result")
