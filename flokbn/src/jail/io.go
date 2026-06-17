@@ -74,16 +74,11 @@ func ReadFromFile(filename string) (string, error) {
 }
 
 func JailToFile(jail Jail, filename string) error {
-
-	jailJSON, err := JailToJSON(jail)
+	jailJSON, err := json.Marshal(jail)
 	if err != nil {
 		return err
 	}
-	err = WriteToFile(filename, jailJSON)
-	if err != nil {
-		return err
-	}
-	return nil
+	return writeFileAtomic(filename, jailJSON, 0644)
 }
 
 func fileExists(filename string) bool {
@@ -100,9 +95,24 @@ func FileToJail(filename string) (Jail, error) {
 	if err != nil {
 		return Jail{}, err
 	}
+	// An empty or whitespace-only file (e.g. a 0-byte file from a truncated
+	// or interrupted write, or a `touch`) is treated the same as a missing
+	// file: fall back to a fresh NewJail() rather than failing. JSONToJail
+	// would otherwise error on `unexpected end of JSON input`.
+	if strings.TrimSpace(jailJSON) == "" {
+		return NewJail(), nil
+	}
 	jail, err := JSONToJail(jailJSON)
 	if err != nil {
 		return Jail{}, err
+	}
+	// A file that EXISTS and parses as valid JSON but yields zero cells
+	// (e.g. `null`, `{}`, `{"Cells":null}`) is corrupt: loading it would
+	// silently destroy the 5-stage escalation ladder. A genuinely missing
+	// or empty file is already handled above (fresh NewJail()); here we
+	// fail loud.
+	if len(jail.Cells) == 0 {
+		return Jail{}, fmt.Errorf("jail file %s parsed to zero cells (corrupt/empty content); refusing to load a cell-less jail that would destroy the escalation ladder", filename)
 	}
 	jail.RefreshBounds()
 	return jail, nil

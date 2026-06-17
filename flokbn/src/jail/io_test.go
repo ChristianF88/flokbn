@@ -236,6 +236,37 @@ func TestFileToJail_MissingAndCorrupt(t *testing.T) {
 		t.Error("FileToJail(missing) must return a fresh NewJail()")
 	}
 
+	// Empty 0-byte file (e.g. truncated/interrupted write or `touch`): per the
+	// Resolved decision "missing OR empty file -> fresh NewJail()", it must
+	// self-heal to a fresh jail with the full 5-cell ladder, not error.
+	empty := tmpDir + string(os.PathSeparator) + "empty.json"
+	if err := os.WriteFile(empty, nil, 0644); err != nil {
+		t.Fatalf("writing empty file: %v", err)
+	}
+	j, err = FileToJail(empty)
+	if err != nil {
+		t.Fatalf("FileToJail(empty) error: %v", err)
+	}
+	if !jailsAreEqual(j, NewJail()) {
+		t.Errorf("FileToJail(empty 0-byte) must return a fresh NewJail(), got %d cells", len(j.Cells))
+	}
+	if len(j.Cells) != 5 {
+		t.Errorf("FileToJail(empty 0-byte) returned %d cells, want 5 (full ladder)", len(j.Cells))
+	}
+
+	// Whitespace-only file: same self-heal as a 0-byte file.
+	blank := tmpDir + string(os.PathSeparator) + "blank.json"
+	if err := os.WriteFile(blank, []byte("  \n\t\n"), 0644); err != nil {
+		t.Fatalf("writing whitespace-only file: %v", err)
+	}
+	j, err = FileToJail(blank)
+	if err != nil {
+		t.Fatalf("FileToJail(whitespace-only) error: %v", err)
+	}
+	if !jailsAreEqual(j, NewJail()) {
+		t.Errorf("FileToJail(whitespace-only) must return a fresh NewJail(), got %d cells", len(j.Cells))
+	}
+
 	// Corrupt file: must fail loud.
 	corrupt := tmpDir + string(os.PathSeparator) + "corrupt.json"
 	if err := os.WriteFile(corrupt, []byte(`{"Cells": [tru`), 0644); err != nil {
@@ -243,6 +274,65 @@ func TestFileToJail_MissingAndCorrupt(t *testing.T) {
 	}
 	if _, err := FileToJail(corrupt); err == nil {
 		t.Error("FileToJail(corrupt) must return a non-nil error")
+	}
+}
+
+// TestFileToJail_ZeroCellsCorrupt verifies that a file which EXISTS and parses
+// as valid JSON but yields zero cells (null, {}, {"Cells":null}) is rejected
+// with a hard error rather than silently loading a cell-less jail that would
+// destroy the 5-stage escalation ladder. This goes beyond the fuzz test's
+// "no panic" guarantee.
+func TestFileToJail_ZeroCellsCorrupt(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"null", `null`},
+		{"emptyObject", `{}`},
+		{"cellsNull", `{"Cells":null}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			filename := tmpDir + string(os.PathSeparator) + "zero.json"
+			if err := os.WriteFile(filename, []byte(tc.content), 0644); err != nil {
+				t.Fatalf("writing file: %v", err)
+			}
+			j, err := FileToJail(filename)
+			if err == nil {
+				t.Fatalf("FileToJail(%q) must return a non-nil error, got jail with %d cells", tc.content, len(j.Cells))
+			}
+			// On error the jail must not be usable: zero cells, not the ladder.
+			if len(j.Cells) != 0 {
+				t.Errorf("FileToJail(%q) on error returned %d cells, want 0 (unusable jail)", tc.content, len(j.Cells))
+			}
+		})
+	}
+}
+
+// TestFileToJail_ValidLadderSurvives confirms the zero-cells guard does not
+// false-positive: a valid populated file round-trips with its full ladder.
+func TestFileToJail_ValidLadderSurvives(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := tmpDir + string(os.PathSeparator) + "valid.json"
+
+	jail := NewJail()
+	if err := jail.Fill("192.168.1.0/24"); err != nil {
+		t.Fatalf("jail.Fill: %v", err)
+	}
+	if err := JailToFile(jail, filename); err != nil {
+		t.Fatalf("JailToFile: %v", err)
+	}
+
+	loaded, err := FileToJail(filename)
+	if err != nil {
+		t.Fatalf("FileToJail(valid): %v", err)
+	}
+	if len(loaded.Cells) != 5 {
+		t.Errorf("loaded jail has %d cells, want 5 (full ladder)", len(loaded.Cells))
+	}
+	if !jailsAreEqual(jail, loaded) {
+		t.Error("populated jail must be equal after file round-trip")
 	}
 }
 
