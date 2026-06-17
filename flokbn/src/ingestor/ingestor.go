@@ -212,7 +212,14 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	}
 
 	// 4. Status and bytes (keep-and-zero on corruption, but count it)
-	fields := strings.Fields(msg[end+2:])
+	// Bounds-check: when the closing request-line quote is the final byte of
+	// the message, end == len(msg)-1 so end+2 == len(msg)+1, which would panic
+	// on slice. Treat a truncated line as having no status/bytes tail (status
+	// and bytes stay zero, not counted malformed) — same as any short line.
+	var fields []string
+	if end+2 <= len(msg) {
+		fields = strings.Fields(msg[end+2:])
+	}
 	if len(fields) >= 2 {
 		if status, err := strconv.Atoi(fields[0]); err == nil {
 			out.Status = uint16(status)
@@ -244,6 +251,21 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	return malformed, nil
 }
 
+// parseEventSafe parses a single event, recovering from any panic in
+// parseEvent so one malformed (untrusted) event can never crash the live-loop
+// goroutine. A recovered panic is surfaced as an error so the caller counts it
+// as a parse error and skips the event (never appended, never zero-valued into
+// output).
+func parseEventSafe(m map[string]interface{}, out *Request) (malformed int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			malformed = 0
+			err = fmt.Errorf("parseEvent panic: %v", r)
+		}
+	}()
+	return parseEvent(m, out)
+}
+
 func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 	var out []Request
 
@@ -258,7 +280,7 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 			for _, evt := range batch.Events {
 				if m, ok := evt.(map[string]interface{}); ok {
 					var entry Request
-					if malformed, err := parseEvent(m, &entry); err == nil {
+					if malformed, err := parseEventSafe(m, &entry); err == nil {
 						if malformed > 0 {
 							ing.malformedFields.Add(uint64(malformed))
 						}

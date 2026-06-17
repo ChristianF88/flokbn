@@ -87,6 +87,110 @@ func TestParseEvent_MissingUserAgent(t *testing.T) {
 	}
 }
 
+// TestParseEvent_TruncatedAtRequestEndQuote is the exact URGENT-01 repro: a
+// message ending precisely at the closing request-line quote. Before the
+// bounds-check, msg[end+2:] panicked (end+2 == len(msg)+1). It must now parse
+// without panic, leaving Status and Bytes at zero and returning no error.
+func TestParseEvent_TruncatedAtRequestEndQuote(t *testing.T) {
+	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1"`
+	evt := map[string]interface{}{"message": log}
+	var req Request
+	malformed, err := parseEvent(evt, &req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if malformed != 0 {
+		t.Errorf("expected 0 malformed fields, got %d", malformed)
+	}
+	if req.Status != 0 {
+		t.Errorf("expected Status 0, got %d", req.Status)
+	}
+	if req.Bytes != 0 {
+		t.Errorf("expected Bytes 0, got %d", req.Bytes)
+	}
+	if req.Method != GET {
+		t.Errorf("expected GET method, got %v", req.Method)
+	}
+	if req.URI != "/" {
+		t.Errorf("expected URI /, got %v", req.URI)
+	}
+}
+
+// TestReadBatch_SurvivesTruncatedEvent proves the live-loop path (ReadBatch ->
+// parseEventSafe -> parseEvent) does not panic on the truncated line and that
+// the bounds-checked event parses successfully (it is a valid request, just
+// without a status/bytes tail), so it IS included in output and is NOT counted
+// as a parse error.
+func TestReadBatch_SurvivesTruncatedEvent(t *testing.T) {
+	ing := &TCPIngestor{
+		events: make(chan *lj.Batch, 1),
+	}
+	truncated := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1"`
+	valid := `10.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /ok HTTP/1.1" 200 1 "-" "UA"`
+	ing.events <- makeBatch(
+		map[string]interface{}{"message": truncated},
+		map[string]interface{}{"message": valid},
+	)
+
+	got, err := ing.ReadBatch()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Both events parse: truncated one (no status/bytes tail) + the valid one.
+	if len(got) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(got))
+	}
+	if got[0].URI != "/" || got[0].Status != 0 || got[0].Bytes != 0 {
+		t.Errorf("truncated event mis-parsed: %+v", got[0])
+	}
+	if got[1].URI != "/ok" {
+		t.Errorf("expected second URI /ok, got %v", got[1].URI)
+	}
+
+	// The truncated line is handled by the bounds-check, NOT the recover path,
+	// so it must not be counted as a parse error.
+	st := ing.Stats()
+	if st.ParseErrorsTotal != 0 {
+		t.Errorf("ParseErrorsTotal = %d, want 0 (truncated line parses cleanly)", st.ParseErrorsTotal)
+	}
+	if st.RequestsTotal != 2 {
+		t.Errorf("RequestsTotal = %d, want 2", st.RequestsTotal)
+	}
+	if st.MalformedFieldsTotal != 0 {
+		t.Errorf("MalformedFieldsTotal = %d, want 0", st.MalformedFieldsTotal)
+	}
+}
+
+// TestParseEventSafe_Transparent verifies the recover wrapper is transparent
+// for normal input: it returns exactly what parseEvent returns (same malformed
+// count, same error) for valid and for already-erroring events, so the
+// recover() guard adds no behavior change on the non-panicking path.
+func TestParseEventSafe_Transparent(t *testing.T) {
+	valid := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
+	var a, b Request
+	mA, eA := parseEvent(map[string]interface{}{"message": valid}, &a)
+	mB, eB := parseEventSafe(map[string]interface{}{"message": valid}, &b)
+	if mA != mB || (eA == nil) != (eB == nil) {
+		t.Errorf("safe wrapper diverged on valid: (%d,%v) vs (%d,%v)", mA, eA, mB, eB)
+	}
+	// Request contains a net.IP slice, so compare the parsed fields directly.
+	if a.IPUint32 != b.IPUint32 || a.Status != b.Status || a.Bytes != b.Bytes ||
+		a.Method != b.Method || a.URI != b.URI || a.UserAgent != b.UserAgent ||
+		!a.Timestamp.Equal(b.Timestamp) || !a.IP.Equal(b.IP) {
+		t.Errorf("safe wrapper produced different Request: %+v vs %+v", a, b)
+	}
+
+	// Erroring input: missing message field must still surface as an error
+	// (not a recovered panic) with malformed == 0.
+	m, err := parseEventSafe(map[string]interface{}{}, &Request{})
+	if err == nil {
+		t.Errorf("expected error for missing message field, got nil")
+	}
+	if m != 0 {
+		t.Errorf("expected 0 malformed, got %d", m)
+	}
+}
+
 func makeBatch(events ...interface{}) *lj.Batch {
 	return &lj.Batch{
 		Events: events,
