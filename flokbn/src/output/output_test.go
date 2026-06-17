@@ -216,6 +216,14 @@ func TestFormatNumber(t *testing.T) {
 		{999, "999"},
 		{1000, "1,000"},
 		{1234567, "1,234,567"},
+		// Negative numbers: the sign must not be grouped as a digit
+		// (regression for the "-,999" / "-,100,000" bug).
+		{-1, "-1"},
+		{-50, "-50"},
+		{-999, "-999"},
+		{-1000, "-1,000"},
+		{-100000, "-100,000"},
+		{-1234567, "-1,234,567"},
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%d", tt.input), func(t *testing.T) {

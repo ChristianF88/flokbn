@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ChristianF88/flokbn/version"
 )
 
 // JSONOutput represents the complete analysis output structure
@@ -13,8 +15,8 @@ type JSONOutput struct {
 	Metadata              Metadata     `json:"metadata"`
 	General               General      `json:"general"`
 	Tries                 []TrieResult `json:"tries,omitempty"`
-	Clustering            Clustering   `json:"clustering,omitempty"`
-	CIDRAnalysis          CIDRAnalysis `json:"cidr_analysis,omitempty"`
+	Clustering            Clustering   `json:"clustering"`
+	CIDRAnalysis          CIDRAnalysis `json:"cidr_analysis"`
 	Warnings              []Warning    `json:"warnings"`
 	Errors                []Error      `json:"errors"`
 	UserAgentWhitelistIPs []string     `json:"useragent_whitelist_ips,omitempty"`
@@ -166,7 +168,7 @@ func NewJSONOutput(analysisType string, startTime time.Time) *JSONOutput {
 		Metadata: Metadata{
 			GeneratedAt:  time.Now().UTC(),
 			AnalysisType: analysisType,
-			Version:      "1.0.0",
+			Version:      version.Version,
 			DurationMS:   time.Since(startTime).Milliseconds(),
 		},
 		Clustering: Clustering{
@@ -286,11 +288,22 @@ func ActiveFilters(params TrieParameters, gf GlobalFilters) []string {
 // FormatNumber adds thousand separators to numbers
 func FormatNumber(n int) string {
 	str := fmt.Sprintf("%d", n)
+
+	// Strip a leading sign so it is never treated as a digit for grouping;
+	// it is re-prepended to the grouped digits below. Without this,
+	// FormatNumber(-1000) would produce "-,000" instead of "-1,000".
+	var sign string
+	if len(str) > 0 && str[0] == '-' {
+		sign = "-"
+		str = str[1:]
+	}
+
 	if len(str) <= 3 {
-		return str
+		return sign + str
 	}
 
 	var result strings.Builder
+	result.WriteString(sign)
 	for i, digit := range str {
 		if i > 0 && (len(str)-i)%3 == 0 {
 			result.WriteString(",")
