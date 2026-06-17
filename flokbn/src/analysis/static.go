@@ -945,6 +945,11 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 				fmt.Sprintf("minDepth (%d) must be <= maxDepth (%d)", argSet.MinDepth, argSet.MaxDepth), 1)
 			continue
 		}
+		if argSet.MaxDepth > 32 {
+			jsonOutput.AddError("invalid_depth_params",
+				fmt.Sprintf("maxDepth (%d) must be <= 32", argSet.MaxDepth), 1)
+			continue
+		}
 
 		clusterStart := time.Now()
 		cidrs := trieInstance.CollectCIDRs(argSet.MinClusterSize, argSet.MinDepth, argSet.MaxDepth, argSet.MeanSubnetDifference)

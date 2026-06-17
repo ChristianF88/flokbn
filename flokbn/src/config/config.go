@@ -327,7 +327,12 @@ func parseClusterArgSetsFromTOML(m map[string]any) []ClusterArgSet {
 		if len(argSet) >= 4 {
 			minDepth := uint32(argSet[1])
 			maxDepth := uint32(argSet[2])
-			if minDepth > maxDepth {
+			// Silently skip invalid sets (existing TOML contract); the 32 ceiling
+			// (IPv4 bit width) is enforced here as defense-in-depth so an
+			// out-of-range set never reaches collectCIDRsNode. The fail-loud
+			// REJECT for CLI/runtime surfaces is handled in
+			// ParseClusterArgSetsFromStrings and processClustering.
+			if minDepth > maxDepth || maxDepth > 32 {
 				continue
 			}
 			sets = append(sets, ClusterArgSet{
@@ -632,6 +637,9 @@ func ParseClusterArgSetsFromStrings(args []string) ([]ClusterArgSet, error) {
 		}
 		if minDepth > maxDepth {
 			return nil, fmt.Errorf("minDepth (%.0f) must be <= maxDepth (%.0f)", minDepth, maxDepth)
+		}
+		if maxDepth > 32 {
+			return nil, fmt.Errorf("maxDepth (%.0f) must be <= 32", maxDepth)
 		}
 		sets = append(sets, ClusterArgSet{
 			MinClusterSize:       uint32(minClusterSize),

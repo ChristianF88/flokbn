@@ -1001,6 +1001,16 @@ func TestParseClusterArgSetsFromStrings(t *testing.T) {
 		}
 	})
 
+	t.Run("maxDepth > 32 fails", func(t *testing.T) {
+		// Regression for URGENT-02: maxDepth above the IPv4 bit width (32) must
+		// be rejected with a clear error rather than silently dropping all
+		// /32-leaf clusters downstream.
+		_, err := ParseClusterArgSetsFromStrings([]string{"1000", "24", "33", "0.1"})
+		if err == nil {
+			t.Error("expected error when maxDepth > 32")
+		}
+	})
+
 	t.Run("minDepth equals maxDepth succeeds", func(t *testing.T) {
 		sets, err := ParseClusterArgSetsFromStrings([]string{"1000", "24", "24", "0.1"})
 		if err != nil {

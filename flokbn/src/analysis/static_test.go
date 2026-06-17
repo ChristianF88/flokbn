@@ -254,6 +254,43 @@ func TestStaticFromConfigInvalidClusterParams(t *testing.T) {
 	}
 }
 
+// TestStaticFromConfigMaxDepthAbove32 is the regression test for URGENT-02
+// finding (2): a maxDepth above the IPv4 bit width (32) used to silently drop
+// all /32-leaf clusters. The runtime clustering path must now surface an
+// invalid_depth_params error and skip that argSet instead.
+func TestStaticFromConfigMaxDepthAbove32(t *testing.T) {
+	cfg := &config.Config{
+		Static: &config.StaticConfig{
+			LogFile:   getTestLogFile(),
+			LogFormat: "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\"",
+		},
+		StaticTries: map[string]*config.TrieConfig{
+			"maxdepth_too_large": {
+				ClusterArgSets: []config.ClusterArgSet{
+					{MinClusterSize: 100, MinDepth: 24, MaxDepth: 33, MeanSubnetDifference: 0.2}, // Invalid: maxDepth > 32
+				},
+			},
+		},
+	}
+
+	result, err := Static(cfg)
+	if err != nil && result == nil {
+		t.Fatalf("Unexpected complete failure: %v", err)
+	}
+
+	foundError := false
+	for _, e := range result.Errors {
+		if e.Type == "invalid_depth_params" {
+			foundError = true
+			break
+		}
+	}
+
+	if !foundError {
+		t.Error("Expected invalid_depth_params error for maxDepth > 32")
+	}
+}
+
 func TestStaticFromConfigTiming(t *testing.T) {
 	cfg := &config.Config{
 		Static: &config.StaticConfig{

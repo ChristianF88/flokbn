@@ -370,8 +370,13 @@ func (t *Trie) collectCIDRsNode(node *TrieNode, prefix uint32, depth uint32, res
 			} else {
 				diff = node.Children[1].Count - node.Children[0].Count
 			}
-			// Compare (2000*diff)/node.Count < threshold using cross-multiplication
-			appendCluster = (2000 * diff) < (threshold * node.Count)
+			// Compare (2000*diff)/node.Count < threshold using cross-multiplication.
+			// Widen both products to uint64: diff, threshold, and node.Count are
+			// uint32, so 2000*diff (max ~2000*2^32) and threshold*node.Count
+			// (max ~2^32*2^32) can overflow uint32 once counts exceed ~2.1M.
+			// uint64 widening keeps the comparison exact (and pure integer math)
+			// for multi-million-request tries.
+			appendCluster = uint64(2000)*uint64(diff) < uint64(threshold)*uint64(node.Count)
 		}
 	}
 
@@ -388,7 +393,9 @@ func (t *Trie) collectCIDRsNode(node *TrieNode, prefix uint32, depth uint32, res
 		leftCount := node.Children[0].Count
 		rightCount := node.Children[1].Count
 
-		// Process smaller subtree first to minimize stack depth
+		// Recurse into the smaller subtree first for deterministic,
+		// lower-prefix-first result ordering and cache locality; recursion depth
+		// is bounded by trie height (<=32) regardless of child order.
 		// Only process children that meet minimum cluster size requirement
 		if leftCount <= rightCount {
 			if leftCount >= minClusterSize {
@@ -447,7 +454,11 @@ func (t *Trie) CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth uint32, me
 	}
 
 	if t.Root.Children[0] == nil && t.Root.Children[1] == nil {
-		if t.Root.Count >= minClusterSize && 0 >= minDepth {
+		// Require a non-empty root before emitting the /0. Insert/InsertSorted/
+		// BuildSorted never increment Root.Count (left at 0 by design), so on a
+		// completely empty trie this branch would otherwise emit a 0.0.0.0/0
+		// covering zero requests when minClusterSize==0 && minDepth==0.
+		if t.Root.Count > 0 && t.Root.Count >= minClusterSize && 0 >= minDepth {
 			return []cidr.NumericCIDR{{IP: 0, PrefixLen: 0}}
 		}
 		return []cidr.NumericCIDR{}

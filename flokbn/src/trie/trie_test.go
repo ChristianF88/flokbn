@@ -732,6 +732,74 @@ func TestCollectCIDRsThresholdBoundaries(t *testing.T) {
 	}
 }
 
+// TestCollectCIDRsBalanceOverflow is the regression test for URGENT-02
+// finding (1): the balance heuristic at collectCIDRsNode used uint32
+// cross-multiplication, so 2000*diff overflowed once diff > ~2.147M and the
+// wraparound made a wildly imbalanced subnet emit as "balanced".
+//
+// The balance check fires on a node whose TWO children are imbalanced, and the
+// node itself must have a non-zero Count (Root.Count is always 0, so the
+// imbalanced split must sit below the Root). We place it at the 0.0.0.0/1 node
+// (depth 1): its two depth-2 children carry counts 2,147,485 and 1
+// (diff=2,147,484), so the /1 node's Count is 2,147,486. With
+// meanSubnetDifference=0.001 (threshold=1) the check at the /1 node is
+// 2000*diff < threshold*node.Count:
+//   - PRE-FIX uint32: 2000*diff = 4,294,968,000 wraps mod 2^32 to 704;
+//     704 < 2,147,486 is TRUE -> spuriously emits 0.0.0.0/1.
+//   - POST-FIX uint64: 4,294,968,000 < 2,147,486 is FALSE -> correctly
+//     suppressed.
+//
+// Counts are set directly on freshly allocated nodes (package-internal test)
+// to avoid inserting millions of IPs.
+func TestCollectCIDRsBalanceOverflow(t *testing.T) {
+	tr := NewTrie()
+
+	// 0.0.0.0/1 node (depth 1) under the Root's bit-0 child.
+	slash1 := tr.allocator.GetNode()
+	tr.Root.Children[0] = slash1
+
+	// Its two depth-2 children form the imbalanced split.
+	c0 := tr.allocator.GetNode()
+	c1 := tr.allocator.GetNode()
+	c0.Count = 2_147_485 // diff = 2,147,484 -> 2000*diff wraps in uint32
+	c1.Count = 1
+	slash1.Children[0] = c0
+	slash1.Children[1] = c1
+	slash1.Count = c0.Count + c1.Count // 2,147,486
+
+	// minDepth=0 so the /1 node is eligible; minClusterSize=1 so size never
+	// blocks it; threshold msd=0.001 -> uint32 threshold = 1.
+	results := tr.CollectCIDRs(1, 0, 32, 0.001)
+
+	for _, c := range results {
+		if c == "0.0.0.0/1" {
+			t.Fatalf("overflow regression: wildly imbalanced /1 (%d vs %d) was emitted as balanced; got %v",
+				c0.Count, c1.Count, results)
+		}
+	}
+}
+
+// TestCollectCIDRsEmptyTrie is the regression test for URGENT-02 finding (3):
+// a completely empty trie with minClusterSize==0 && minDepth==0 used to emit
+// 0.0.0.0/0 (covering zero requests) because Root.Count is never incremented.
+// It must now return an empty result. A non-empty single-IP control confirms
+// normal emission is unaffected.
+func TestCollectCIDRsEmptyTrie(t *testing.T) {
+	empty := NewTrie()
+	results := empty.CollectCIDRs(0, 0, 32, 0.0)
+	if len(results) != 0 {
+		t.Errorf("empty trie should emit no clusters, got %v", results)
+	}
+
+	// Non-empty control: a single IP still emits its /32 leaf as before.
+	nonEmpty := NewTrie()
+	nonEmpty.Insert(net.ParseIP("192.168.1.1"))
+	ctrl := nonEmpty.CollectCIDRs(1, 32, 32, 0.0)
+	if len(ctrl) != 1 || ctrl[0] != "192.168.1.1/32" {
+		t.Errorf("non-empty single-IP control: expected [192.168.1.1/32], got %v", ctrl)
+	}
+}
+
 func TestTrieCountInRangeCIDR(t *testing.T) {
 	tests := []struct {
 		name      string
