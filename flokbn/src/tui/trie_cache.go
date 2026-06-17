@@ -27,7 +27,6 @@ type TrieCache struct {
 	// counts requests in /16 a.b whose full IP is inside a detected cluster
 	// range of that (trie, set). Used for the traffic-capture overlay.
 	clusteredMatrixes map[int]map[int][256][256]uint32
-	vizRenderCache    map[int]map[int]string // Visualization render cache per trie per cluster set
 
 	// Ground-truth traffic over ALL parsed requests, identical for every trie.
 	// Computed once on the first cacheTrafficData call.
@@ -50,7 +49,6 @@ func NewTrieCache() *TrieCache {
 		trafficMatrixes:   make(map[int][256][256]uint32),
 		maxTraffics:       make(map[int]uint32),
 		clusteredMatrixes: make(map[int]map[int][256][256]uint32),
-		vizRenderCache:    make(map[int]map[int]string),
 	}
 }
 
@@ -107,25 +105,14 @@ func (ftc *TrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResult *o
 }
 
 // cacheTrieTexts pre-renders all text components for a trie.
-// Must hold ftc.mu (write lock) on entry. Acquires app.mu to safely
-// swap jsonResult/currentTrie during rendering.
+// Must hold ftc.mu (write lock) on entry. Renders from the locally-derived
+// single-trie output and index — it does NOT mutate app.jsonResult/currentTrie,
+// which are owned exclusively by the tview UI goroutine.
 func (ftc *TrieCache) cacheTrieTexts(trieIndex int, trieOutput *output.JSONOutput, app *App) {
-	app.mu.Lock()
-	originalResult := app.jsonResult
-	originalTrieIndex := app.currentTrie
-	app.jsonResult = trieOutput
-	app.currentTrie = trieIndex
-
-	// Pre-render all text components while holding the lock
-	ftc.summaryTexts[trieIndex] = app.buildSummaryText()
-	ftc.clusterTexts[trieIndex] = app.buildClusteringText()
-	ftc.cidrTexts[trieIndex] = app.buildCidrAnalysisText()
-	ftc.diagnosticTexts[trieIndex] = app.buildDiagnosticsText()
-
-	// Restore original state
-	app.jsonResult = originalResult
-	app.currentTrie = originalTrieIndex
-	app.mu.Unlock()
+	ftc.summaryTexts[trieIndex] = app.buildSummaryTextFor(trieOutput, trieIndex)
+	ftc.clusterTexts[trieIndex] = app.buildClusteringTextFor(trieOutput)
+	ftc.cidrTexts[trieIndex] = app.buildCidrAnalysisTextFor(trieOutput)
+	ftc.diagnosticTexts[trieIndex] = app.buildDiagnosticsTextFor(trieOutput)
 }
 
 // cacheTrafficData pre-processes traffic data for visualization.
@@ -244,18 +231,4 @@ func (ftc *TrieCache) GetTrafficData(trieIndex int) (trafficMatrix [256][256]uin
 
 	exists = matrixExists && maxExists
 	return trafficMatrix, maxTraffic, exists
-}
-
-// GetVisualizationRender returns pre-rendered visualization text
-func (ftc *TrieCache) GetVisualizationRender(trieIndex, clusterSetIndex int) (string, bool) {
-	ftc.mu.RLock()
-	defer ftc.mu.RUnlock()
-
-	if trieCache, trieExists := ftc.vizRenderCache[trieIndex]; trieExists {
-		if renderText, renderExists := trieCache[clusterSetIndex]; renderExists {
-			return renderText, true
-		}
-	}
-
-	return "", false
 }

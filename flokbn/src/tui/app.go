@@ -45,11 +45,15 @@ type App struct {
 	rangesCidr     []string
 	plotPath       string
 
-	// Shared mutable state protected by mu (accessed from background goroutines)
+	// jsonResult and currentTrie are owned exclusively by the tview UI goroutine
+	// (read/written only inside QueueUpdateDraw closures). Background precache
+	// goroutines must NOT touch them; they derive single-trie outputs locally.
+	jsonResult  *output.JSONOutput
+	currentTrie int
+
+	// Shared mutable state protected by mu (accessed from background goroutines).
 	mu              sync.Mutex
-	jsonResult      *output.JSONOutput
 	requests        []ingestor.Request
-	currentTrie     int
 	multiTrieResult *output.JSONOutput // Store the full multi-trie result
 
 	// Atomic flags for cross-goroutine signaling (no mutex needed)
@@ -630,23 +634,27 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 			})
 			return
 		} else {
-			// Try to quickly cache this specific trie if not already cached
+			// Try to quickly cache this specific trie if not already cached.
+			// PreCacheSingleTrie locks ftc.mu internally; all reads/writes of the
+			// UI-owned currentTrie/jsonResult happen inside QueueUpdateDraw so the
+			// tview UI goroutine remains their sole owner.
 			if a.multiTrieResult != nil && newTrieIndex < len(a.multiTrieResult.Tries) {
 				go func() {
 					if a.trieCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requests) {
-						// Cache was successful, trigger a quick re-render if still on this trie
-						if a.currentTrie == newTrieIndex {
-							a.app.QueueUpdateDraw(func() {
-								// Re-try with newly cached data
-								if cachedData, hit := a.trieCache.GetTrieOutput(newTrieIndex); hit && cachedData != nil {
-									a.jsonResult = cachedData
-									a.displayResultsFromTrieCache(newTrieIndex)
-									if a.visualizationView != nil {
-										a.updateVisualizationFromCache(newTrieIndex)
-									}
+						a.app.QueueUpdateDraw(func() {
+							// Re-render only if the user is still on this trie.
+							if a.currentTrie != newTrieIndex {
+								return
+							}
+							// Re-try with newly cached data
+							if cachedData, hit := a.trieCache.GetTrieOutput(newTrieIndex); hit && cachedData != nil {
+								a.jsonResult = cachedData
+								a.displayResultsFromTrieCache(newTrieIndex)
+								if a.visualizationView != nil {
+									a.updateVisualizationFromCache(newTrieIndex)
 								}
-							})
-						}
+							}
+						})
 					}
 				}()
 			}
@@ -793,12 +801,19 @@ func (a *App) displayResultsUncached() {
 	a.diagnostics.SetText(diagText.String())
 }
 
-// buildClusteringText creates the clustering results text
+// buildClusteringText creates the clustering results text for the current trie.
 func (a *App) buildClusteringText() string {
+	return a.buildClusteringTextFor(a.jsonResult)
+}
+
+// buildClusteringTextFor creates the clustering results text from an explicit
+// single-trie output, so callers (e.g. the background precache) need not mutate
+// shared App state to render a non-current trie.
+func (a *App) buildClusteringTextFor(result *output.JSONOutput) string {
 	var clusteringText strings.Builder
 	clusteringText.WriteString("[white::b]Detected Threats[white::-]\n\n")
 
-	for i, cluster := range a.jsonResult.Clustering.Data {
+	for i, cluster := range result.Clustering.Data {
 		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (min_size=%d, depth=%d-%d)\n",
 			i+1, cluster.Parameters.MinClusterSize, cluster.Parameters.MinDepth, cluster.Parameters.MaxDepth))
 
@@ -830,13 +845,19 @@ func (a *App) buildClusteringText() string {
 	return clusteringText.String()
 }
 
-// buildCidrAnalysisText creates the CIDR analysis text
+// buildCidrAnalysisText creates the CIDR analysis text for the current trie.
 func (a *App) buildCidrAnalysisText() string {
+	return a.buildCidrAnalysisTextFor(a.jsonResult)
+}
+
+// buildCidrAnalysisTextFor creates the CIDR analysis text from an explicit
+// single-trie output (see buildClusteringTextFor).
+func (a *App) buildCidrAnalysisTextFor(result *output.JSONOutput) string {
 	var cidrText strings.Builder
 	cidrText.WriteString("[white::b]Range Analysis[white::-]\n\n")
 
-	if len(a.jsonResult.CIDRAnalysis.Data) > 0 {
-		for _, cidr := range a.jsonResult.CIDRAnalysis.Data {
+	if len(result.CIDRAnalysis.Data) > 0 {
+		for _, cidr := range result.CIDRAnalysis.Data {
 			cidrText.WriteString(fmt.Sprintf("[cyan]%s[white]\n", cidr.CIDR))
 			cidrText.WriteString(fmt.Sprintf("  Requests: [yellow]%s[white] (%.2f%%)\n\n",
 				output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
@@ -848,14 +869,20 @@ func (a *App) buildCidrAnalysisText() string {
 	return cidrText.String()
 }
 
-// buildDiagnosticsText creates the diagnostics text
+// buildDiagnosticsText creates the diagnostics text for the current trie.
 func (a *App) buildDiagnosticsText() string {
+	return a.buildDiagnosticsTextFor(a.jsonResult)
+}
+
+// buildDiagnosticsTextFor creates the diagnostics text from an explicit
+// single-trie output (see buildClusteringTextFor).
+func (a *App) buildDiagnosticsTextFor(result *output.JSONOutput) string {
 	var diagText strings.Builder
 	diagText.WriteString("[white::b]Diagnostics[white::-]\n\n")
 
 	// Filter out info messages
 	var realWarnings []output.Warning
-	for _, warning := range a.jsonResult.Warnings {
+	for _, warning := range result.Warnings {
 		if warning.Type != "info" {
 			realWarnings = append(realWarnings, warning)
 		}
@@ -869,9 +896,9 @@ func (a *App) buildDiagnosticsText() string {
 		diagText.WriteString("\n")
 	}
 
-	if len(a.jsonResult.Errors) > 0 {
+	if len(result.Errors) > 0 {
 		diagText.WriteString("[red]Errors:[white]\n")
-		for _, err := range a.jsonResult.Errors {
+		for _, err := range result.Errors {
 			diagText.WriteString(fmt.Sprintf("  • %s\n", err.Message))
 		}
 	} else if len(realWarnings) == 0 {
@@ -882,7 +909,15 @@ func (a *App) buildDiagnosticsText() string {
 }
 
 // buildSummaryText creates the summary text with fixed and trie-specific stats
+// for the current trie.
 func (a *App) buildSummaryText() string {
+	return a.buildSummaryTextFor(a.jsonResult, a.currentTrie)
+}
+
+// buildSummaryTextFor creates the summary text from an explicit single-trie
+// output and trie index, so the background precache can render a non-current
+// trie without mutating shared App state.
+func (a *App) buildSummaryTextFor(result *output.JSONOutput, trieIndex int) string {
 	var summaryText strings.Builder
 	summaryText.WriteString("[white::b]Analysis Summary[white::-]\n")
 
@@ -899,9 +934,9 @@ func (a *App) buildSummaryText() string {
 		parsingTime = a.multiTrieResult.General.Parsing.DurationMS
 	} else {
 		// No-config mode - use jsonResult data
-		parseRate = a.jsonResult.General.Parsing.RatePerSecond
-		totalIPsRead = a.jsonResult.General.TotalRequests
-		parsingTime = a.jsonResult.General.Parsing.DurationMS
+		parseRate = result.General.Parsing.RatePerSecond
+		totalIPsRead = result.General.TotalRequests
+		parsingTime = result.General.Parsing.DurationMS
 	}
 
 	summaryText.WriteString(fmt.Sprintf("[dim]Parse Rate:[white] %s req/sec\n",
@@ -913,10 +948,10 @@ func (a *App) buildSummaryText() string {
 
 	// Trie-specific stats (show below the fixed stats)
 	// Always use multiTrieResult directly for accurate Parameters and Stats
-	if a.cfg != nil && a.multiTrieResult != nil && a.currentTrie < len(a.multiTrieResult.Tries) {
+	if a.cfg != nil && a.multiTrieResult != nil && trieIndex < len(a.multiTrieResult.Tries) {
 		// Always use multiTrieResult directly - it has the accurate Parameters and Stats
 		// The single-trie output conversion loses this information, so we bypass it here
-		trieData := a.multiTrieResult.Tries[a.currentTrie]
+		trieData := a.multiTrieResult.Tries[trieIndex]
 
 		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", trieData.Name))
 
@@ -965,10 +1000,10 @@ func (a *App) buildSummaryText() string {
 	} else {
 		// No-config CLI mode
 		summaryText.WriteString("[white::b]Legacy Analysis[white::-]\n")
-		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", a.jsonResult.General.LogFile))
+		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", result.General.LogFile))
 		summaryText.WriteString(fmt.Sprintf("[dim]Unique IPs:[white] %s\n",
-			output.FormatNumber(a.jsonResult.General.UniqueIPs)))
-		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dms", a.jsonResult.Metadata.DurationMS))
+			output.FormatNumber(result.General.UniqueIPs)))
+		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dms", result.Metadata.DurationMS))
 	}
 
 	return summaryText.String()
@@ -1157,6 +1192,14 @@ func (a *App) updateVisualizationFromCache(trieIndex int) {
 		return
 	}
 
+	// Reset the displayed cluster set on a trie switch and refresh the count,
+	// matching the slow fallback path (updateForCurrentTrie). Without this the
+	// cache-hit fast path would keep the previous trie's currentClusterSet.
+	a.visualizationView.currentClusterSet = 0
+	if a.jsonResult != nil {
+		a.visualizationView.totalClusterSets = len(a.jsonResult.Clustering.Data)
+	}
+
 	// Get cached traffic data
 	trafficMatrix, maxTraffic, exists := a.trieCache.GetTrafficData(trieIndex)
 	if !exists {
@@ -1178,12 +1221,6 @@ func (a *App) updateVisualizationFromCache(trieIndex int) {
 		}
 	}
 
-	// Get current cluster set and render with cached visualization if available
-	if cachedRender, cacheHit := a.trieCache.GetVisualizationRender(trieIndex, a.visualizationView.currentClusterSet); cacheHit {
-		// Use pre-rendered visualization
-		a.visualizationView.view.SetText(cachedRender)
-	} else {
-		// Generate on-demand if not cached (much faster since traffic data is cached)
-		a.visualizationView.Render()
-	}
+	// Render on-demand (fast, since the traffic and clustered grids are cached).
+	a.visualizationView.Render()
 }

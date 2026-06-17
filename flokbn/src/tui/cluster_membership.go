@@ -8,9 +8,9 @@ import (
 	"github.com/ChristianF88/flokbn/output"
 )
 
-// ipInterval is a half-inclusive numeric range [Start, End] covering a CIDR's
-// full address span (both endpoints inclusive). Stored as uint32 so membership
-// can be tested with integer comparisons and no allocation in the hot loop.
+// ipInterval is a closed numeric range [Start, End] (both endpoints inclusive)
+// covering a CIDR's full address span. Stored as uint32 so membership can be
+// tested with integer comparisons and no allocation in the hot loop.
 type ipInterval struct {
 	Start uint32
 	End   uint32

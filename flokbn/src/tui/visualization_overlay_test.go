@@ -169,8 +169,11 @@ func TestClusteredTrafficGrid(t *testing.T) {
 }
 
 // TestProcessTrafficDataLegacyMode exercises the public ProcessTrafficData entry
-// point (legacy/no-config) to ensure traffic + clustered grids are both built in
-// one pass and match the reference.
+// point (legacy/no-config). ProcessTrafficData now builds ONLY the traffic
+// matrix; the clustered-overlay grid is owned by ensureClusteredData (run by
+// generateRenderText before every heatmap render). This test documents that new
+// ownership: ProcessTrafficData alone leaves clusteredData zeroed, and the
+// clustered grid only matches the reference after ensureClusteredData runs.
 func TestProcessTrafficDataLegacyMode(t *testing.T) {
 	cidrStrs := []string{"45.40.50.192/26", "14.160.0.0/12"}
 	reqs := []ingestor.Request{
@@ -194,14 +197,16 @@ func TestProcessTrafficDataLegacyMode(t *testing.T) {
 
 	v.ProcessTrafficData(reqs)
 
-	wantClustered := buildGridReference(reqs, mustCIDRs(t, cidrStrs...))
+	// ProcessTrafficData no longer owns the clustered overlay: it must leave
+	// clusteredData fully zeroed (the discarded per-request build is gone).
 	for a := 0; a < 256; a++ {
 		for b := 0; b < 256; b++ {
-			if v.clusteredData[a][b] != wantClustered[a][b] {
-				t.Fatalf("clusteredData[%d][%d]=%d want %d", a, b, v.clusteredData[a][b], wantClustered[a][b])
+			if v.clusteredData[a][b] != 0 {
+				t.Fatalf("ProcessTrafficData wrote clusteredData[%d][%d]=%d, want 0 (overlay is ensureClusteredData's job)", a, b, v.clusteredData[a][b])
 			}
 		}
 	}
+
 	// Traffic grid totals all requests.
 	var total uint32
 	for a := 0; a < 256; a++ {
@@ -211,6 +216,18 @@ func TestProcessTrafficDataLegacyMode(t *testing.T) {
 	}
 	if total != uint32(len(reqs)) {
 		t.Errorf("traffic total = %d, want %d", total, len(reqs))
+	}
+
+	// After ensureClusteredData (the single source of the clustered grid), the
+	// overlay must match the independent net.Contains reference.
+	v.ensureClusteredData()
+	wantClustered := buildGridReference(reqs, mustCIDRs(t, cidrStrs...))
+	for a := 0; a < 256; a++ {
+		for b := 0; b < 256; b++ {
+			if v.clusteredData[a][b] != wantClustered[a][b] {
+				t.Fatalf("clusteredData[%d][%d]=%d want %d", a, b, v.clusteredData[a][b], wantClustered[a][b])
+			}
+		}
 	}
 }
 

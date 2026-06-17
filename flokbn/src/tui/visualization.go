@@ -38,6 +38,38 @@ type VisualizationView struct {
 	// trafficData is per-trie (same across cluster sets); clusteredData differs
 	// per cluster set because it depends on that set's detected ranges.
 	cachedClusteredData map[clusterKey][256][256]uint32
+
+	// Render-source override used by PreCacheAllTries so it can render a
+	// non-current trie WITHOUT mutating the UI-owned App.jsonResult/currentTrie.
+	// When renderResult is non-nil, the render chain reads (renderResult,
+	// renderTrie) instead of (app.jsonResult, app.currentTrie). Set/cleared only
+	// on the goroutine doing the precache; never observed cross-goroutine.
+	renderResult *output.JSONOutput
+	renderTrie   int
+}
+
+// effectiveResult returns the single-trie output the render chain should read:
+// the precache override when set, otherwise the UI-owned App.jsonResult.
+func (v *VisualizationView) effectiveResult() *output.JSONOutput {
+	if v.renderResult != nil {
+		return v.renderResult
+	}
+	if v.app == nil {
+		return nil
+	}
+	return v.app.jsonResult
+}
+
+// effectiveTrie returns the trie index the render chain should key off: the
+// precache override when set, otherwise the UI-owned App.currentTrie.
+func (v *VisualizationView) effectiveTrie() int {
+	if v.renderResult != nil {
+		return v.renderTrie
+	}
+	if v.app == nil {
+		return 0
+	}
+	return v.app.currentTrie
 }
 
 // NewVisualizationView creates a new visualization view
@@ -79,18 +111,17 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 		return
 	}
 
-	// Multi-trie mode - cache traffic data for each trie
-	originalTrie := v.app.currentTrie
+	// Multi-trie mode - cache traffic data for each trie. Render each trie from
+	// a locally-derived single-trie output via the renderResult override so the
+	// UI-owned App.jsonResult/currentTrie are never mutated here.
 	originalRequests := v.requests
 	v.requests = requests
 
 	for trieIndex := 0; trieIndex < len(v.app.multiTrieResult.Tries); trieIndex++ {
-		// Temporarily switch to this trie for processing
-		v.app.currentTrie = trieIndex
-
-		// Update to this trie's data
-		v.app.jsonResult = v.app.singleTrieOutput(trieIndex)
-		v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
+		// Point the render chain at this trie's locally-derived output.
+		v.renderResult = v.app.singleTrieOutput(trieIndex)
+		v.renderTrie = trieIndex
+		v.totalClusterSets = len(v.renderResult.Clustering.Data)
 
 		// Process traffic data for this trie
 		v.ProcessTrafficData(requests)
@@ -108,10 +139,15 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 		}
 	}
 
-	// Restore original state
-	v.app.currentTrie = originalTrie
-	v.app.jsonResult = v.app.singleTrieOutput(originalTrie)
-	v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
+	// Clear the override so the render chain reads the UI-owned App state again.
+	v.renderResult = nil
+	v.renderTrie = 0
+
+	// Restore view state to the UI's current trie.
+	originalTrie := v.app.currentTrie
+	if v.app.jsonResult != nil {
+		v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
+	}
 	v.currentClusterSet = 0
 	v.requests = originalRequests
 
@@ -124,13 +160,15 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 
 // getCurrentClusterSet returns the current cluster set based on mode
 func (v *VisualizationView) getCurrentClusterSet() *output.ClusterResult {
-	// Ensure app and jsonResult exist
-	if v.app == nil || v.app.jsonResult == nil {
+	// Ensure app and the active result exist. effectiveResult honours the
+	// precache render override; otherwise it returns the UI-owned jsonResult.
+	result := v.effectiveResult()
+	if v.app == nil || result == nil {
 		return nil
 	}
 
 	// Update totalClusterSets from current data
-	actualClusterSets := len(v.app.jsonResult.Clustering.Data)
+	actualClusterSets := len(result.Clustering.Data)
 	if actualClusterSets == 0 {
 		return nil
 	}
@@ -145,8 +183,8 @@ func (v *VisualizationView) getCurrentClusterSet() *output.ClusterResult {
 		v.currentClusterSet = 0 // Reset to first cluster set
 	}
 
-	// Always use jsonResult.Clustering.Data since we convert multi-trie to single-trie output
-	return &v.app.jsonResult.Clustering.Data[v.currentClusterSet]
+	// Always use Clustering.Data since we convert multi-trie to single-trie output
+	return &result.Clustering.Data[v.currentClusterSet]
 }
 
 // updateForCurrentTrie updates the visualization for the current trie
@@ -197,29 +235,25 @@ func (v *VisualizationView) updateTrafficDataCached() {
 	}
 }
 
-// ProcessTrafficData processes the requests and builds the traffic heatmap and
-// the clustered-traffic overlay grid for the current cluster set in a single
-// pass. trafficData[a][b] counts all requests in /16 a.b; clusteredData[a][b]
-// counts only those whose full IP falls inside a detected cluster range of the
-// current set. The overlay dot then encodes clustered/total per cell.
+// ProcessTrafficData processes the requests and builds the traffic heatmap
+// matrix. trafficData[a][b] counts all requests in /16 a.b over ALL parsed
+// requests — the matrix is ground truth and identical across tries.
+//
+// The clustered-traffic overlay grid is NOT built here: it is owned by
+// ensureClusteredData, which generateRenderText calls unconditionally before
+// every heatmap render (and which keys the grid per (trie, cluster set)).
+// Building it here too would be a discarded extra binary search per request.
 func (v *VisualizationView) ProcessTrafficData(requests []ingestor.Request) {
 	v.requests = requests
 	v.maxTraffic = 0
 
-	// Reset both grids.
+	// Reset the traffic grid.
 	for i := range v.trafficData {
 		v.trafficData[i] = [256]uint32{}
-		v.clusteredData[i] = [256]uint32{}
 	}
 
-	// Pre-parse the current cluster set's ranges once into sorted intervals so
-	// membership is an allocation-free binary search in the hot loop.
-	intervals := buildClusterIntervals(v.getCurrentClusterSet())
-
 	// Count traffic by /16 ranges (first.second octets) over ALL parsed
-	// requests — the matrix is ground truth and identical across tries; only
-	// the clustered overlay differs per (trie, cluster set). Clustered traffic
-	// uses the full 32-bit IP membership test.
+	// requests.
 	for i := range requests {
 		req := &requests[i]
 		ip := req.IPUint32
@@ -232,9 +266,6 @@ func (v *VisualizationView) ProcessTrafficData(requests []ingestor.Request) {
 		if v.trafficData[a][b] > v.maxTraffic {
 			v.maxTraffic = v.trafficData[a][b]
 		}
-		if intervals.Contains(ip) {
-			v.clusteredData[a][b]++
-		}
 	}
 }
 
@@ -246,13 +277,10 @@ func (v *VisualizationView) renderCacheKey(trie, set int) renderKey {
 }
 
 // clusteredCacheKey returns the composite cache key for the clustered grid of
-// the current (trie, cluster set) pair.
+// the current (trie, cluster set) pair. Honours the precache render override
+// so each pre-rendered trie keys its own clustered grid correctly.
 func (v *VisualizationView) clusteredCacheKey() clusterKey {
-	trie := 0
-	if v.app != nil {
-		trie = v.app.currentTrie
-	}
-	return clusterKey{trie: trie, set: v.currentClusterSet}
+	return clusterKey{trie: v.effectiveTrie(), set: v.currentClusterSet}
 }
 
 // ensureClusteredData makes v.clusteredData reflect the current (trie, cluster
@@ -550,25 +578,15 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 		if clusterSet != nil && len(clusterSet.MergedRanges) > 0 {
 			content.WriteString(fmt.Sprintf("\n[yellow]Cluster Set %d Detected Ranges:[white]\n", v.currentClusterSet+1))
 
-			// Calculate total for this cluster set
+			// Calculate the total for this cluster set; sum the per-range
+			// percentages so the Total shares their denominator (requests after
+			// filtering, not unique IPs). This mirrors buildClusteringText and
+			// keeps the per-range lines summing exactly to the Total.
 			var totalRequests uint32
+			var totalPercentage float64
 			for _, cidr := range clusterSet.MergedRanges {
 				totalRequests += cidr.Requests
-			}
-
-			// Get unique IPs count depending on mode
-			var uniqueIPs int
-			if v.app.cfg != nil && len(v.app.jsonResult.Tries) > 0 && v.app.currentTrie < len(v.app.jsonResult.Tries) {
-				// Multi-trie mode - use current trie's unique IPs
-				uniqueIPs = v.app.jsonResult.Tries[v.app.currentTrie].Stats.UniqueIPs
-			} else {
-				// No-config mode
-				uniqueIPs = v.app.jsonResult.General.UniqueIPs
-			}
-
-			var totalPercentage float64
-			if uniqueIPs > 0 {
-				totalPercentage = float64(totalRequests) / float64(uniqueIPs) * 100
+				totalPercentage += cidr.Percentage
 			}
 
 			for _, cidr := range clusterSet.MergedRanges {
