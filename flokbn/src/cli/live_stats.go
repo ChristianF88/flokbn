@@ -141,14 +141,15 @@ type loopStats struct {
 // building: iteration counter, last ban-file content actually on disk, and
 // the cached top-talker slices (replaced wholesale, never mutated in place).
 type liveStatsState struct {
-	startTime      time.Time
-	iterations     uint64
-	heartbeats     uint64
-	banContent     string
-	banEntries     int
-	banLastWritten time.Time
-	topTalkers     [][]sliding.TopTalker // indexed like the windows slice
-	lists          listsStats            // skeleton built once; list slices alias the startup-loaded CIDRs (never mutated)
+	startTime       time.Time
+	iterations      uint64
+	heartbeats      uint64
+	lastIterationMS int64 // last REAL loop-iteration duration; heartbeats reuse it, never overwrite
+	banContent      string
+	banEntries      int
+	banLastWritten  time.Time
+	topTalkers      [][]sliding.TopTalker // indexed like the windows slice
+	lists           listsStats            // skeleton built once; list slices alias the startup-loaded CIDRs (never mutated)
 
 	// User-Agent list counters, written by the loop goroutine only.
 	uaWhitelistHits      uint64
@@ -224,6 +225,9 @@ func buildSnapshot(
 		st.heartbeats++
 	} else {
 		st.iterations++
+		// Carry the last REAL iteration duration so heartbeats (which pass a
+		// near-zero idle duration) never overwrite Loop.LastDurationMS.
+		st.lastIterationMS = loopDuration.Milliseconds()
 
 		topN := 0
 		if cfg.Live != nil {
@@ -265,7 +269,7 @@ func buildSnapshot(
 		Loop: loopStats{
 			Iterations:      st.iterations,
 			HeartbeatsTotal: st.heartbeats,
-			LastDurationMS:  loopDuration.Milliseconds(),
+			LastDurationMS:  st.lastIterationMS,
 			SleepS:          sleepS,
 		},
 		banFileContent: st.banContent,

@@ -78,8 +78,8 @@ func TestRenderMetrics_ValuesAndLabels(t *testing.T) {
 		`flokbn_window_requests{window="general_detection"} 200`,
 		`flokbn_window_accepted_total{window="general_detection"} 500`,
 		`flokbn_window_rejected_by_filter_total{window="general_detection"} 5`,
-		`flokbn_cluster_detected{window="general_detection",set="50:24-32:0.20"} 1`,
-		`flokbn_cluster_duration_seconds{window="general_detection",set="50:24-32:0.20"} 0.0015`,
+		`flokbn_cluster_detected{window="general_detection",set="0"} 1`,
+		`flokbn_cluster_duration_seconds{window="general_detection",set="0"} 0.0015`,
 		"flokbn_jail_active 4",
 		`flokbn_ban_active{cidr="172.16.16.0/24",stage="1"} 1`,
 		`flokbn_ban_active{cidr="172.16.1.0/27",stage="2"} 1`,
@@ -139,6 +139,62 @@ func TestRenderMetrics_LabelEscaping(t *testing.T) {
 	want := `flokbn_window_unique_ips{window="we\"ird\\name\nx"} 11`
 	if !strings.Contains(got, want+"\n") {
 		t.Errorf("escaped label line %q missing\noutput:\n%s", want, got)
+	}
+}
+
+// TestRenderMetrics_ClusterSetCollisionDistinctSeries proves the URGENT-11
+// fix: arg sets that collided under the old "%d:%s:%.2f" label scheme (a
+// threshold rounded to 2 decimals, and UseForJail omitted entirely) now render
+// DISTINCT Prometheus series via the per-window set index. Duplicate series
+// would otherwise make the Prometheus text parser reject the whole scrape.
+func TestRenderMetrics_ClusterSetCollisionDistinctSeries(t *testing.T) {
+	sn := &statsSnapshot{SchemaVersion: statsSchemaVersion}
+	sn.Windows = []windowStats{
+		{
+			Name: "general_detection",
+			ClusterSets: []clusterSetStats{
+				// set 0 and set 1 differ only past the 2nd decimal of Threshold:
+				// both rounded to "0.20" under the old scheme.
+				{Params: clusterParams{MinSize: 50, Depth: "24-32", Threshold: 0.201}, UseForJail: true, DetectedNow: []output.LiveCIDR{{CIDR: "10.0.0.0/24"}}},
+				{Params: clusterParams{MinSize: 50, Depth: "24-32", Threshold: 0.204}, UseForJail: true, DetectedNow: []output.LiveCIDR{{CIDR: "10.0.1.0/24"}}},
+				// set 2 is identical to set 1 except UseForJail (never in the
+				// label under the old scheme) -> would have collided too.
+				{Params: clusterParams{MinSize: 50, Depth: "24-32", Threshold: 0.204}, UseForJail: false, DetectedNow: nil},
+			},
+		},
+	}
+
+	got := string(renderMetrics(sn))
+
+	// All three sets must produce distinct, present series with indices 0,1,2.
+	for _, want := range []string{
+		`flokbn_cluster_detected{window="general_detection",set="0"} 1`,
+		`flokbn_cluster_detected{window="general_detection",set="1"} 1`,
+		`flokbn_cluster_detected{window="general_detection",set="2"} 0`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing distinct cluster series %q\noutput:\n%s", want, got)
+		}
+	}
+
+	// No duplicate label tuple may appear for flokbn_cluster_detected: collect
+	// the substring inside the braces of each line and assert uniqueness. A
+	// duplicate would cause Prometheus to reject the entire scrape.
+	seen := map[string]bool{}
+	for _, line := range strings.Split(got, "\n") {
+		if !strings.HasPrefix(line, "flokbn_cluster_detected{") {
+			continue
+		}
+		open := strings.IndexByte(line, '{')
+		close := strings.IndexByte(line, '}')
+		labels := line[open+1 : close]
+		if seen[labels] {
+			t.Errorf("duplicate flokbn_cluster_detected label tuple {%s} (whole-scrape rejection bug)\noutput:\n%s", labels, got)
+		}
+		seen[labels] = true
+	}
+	if len(seen) != 3 {
+		t.Errorf("got %d distinct flokbn_cluster_detected series, want 3", len(seen))
 	}
 }
 

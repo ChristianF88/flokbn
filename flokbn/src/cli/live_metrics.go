@@ -52,9 +52,16 @@ func renderMetrics(sn *statsSnapshot) []byte {
 		requests[i] = sample{labels: labels, value: float64(w.Requests)}
 		accepted[i] = sample{labels: labels, value: float64(w.AcceptedTotal)}
 		rejected[i] = sample{labels: labels, value: float64(w.RejectedByFilterTotal)}
-		for _, cs := range w.ClusterSets {
-			setLabels := fmt.Sprintf(`window="%s",set="%d:%s:%.2f"`,
-				escapeLabel(w.Name), cs.Params.MinSize, cs.Params.Depth, cs.Params.Threshold)
+		for si := range w.ClusterSets {
+			cs := &w.ClusterSets[si]
+			// Use the per-window set INDEX as the unique series key. The
+			// previous "%d:%s:%.2f" form rounded Threshold to 2 decimals and
+			// omitted UseForJail, so distinct arg sets (e.g. Threshold 0.201
+			// vs 0.204, or sets differing only in UseForJail) collided into
+			// duplicate Prometheus series, making the text parser reject the
+			// ENTIRE scrape. The index is stable: winClusterStats preserves
+			// arg-set order from config.
+			setLabels := fmt.Sprintf(`window="%s",set="%d"`, escapeLabel(w.Name), si)
 			detected = append(detected, sample{labels: setLabels, value: float64(len(cs.DetectedNow))})
 			clusterDur = append(clusterDur, sample{labels: setLabels, value: float64(cs.LastDurationUS) / 1e6})
 		}
@@ -116,7 +123,7 @@ func renderMetrics(sn *statsSnapshot) []byte {
 		"Idle-loop heartbeats since startup.",
 		sample{value: float64(sn.Loop.HeartbeatsTotal)})
 	writeMetric(&b, "flokbn_loop_duration_seconds", "gauge",
-		"Duration of the last loop iteration.",
+		"Duration of the last real loop iteration (carried across idle heartbeats).",
 		sample{value: float64(sn.Loop.LastDurationMS) / 1e3})
 
 	return b.Bytes()

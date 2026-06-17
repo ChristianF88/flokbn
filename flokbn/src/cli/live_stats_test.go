@@ -110,6 +110,49 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 	}
 }
 
+// TestBuildSnapshot_HeartbeatCarriesLastIterationDuration proves the URGENT-11
+// fix: heartbeat snapshots must NOT overwrite Loop.LastDurationMS with the
+// near-zero idle heartbeat duration. A real iteration sets it; a following
+// heartbeat carries the last real value forward.
+func TestBuildSnapshot_HeartbeatCarriesLastIterationDuration(t *testing.T) {
+	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{})
+	st := newLiveStatsState(cfg, nil, nil)
+	j := jail.NewJail()
+
+	// Real iteration with a 250ms loop duration.
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, 250*time.Millisecond, 0, false)
+	if snap.Loop.LastDurationMS != 250 {
+		t.Fatalf("after real iteration LastDurationMS = %d, want 250", snap.Loop.LastDurationMS)
+	}
+	if snap.Loop.Iterations != 1 {
+		t.Fatalf("iterations = %d, want 1", snap.Loop.Iterations)
+	}
+	if snap.Loop.HeartbeatsTotal != 0 {
+		t.Fatalf("heartbeats = %d, want 0", snap.Loop.HeartbeatsTotal)
+	}
+
+	// Heartbeat with a tiny 1ms duration must NOT overwrite LastDurationMS.
+	snap = buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, time.Millisecond, 0, true)
+	if snap.Loop.LastDurationMS != 250 {
+		t.Errorf("after heartbeat LastDurationMS = %d, want 250 (carried, not overwritten)", snap.Loop.LastDurationMS)
+	}
+	if snap.Loop.HeartbeatsTotal != 1 {
+		t.Errorf("heartbeats = %d, want 1", snap.Loop.HeartbeatsTotal)
+	}
+	if snap.Loop.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1 (heartbeat must not increment)", snap.Loop.Iterations)
+	}
+
+	// A new real iteration updates LastDurationMS to the new real value.
+	snap = buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, 300*time.Millisecond, 0, false)
+	if snap.Loop.LastDurationMS != 300 {
+		t.Errorf("after second real iteration LastDurationMS = %d, want 300", snap.Loop.LastDurationMS)
+	}
+	if snap.Loop.Iterations != 2 {
+		t.Errorf("iterations = %d, want 2", snap.Loop.Iterations)
+	}
+}
+
 func BenchmarkBuildSnapshot(b *testing.B) {
 	dir := b.TempDir()
 	cfg := &config.Config{
