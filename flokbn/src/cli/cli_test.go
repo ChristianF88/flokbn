@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/ChristianF88/flokbn/iputils"
+	"github.com/ChristianF88/flokbn/version"
+	cli "github.com/urfave/cli/v2"
 )
 
 func TestParseFlexibleTime(t *testing.T) {
@@ -452,5 +455,47 @@ func TestRegexValidation(t *testing.T) {
 					tt.pattern, tt.valid, isValid, err)
 			}
 		})
+	}
+}
+
+// TestVersionPrinterSurfacesCommit verifies that the custom VersionPrinter
+// surfaces version.Commit (and the version + build date) in the CLI's
+// --version / version output. This is a regression test for URGENT-19:
+// version.Commit was previously set via ldflags but never read.
+func TestVersionPrinterSurfacesCommit(t *testing.T) {
+	if cli.VersionPrinter == nil {
+		t.Fatal("cli.VersionPrinter is nil; expected custom printer set in init()")
+	}
+
+	// Capture stdout, which the custom VersionPrinter writes to via fmt.Printf.
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+
+	cli.VersionPrinter(nil)
+
+	w.Close()
+	os.Stdout = origStdout
+
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("failed to read captured output: %v", err)
+	}
+	output := string(out)
+
+	if !strings.Contains(output, version.Commit) {
+		t.Errorf("version output missing commit %q; got: %q", version.Commit, output)
+	}
+	if !strings.Contains(output, version.Version) {
+		t.Errorf("version output missing version %q; got: %q", version.Version, output)
+	}
+	if !strings.Contains(output, version.Date) {
+		t.Errorf("version output missing date %q; got: %q", version.Date, output)
+	}
+	if !strings.Contains(output, "commit:") {
+		t.Errorf("version output missing 'commit:' label; got: %q", output)
 	}
 }

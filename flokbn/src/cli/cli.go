@@ -458,6 +458,16 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	return StaticFromConfig(cfg, c.Bool("compact"), c.Bool("plain"), c.Bool("tui"))
 }
 
+func init() {
+	// Surface the build commit (and date) alongside the version. The default
+	// urfave/cli printer only prints App.Version, so override it to also show
+	// version.Commit (set via GoReleaser ldflags) and the build date.
+	cli.VersionPrinter = func(c *cli.Context) {
+		fmt.Printf("flokbn version %s\ncommit: %s\nbuilt: %s\n",
+			version.Version, version.Commit, version.Date)
+	}
+}
+
 var App = &cli.App{
 	Name:     "flokbn",
 	Usage:    "Cluster IPs either in live mode or from static logs",

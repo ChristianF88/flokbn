@@ -1,21 +1,5 @@
 package ingestor
 
-import (
-	"time"
-)
-
-// NumericRequest uses uint32 for IP addresses to eliminate conversions
-// This version keeps everything in numeric format until final output
-type NumericRequest struct {
-	Timestamp time.Time // Use native time
-	IP        uint32    // Store IP as uint32 - NO MORE net.IP conversions!
-	URI       string
-	UserAgent string
-	Method    HTTPMethod
-	Status    uint16 // Smaller type for status code
-	Bytes     uint32
-}
-
 // Uint32ToIPString converts uint32 back to IP string for output
 func Uint32ToIPString(ip uint32) string {
 	// Use a pre-allocated byte buffer to avoid allocations

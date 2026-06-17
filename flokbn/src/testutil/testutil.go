@@ -55,26 +55,3 @@ func GenerateTestLogFile(t *testing.T, numLines int) (string, func()) {
 
 	return tmpFile.Name(), cleanup
 }
-
-// TempFilePath returns a cross-platform temporary file path
-// with the given pattern. Does not create the file.
-func TempFilePath(t *testing.T, pattern string) string {
-	t.Helper()
-
-	tmpFile, err := os.CreateTemp("", pattern)
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-
-	path := tmpFile.Name()
-	tmpFile.Close()
-	os.Remove(path) // Remove immediately, just need the path
-
-	return path
-}
-
-// TempDirPath returns a cross-platform temporary directory path
-func TempDirPath(t *testing.T) string {
-	t.Helper()
-	return t.TempDir()
-}
