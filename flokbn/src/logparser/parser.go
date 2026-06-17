@@ -17,7 +17,7 @@ import (
 
 // FieldExtractor represents a compiled field extraction operation
 type FieldExtractor struct {
-	FieldType int  // 0=IP, 1=timestamp, 2=method, 3=URI, 4=status, 5=bytes, 6=user-agent, 7=referer, -1=skip
+	FieldType int  // 0=IP, 1=timestamp, 2=method, 3=URI, 4=status, 5=bytes, 6=user-agent, 7=URI(standalone), -1=skip
 	Delimiter byte // delimiter to find (space, quote, bracket)
 	Quoted    bool // whether field is in quotes
 	Brackets  bool // whether field is in brackets
@@ -28,6 +28,13 @@ type CompiledFormat struct {
 	extractors []FieldExtractor
 	pattern    string
 	counters   *parseCounters
+	// hasMethodField is true iff the format contains a standalone %m extractor.
+	// When set, the %m-parsed method is authoritative and the %r request-line
+	// arm must NOT overwrite Method (it only fills Method as a fallback when no
+	// standalone %m exists). Computed once at compile time so the per-line hot
+	// path pays a single bool check instead of treating the zero value (GET==0)
+	// as an "unset" sentinel — which silently clobbered a %m-parsed GET.
+	hasMethodField bool
 }
 
 // parseCounters holds malformed-field tallies shared by all parse workers.
@@ -109,10 +116,12 @@ func (pp *Parser) ParseFile(filename string) ([]ingestor.Request, error) {
 
 	fileSize := stat.Size()
 
-	// For files smaller than 500MB, use streaming I/O (better performance)
+	// For files smaller than 500MB, use streaming I/O (better performance).
+	// Pass the already-open file (positioned at offset 0; only Stat has run) so
+	// the streaming path reuses this single fd instead of opening a second one.
 	const largeFileThreshold = 500 * 1024 * 1024 // 500MB
 	if fileSize < largeFileThreshold {
-		return pp.parseFileWithStreamingIO(filename)
+		return pp.parseFileWithStreamingIO(file, fileSize)
 	}
 
 	// For large files, use chunked concurrent I/O
@@ -143,9 +152,11 @@ func (pp *Parser) ParseFileIPs(filename string) (ips []uint32, invalidCount int,
 	}
 	fileSize := stat.Size()
 
+	// Pass the already-open file (positioned at offset 0; only Stat has run) so
+	// the streaming path reuses this single fd instead of opening a second one.
 	const largeFileThreshold = 500 * 1024 * 1024 // 500MB
 	if fileSize < largeFileThreshold {
-		return pp.parseFileIPsStreamingIO(filename)
+		return pp.parseFileIPsStreamingIO(file, fileSize)
 	}
 	return pp.parseFileIPsConcurrentIO(file, fileSize)
 }
@@ -159,19 +170,13 @@ type ipResult struct {
 
 // parseFileIPsStreamingIO mirrors parseFileWithStreamingIO but the worker stage
 // calls extractIPOnly and accumulates []uint32 (skipping/counting zero IPs).
-func (pp *Parser) parseFileIPsStreamingIO(filename string) ([]uint32, int, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer file.Close()
-
-	estimatedLines := 1000
-	if stat, err := file.Stat(); err == nil {
-		estimatedLines = int(stat.Size() / 200)
-		if estimatedLines < 1000 {
-			estimatedLines = 1000
-		}
+//
+// The caller owns `file` (and closes it); it must be positioned at offset 0.
+// fileSize is the caller's Stat size, used only for the line-count estimate.
+func (pp *Parser) parseFileIPsStreamingIO(file *os.File, fileSize int64) ([]uint32, int, error) {
+	estimatedLines := int(fileSize / 200)
+	if estimatedLines < 1000 {
+		estimatedLines = 1000
 	}
 
 	linesChan := make(chan [][]byte, pp.workers*2)
@@ -373,21 +378,16 @@ var requestBatchPool = sync.Pool{
 	},
 }
 
-// parseFileWithStreamingIO uses streaming I/O with batched parallel parsing workers (internal method)
-func (pp *Parser) parseFileWithStreamingIO(filename string) ([]ingestor.Request, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	// Get file size for pre-allocation estimate
-	estimatedLines := 1000
-	if stat, err := file.Stat(); err == nil {
-		estimatedLines = int(stat.Size() / 200) // ~200 bytes per log line estimate
-		if estimatedLines < 1000 {
-			estimatedLines = 1000
-		}
+// parseFileWithStreamingIO uses streaming I/O with batched parallel parsing
+// workers (internal method).
+//
+// The caller owns `file` (and closes it); it must be positioned at offset 0.
+// fileSize is the caller's Stat size, used only for the line-count estimate.
+func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ingestor.Request, error) {
+	// Pre-allocation estimate (~200 bytes per log line).
+	estimatedLines := int(fileSize / 200)
+	if estimatedLines < 1000 {
+		estimatedLines = 1000
 	}
 
 	// Batched channels — each send/receive moves parseBatchSize items at once,
@@ -753,6 +753,22 @@ func (pp *Parser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, 
 	}
 }
 
+// codeFieldNames maps a supported format code byte to its human-readable field
+// name, used to build the duplicate-field error message and to validate that a
+// code is supported. The skip code (%^) is intentionally absent: it is handled
+// before the lookup and may repeat freely. Keep this in sync with the field
+// types compiled in compileFormat.
+var codeFieldNames = map[byte]string{
+	'h': "IP",
+	't': "timestamp",
+	'r': "request",
+	'm': "method",
+	's': "status",
+	'b': "bytes",
+	'U': "URI",
+	'u': "user agent",
+}
+
 // validateFormat ensures format string doesn't have duplicate non-skippable fields
 func validateFormat(format string) error {
 	fieldCounts := make(map[byte]int)
@@ -766,45 +782,16 @@ func validateFormat(format string) error {
 				continue
 			}
 
-			// Count occurrences of each field type
-			fieldCounts[field]++
-
-			// Validate supported field types and check for duplicates
-			switch field {
-			case 'h': // IP - should only appear once
-				if fieldCounts[field] > 1 {
-					return fmt.Errorf("duplicate IP field (%%h) found in format string - only one IP field is allowed")
-				}
-			case 't': // Timestamp - should only appear once
-				if fieldCounts[field] > 1 {
-					return fmt.Errorf("duplicate timestamp field (%%t) found in format string - only one timestamp field is allowed")
-				}
-			case 'r': // Request - should only appear once
-				if fieldCounts[field] > 1 {
-					return fmt.Errorf("duplicate request field (%%r) found in format string - only one request field is allowed")
-				}
-			case 'm': // Method - should only appear once
-				if fieldCounts[field] > 1 {
-					return fmt.Errorf("duplicate method field (%%m) found in format string - only one method field is allowed")
-				}
-			case 's': // Status - should only appear once
-				if fieldCounts[field] > 1 {
-					return fmt.Errorf("duplicate status field (%%s) found in format string - only one status field is allowed")
-				}
-			case 'b': // Bytes - should only appear once
-				if fieldCounts[field] > 1 {
-					return fmt.Errorf("duplicate bytes field (%%b) found in format string - only one bytes field is allowed")
-				}
-			case 'U': // URI standalone - should only appear once
-				if fieldCounts[field] > 1 {
-					return fmt.Errorf("duplicate URI field (%%U) found in format string - only one URI field is allowed")
-				}
-			case 'u': // User agent - should only appear once
-				if fieldCounts[field] > 1 {
-					return fmt.Errorf("duplicate user agent field (%%u) found in format string - only one user agent field is allowed")
-				}
-			default:
+			name, ok := codeFieldNames[field]
+			if !ok {
 				return fmt.Errorf("unsupported format code %%%c - supported codes are: %%h (IP), %%t (timestamp), %%r (request), %%m (method), %%s (status), %%b (bytes), %%U (URI), %%u (user-agent), %%^ (skip)", field)
+			}
+
+			// Count occurrences and reject duplicates — each non-skip field may
+			// appear at most once.
+			fieldCounts[field]++
+			if fieldCounts[field] > 1 {
+				return fmt.Errorf("duplicate %s field (%%%c) found in format string - only one %s field is allowed", name, field, name)
 			}
 		}
 	}
@@ -843,6 +830,7 @@ func compileFormat(format string) (*CompiledFormat, error) {
 	}
 
 	var extractors []FieldExtractor
+	hasMethodField := false
 
 	for i := 0; i < len(format); i++ {
 		if format[i] == '%' && i+1 < len(format) {
@@ -857,6 +845,7 @@ func compileFormat(format string) (*CompiledFormat, error) {
 				extractor.Brackets = true
 			case 'm':
 				extractor.FieldType = 2 // Method
+				hasMethodField = true
 			case 'r':
 				extractor.FieldType = 3 // URI (request)
 			case 's':
@@ -891,9 +880,10 @@ func compileFormat(format string) (*CompiledFormat, error) {
 	}
 
 	return &CompiledFormat{
-		extractors: extractors,
-		pattern:    format,
-		counters:   &parseCounters{}, // never nil: hot path may Add without a nil check
+		extractors:     extractors,
+		pattern:        format,
+		counters:       &parseCounters{}, // never nil: hot path may Add without a nil check
+		hasMethodField: hasMethodField,
 	}, nil
 }
 
@@ -981,8 +971,11 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 							methodEnd++
 						}
 
-						// Extract method if not already set and method field exists
-						if methodEnd > start && req.Method == 0 {
+						// Fill Method from the request line ONLY when the format has no
+						// standalone %m. When a %m extractor exists it is authoritative,
+						// so %r must not overwrite it. Using the zero value (GET==0) as
+						// an "unset" sentinel would silently clobber a %m-parsed GET.
+						if methodEnd > start && !cf.hasMethodField {
 							req.Method = parseMethod(line, start, methodEnd)
 						}
 
@@ -1173,8 +1166,14 @@ func scanQuotedClose(line []byte, contentStart, firstQuote int) int {
 }
 
 // bytesToString converts byte slice to string without copying.
-// Safe when the backing byte slice is not mutated after this call (e.g., lineCopy
-// allocated per-line in parseFileWithStreamingIO is never reused).
+//
+// Safe because the backing buffer is never mutated for the lifetime of the
+// returned string. The streaming path (parseFileWithStreamingIO) sub-slices
+// each line out of a per-batch slab that is replaced — never overwritten in
+// place — once full. The concurrent path (readChunkBatched) sub-slices each
+// line out of a per-chunk ReadAt buffer that is read once and never reused.
+// In both cases the returned string keeps its backing buffer reachable, so the
+// GC retains it as long as any aliasing Request lives.
 func bytesToString(b []byte) string {
 	if len(b) == 0 {
 		return ""

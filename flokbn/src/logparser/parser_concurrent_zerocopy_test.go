@@ -186,6 +186,47 @@ func parseConcurrentIPs(t *testing.T, pp *Parser, path string, chunkSize int64) 
 	return ips, invalid
 }
 
+// parseStreamingFull drives the streaming full-Request path. The streaming
+// helpers now take the already-open *os.File and its size (so ParseFile opens
+// the file only once), so the test opens/stats/closes here.
+func parseStreamingFull(t *testing.T, pp *Parser, path string) []ingestor.Request {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	reqs, err := pp.parseFileWithStreamingIO(f, st.Size())
+	if err != nil {
+		t.Fatalf("parseFileWithStreamingIO: %v", err)
+	}
+	return reqs
+}
+
+// parseStreamingIPs drives the streaming IP-only path with the same open/stat
+// ownership as parseStreamingFull.
+func parseStreamingIPs(t *testing.T, pp *Parser, path string) ([]uint32, int) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	ips, invalid, err := pp.parseFileIPsStreamingIO(f, st.Size())
+	if err != nil {
+		t.Fatalf("parseFileIPsStreamingIO: %v", err)
+	}
+	return ips, invalid
+}
+
 // TestConcurrentZeroCopy_DiffFullMode asserts that the zero-copy concurrent path
 // produces the identical multiset of Requests (every field) as the streaming
 // path, across small chunk sizes (forcing many boundary crossings) and both with
@@ -206,10 +247,7 @@ func TestConcurrentZeroCopy_DiffFullMode(t *testing.T) {
 			t.Fatalf("NewParser: %v", err)
 		}
 
-		streamReqs, err := pp.parseFileWithStreamingIO(path)
-		if err != nil {
-			t.Fatalf("parseFileWithStreamingIO: %v", err)
-		}
+		streamReqs := parseStreamingFull(t, pp, path)
 		streamKeys := make([]reqKey, len(streamReqs))
 		for i, r := range streamReqs {
 			streamKeys[i] = toReqKey(r)
@@ -260,10 +298,7 @@ func TestConcurrentZeroCopy_DiffIPMode(t *testing.T) {
 		}
 		pp.SkipNonIPFields = true
 
-		streamIPs, streamInvalid, err := pp.parseFileIPsStreamingIO(path)
-		if err != nil {
-			t.Fatalf("parseFileIPsStreamingIO: %v", err)
-		}
+		streamIPs, streamInvalid := parseStreamingIPs(t, pp, path)
 		sortedStream := append([]uint32(nil), streamIPs...)
 		sort.Slice(sortedStream, func(i, j int) bool { return sortedStream[i] < sortedStream[j] })
 
@@ -320,10 +355,7 @@ func TestConcurrentCRLF_ParityWithStreaming(t *testing.T) {
 				t.Fatalf("NewParser: %v", err)
 			}
 
-			streamReqs, err := pp.parseFileWithStreamingIO(path)
-			if err != nil {
-				t.Fatalf("parseFileWithStreamingIO: %v", err)
-			}
+			streamReqs := parseStreamingFull(t, pp, path)
 			for _, r := range streamReqs {
 				if strings.ContainsRune(r.URI, '\r') || strings.ContainsRune(r.UserAgent, '\r') {
 					t.Fatalf("streaming: parsed string field contains '\\r': URI=%q UA=%q", r.URI, r.UserAgent)
@@ -383,10 +415,7 @@ func TestConcurrentCRLF_IPModeParity(t *testing.T) {
 		}
 		pp.SkipNonIPFields = true
 
-		streamIPs, streamInvalid, err := pp.parseFileIPsStreamingIO(path)
-		if err != nil {
-			t.Fatalf("parseFileIPsStreamingIO: %v", err)
-		}
+		streamIPs, streamInvalid := parseStreamingIPs(t, pp, path)
 		sortedStream := append([]uint32(nil), streamIPs...)
 		sort.Slice(sortedStream, func(i, j int) bool { return sortedStream[i] < sortedStream[j] })
 

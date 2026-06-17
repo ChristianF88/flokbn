@@ -1118,3 +1118,137 @@ func parseEventStaticMock(evt map[string]interface{}, out *ingestor.Request) err
 
 	return nil
 }
+
+// TestParser_MethodFromRequestLineSentinel is the regression test for URGENT-10
+// finding 1 (parser.go:985). Previously the %r request-line arm used
+// `req.Method == 0` as an "unset" sentinel, but GET == 0, so a %m-parsed GET was
+// silently overwritten by the method in the %r request line. The fix makes a
+// standalone %m authoritative (the %r arm only fills Method when no %m exists),
+// so the zero value is never treated as "unset".
+func TestParser_MethodFromRequestLineSentinel(t *testing.T) {
+	tests := []struct {
+		name           string
+		format         string
+		logLine        []byte
+		expectedMethod ingestor.HTTPMethod
+		expectedURI    string
+	}{
+		{
+			// THE BUG: %m parses GET (==0); the %r request line is a POST. Before
+			// the fix the GET was clobbered to POST. Now %m wins => GET.
+			name:           "m_GET_before_r_POST: %m wins (GET, not overwritten)",
+			format:         `%h [%t] %m "%r" %s`,
+			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] GET "POST /api/login HTTP/1.1" 200`),
+			expectedMethod: ingestor.GET,
+			expectedURI:    "/api/login",
+		},
+		{
+			// Symmetric: %m POST, %r GET. %m wins => POST (not the previous behavior
+			// either, since POST!=0 it was kept, but assert it stays correct).
+			name:           "m_POST_before_r_GET: %m wins (POST)",
+			format:         `%h [%t] %m "%r" %s`,
+			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] POST "GET /home HTTP/1.1" 200`),
+			expectedMethod: ingestor.POST,
+			expectedURI:    "/home",
+		},
+		{
+			// %r BEFORE %m: %m is still authoritative and overwrites whatever %r
+			// would have parsed, because %m runs after %r in format order and
+			// FieldType 2 always stores. %m GET must survive (not be left as the
+			// %r-parsed POST).
+			name:           "r_POST_before_m_GET: %m wins (GET)",
+			format:         `%h [%t] "%r" %m %s`,
+			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] "POST /api/login HTTP/1.1" GET 200`),
+			expectedMethod: ingestor.GET,
+			expectedURI:    "/api/login",
+		},
+		{
+			// %r ONLY (no %m): the fallback must still write the method, INCLUDING
+			// GET. Proves the no-%m path is unchanged for GET.
+			name:           "r_only_GET: fallback writes GET",
+			format:         `%h [%t] "%r" %s`,
+			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] "GET /index.html HTTP/1.1" 200`),
+			expectedMethod: ingestor.GET,
+			expectedURI:    "/index.html",
+		},
+		{
+			// %r ONLY (no %m) with POST: unchanged fallback behavior.
+			name:           "r_only_POST: fallback writes POST",
+			format:         `%h [%t] "%r" %s`,
+			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] "POST /submit HTTP/1.1" 200`),
+			expectedMethod: ingestor.POST,
+			expectedURI:    "/submit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser, err := NewParser(tt.format)
+			if err != nil {
+				t.Fatalf("NewParser(%q): %v", tt.format, err)
+			}
+			req, err := parseLineForTest(parser, tt.logLine)
+			if err != nil {
+				t.Fatalf("parse %q: %v", string(tt.logLine), err)
+			}
+			if req.Method != tt.expectedMethod {
+				t.Errorf("Method: expected %v, got %v", tt.expectedMethod, req.Method)
+			}
+			if req.URI != tt.expectedURI {
+				t.Errorf("URI: expected %q, got %q", tt.expectedURI, req.URI)
+			}
+		})
+	}
+}
+
+// TestValidateFormat_DuplicateMessages is the regression test for URGENT-10
+// finding 2 (parser.go:773-808). The 8-arm duplicate-field switch was collapsed
+// to a single code->name map with one parameterized error. This asserts each
+// duplicated field code is still rejected with a duplicate-specific message
+// naming both the human field and the %code, the unsupported-code and
+// missing-%h errors are preserved, and that a valid combined %m+%r format (a
+// non-duplicate combination) is still accepted.
+func TestValidateFormat_DuplicateMessages(t *testing.T) {
+	dupCases := []struct {
+		code byte
+		name string
+	}{
+		{'h', "IP"},
+		{'t', "timestamp"},
+		{'r', "request"},
+		{'m', "method"},
+		{'s', "status"},
+		{'b', "bytes"},
+		{'U', "URI"},
+		{'u', "user agent"},
+	}
+	for _, dc := range dupCases {
+		// Always include %h so the missing-IP check never masks the duplicate
+		// error for non-%h codes; for the %h case the format is two %h.
+		format := fmt.Sprintf("%%h %%^ %%%c %%%c", dc.code, dc.code)
+		err := validateFormat(format)
+		if err == nil {
+			t.Errorf("code %%%c: expected duplicate error for %q, got nil", dc.code, format)
+			continue
+		}
+		want := fmt.Sprintf("duplicate %s field (%%%c)", dc.name, dc.code)
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("code %%%c: error %q does not contain %q", dc.code, err.Error(), want)
+		}
+	}
+
+	// Unsupported code is still rejected with the unsupported-code message.
+	if err := validateFormat("%h %z"); err == nil || !strings.Contains(err.Error(), "unsupported format code %z") {
+		t.Errorf("unsupported code: got %v, want 'unsupported format code %%z'", err)
+	}
+
+	// Missing %h is still rejected with the no-IP message.
+	if err := validateFormat(`%^ [%t] "%r" %s`); err == nil || !strings.Contains(err.Error(), "no IP field (%h)") {
+		t.Errorf("missing IP: got %v, want 'no IP field (%%h)'", err)
+	}
+
+	// A valid combined %m + %r format (no duplicates) is still accepted.
+	if err := validateFormat(`%h [%t] %m "%r" %s`); err != nil {
+		t.Errorf("valid %%m+%%r format rejected: %v", err)
+	}
+}
