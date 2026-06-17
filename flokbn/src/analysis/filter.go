@@ -11,8 +11,6 @@ import (
 // requestChunk represents a chunk of requests for parallel processing
 type requestChunk struct {
 	requests []ingestor.Request
-	start    int
-	end      int
 }
 
 // filterResult represents the result of filtering a single request
