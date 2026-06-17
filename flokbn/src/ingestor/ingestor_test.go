@@ -26,6 +26,73 @@ func TestParseEvent_InvalidIP(t *testing.T) {
 	}
 }
 
+// TestParseEvent_RejectsIPv6 is the URGENT-21 repro: an IPv6 source address
+// (parsed fine by net.ParseIP) used to flow through as IP=<v6> with IPUint32=0
+// and be counted as a successful request. It must now be rejected with an error
+// and NEVER stored (no IP, no IPUint32). Covers both a plain IPv6 literal and
+// the IPv4-mapped form, since both must be purged.
+func TestParseEvent_RejectsIPv6(t *testing.T) {
+	cases := []struct {
+		name string
+		ip   string
+	}{
+		{"PlainIPv6", "2001:db8::1"},
+		{"Loopback", "::1"},
+		{"MappedIPv6", "::ffff:192.168.1.1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			log := tc.ip + ` - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
+			evt := map[string]interface{}{"message": log}
+			var req Request
+			_, err := parseEvent(evt, &req)
+			if err == nil {
+				t.Fatalf("expected error for IPv6 %q, got nil", tc.ip)
+			}
+			if req.IP != nil {
+				t.Errorf("IPv6 must not be stored: req.IP = %v", req.IP)
+			}
+			if req.IPUint32 != 0 {
+				t.Errorf("IPv6 must not set IPUint32: got %d", req.IPUint32)
+			}
+		})
+	}
+}
+
+// TestReadBatch_RejectsIPv6 proves the live-loop path counts an IPv6 event as a
+// parse error (the operator-visible reject counter) and never appends it to
+// output or counts it as a successful request.
+func TestReadBatch_RejectsIPv6(t *testing.T) {
+	ing := &TCPIngestor{
+		events: make(chan *lj.Batch, 1),
+	}
+	ipv6 := `2001:db8::1 - - [12/Mar/2024:15:04:05 -0700] "GET /v6 HTTP/1.1" 200 1 "-" "UA"`
+	valid := `10.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /ok HTTP/1.1" 200 1 "-" "UA"`
+	ing.events <- makeBatch(
+		map[string]interface{}{"message": ipv6},
+		map[string]interface{}{"message": valid},
+	)
+
+	got, err := ing.ReadBatch()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected only the IPv4 request, got %d results", len(got))
+	}
+	if got[0].URI != "/ok" {
+		t.Errorf("expected the IPv4 request, got URI %v", got[0].URI)
+	}
+
+	st := ing.Stats()
+	if st.RequestsTotal != 1 {
+		t.Errorf("RequestsTotal = %d, want 1 (IPv6 not counted as success)", st.RequestsTotal)
+	}
+	if st.ParseErrorsTotal != 1 {
+		t.Errorf("ParseErrorsTotal = %d, want 1 (IPv6 rejected via reject counter)", st.ParseErrorsTotal)
+	}
+}
+
 func TestParseEvent_InvalidTimestamp(t *testing.T) {
 	log := `192.168.1.1 - - [badtime] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}

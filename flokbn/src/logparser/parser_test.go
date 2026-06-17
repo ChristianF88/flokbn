@@ -807,6 +807,50 @@ func TestParser_EdgeCases(t *testing.T) {
 	}
 }
 
+// TestParser_IPv6FieldYieldsZero is the URGENT-21 repro for the log parser:
+// when the %h (IP) field holds an IPv6 address, the IPv4-only fast path
+// (parseIPv4ToUint32) must yield IPUint32 == 0 (a reject sentinel), never a
+// bogus IPv4. A colon is neither a digit nor a dot, so any IPv6 form — plain or
+// IPv4-mapped — funnels to 0. Downstream clustering skips IPUint32 == 0, so an
+// IPv6 line is never counted as a successful IPv4 request.
+func TestParser_IPv6FieldYieldsZero(t *testing.T) {
+	// %h is the FIRST field so the IPv6 address lands in the IP slot.
+	format := `%h %^ %^ [%t] "%r" %s %b "%u"`
+	parser, err := NewParser(format)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lines := []string{
+		`2001:db8::1 - - [20/Dec/2025:16:45:22 +0000] "GET /v6 HTTP/1.1" 200 0 "UA"`,
+		`::1 - - [20/Dec/2025:16:45:22 +0000] "GET /v6 HTTP/1.1" 200 0 "UA"`,
+		`::ffff:192.168.1.1 - - [20/Dec/2025:16:45:22 +0000] "GET /v6 HTTP/1.1" 200 0 "UA"`,
+	}
+	for _, line := range lines {
+		req, err := parseLineForTest(parser, []byte(line))
+		if err != nil {
+			// A reject (error) is acceptable; what matters is IPUint32 never
+			// becomes a usable IPv4. Continue to the IPUint32 assertion when
+			// a request is returned.
+			continue
+		}
+		if req.IPUint32 != 0 {
+			t.Errorf("IPv6 line %q: IPUint32 = %d, want 0 (IPv6 must not yield a usable IPv4)", line, req.IPUint32)
+		}
+	}
+
+	// Sanity: a real IPv4 in the same %h slot still parses to a non-zero value,
+	// proving the format and parser are wired correctly (no false-zero regression).
+	v4 := `203.0.113.7 - - [20/Dec/2025:16:45:22 +0000] "GET /ok HTTP/1.1" 200 0 "UA"`
+	req, err := parseLineForTest(parser, []byte(v4))
+	if err != nil {
+		t.Fatalf("unexpected error on IPv4 line: %v", err)
+	}
+	if req.IPUint32 != ipStringToUint32("203.0.113.7") {
+		t.Errorf("IPv4 control: IPUint32 = %d, want %d", req.IPUint32, ipStringToUint32("203.0.113.7"))
+	}
+}
+
 func TestParser_FileProcessing(t *testing.T) {
 	// Generate test log file with at least 1000 lines
 	testFile, cleanup := testutil.GenerateTestLogFile(t, 1000)

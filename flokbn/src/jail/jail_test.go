@@ -264,6 +264,47 @@ func TestFill_InvalidCIDR_DoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestCidrBounds_RejectsIPv6 is the URGENT-21 repro for cidrBounds. Plain IPv6
+// CIDRs were already rejected (To4()==nil), but IPv4-mapped IPv6 such as
+// "::ffff:192.168.1.0/120" has a non-nil To4() and used to slip past the To4()
+// guard, then BigEndian.Uint32 misread its 16-byte mask. The mask-length guard
+// rejects every IPv6 form while IPv4 CIDRs still parse to correct bounds.
+func TestCidrBounds_RejectsIPv6(t *testing.T) {
+	rejected := []string{
+		"::1/128",
+		"2001:db8::/32",
+		"::/0",
+		"fe80::/10",
+		"::ffff:192.168.1.0/120", // IPv4-mapped IPv6 — the closed hole
+		"::ffff:1.2.3.4/128",
+	}
+	for _, cidr := range rejected {
+		if _, _, ok := cidrBounds(cidr); ok {
+			t.Errorf("cidrBounds(%q) ok = true; want false (IPv6 must be rejected)", cidr)
+		}
+	}
+
+	// IPv4 CIDRs must still parse to correct inclusive bounds (no regression).
+	ipv4 := []struct {
+		cidr             string
+		wantStart, wantE uint32
+	}{
+		{"192.168.1.0/24", 0xC0A80100, 0xC0A801FF},
+		{"10.0.0.0/8", 0x0A000000, 0x0AFFFFFF},
+		{"192.168.1.100/32", 0xC0A80164, 0xC0A80164},
+	}
+	for _, tc := range ipv4 {
+		s, e, ok := cidrBounds(tc.cidr)
+		if !ok {
+			t.Errorf("cidrBounds(%q) ok = false; want true (valid IPv4)", tc.cidr)
+			continue
+		}
+		if s != tc.wantStart || e != tc.wantE {
+			t.Errorf("cidrBounds(%q) = (%#x,%#x); want (%#x,%#x)", tc.cidr, s, e, tc.wantStart, tc.wantE)
+		}
+	}
+}
+
 func TestIsSubRange(t *testing.T) {
 	tests := []struct {
 		cidr1    string

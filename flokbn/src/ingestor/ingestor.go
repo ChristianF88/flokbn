@@ -172,14 +172,28 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	if spaceIdx == -1 {
 		return 0, errors.New("invalid log format: no IP")
 	}
-	ip := net.ParseIP(msg[:spaceIdx])
+	ipTok := msg[:spaceIdx]
+	// IPv4-only: reject IPv6 at the boundary. IPv4 literals never contain a
+	// colon; every IPv6 literal does, INCLUDING the IPv4-mapped "::ffff:a.b.c.d"
+	// form whose net.ParseIP(...).To4() is non-nil and would otherwise flow
+	// through as a usable IPv4. A To4()==nil guard alone misses that mapped form,
+	// so gate on the colon first. IPv6 previously flowed through as IP=<v6> with
+	// IPUint32=0 and was counted as a successful request; now the event is
+	// rejected, never stored or appended, and counted via parseErrors
+	// (ParseErrorsTotal), the operator-visible reject counter.
+	if strings.IndexByte(ipTok, ':') != -1 {
+		return 0, errors.New("IPv6 not supported (IPv4-only)")
+	}
+	ip := net.ParseIP(ipTok)
 	if ip == nil {
 		return 0, errors.New("invalid IP")
 	}
-	out.IP = ip
-	if ip4 := ip.To4(); ip4 != nil {
-		out.IPUint32 = binary.BigEndian.Uint32(ip4)
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return 0, errors.New("IPv6 not supported (IPv4-only)")
 	}
+	out.IP = ip
+	out.IPUint32 = binary.BigEndian.Uint32(ip4)
 
 	// 2. Extract timestamp
 	start := strings.IndexByte(msg, '[')

@@ -146,11 +146,20 @@ func MovePrisonerToNextCell(jail *Jail, cellIndex int, prisonerIndex int) {
 }
 
 // cidrBounds parses an IPv4 CIDR into its inclusive [start,end] numeric range.
-// ok is false for parse errors or IPv6 (unsupported).
+// ok is false for parse errors or any IPv6 form (unsupported).
+//
+// IPv4-only enforcement: gate on the mask length, not To4(). net.ParseCIDR gives
+// every IPv6 form a 16-byte mask, including IPv4-mapped IPv6 (::ffff:a.b.c.d/120)
+// whose To4() is non-nil but whose mask is still 16 bytes. The mask is 4 bytes
+// only for IPv4-notation CIDRs, so len(n.Mask) != 4 rejects every IPv6 form and
+// keeps binary.BigEndian.Uint32(n.Mask) from misreading a 16-byte mask.
 func cidrBounds(cidr string) (start, end uint32, ok bool) {
 	ip, n, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return 0, 0, false
+	}
+	if len(n.Mask) != 4 {
+		return 0, 0, false // IPv6 (incl. IPv4-mapped) not supported
 	}
 	v4 := ip.To4()
 	if v4 == nil {

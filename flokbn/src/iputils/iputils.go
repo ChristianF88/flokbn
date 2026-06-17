@@ -7,8 +7,19 @@ import (
 	"strings"
 )
 
-// IPToUint32 converts a net.IP to uint32 representation
-// Uses BigEndian encoding for consistent network byte order
+// IPToUint32 converts an IPv4 net.IP to its uint32 representation using
+// BigEndian (network byte order).
+//
+// flokbn is IPv4-only. A 0 return is a REJECT sentinel for any input whose
+// To4() is nil (nil net.IP, or a pure-IPv6 16-byte address): callers MUST treat
+// 0 as "not a usable IPv4", never as a valid 0.0.0.0, and must never let an IPv6
+// address flow through as a zero-valued IPv4.
+//
+// NOTE: this function rejects only via To4(). It does NOT by itself catch the
+// IPv4-mapped IPv6 form (::ffff:a.b.c.d), whose To4() is non-nil and which would
+// yield the embedded IPv4. Entry points that accept untrusted text must reject
+// that form earlier — by mask length (cidr/config use len(Mask)!=4) or by
+// rejecting any colon-bearing token (ingestor, iputils.IsValidCidrOrIP).
 func IPToUint32(ip net.IP) uint32 {
 	ipv4 := ip.To4()
 	if ipv4 == nil {
