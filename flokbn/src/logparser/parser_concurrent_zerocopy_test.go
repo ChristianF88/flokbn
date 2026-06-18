@@ -443,6 +443,228 @@ func TestConcurrentCRLF_IPModeParity(t *testing.T) {
 	}
 }
 
+// genLongLineLog builds a log of short valid lines with ONE valid line whose URI
+// is padded with `pad` filler bytes (so the whole line is well over the 8192-byte
+// overlap), inserted at index longIdx. The long line carries a distinctive IP so
+// the test can assert it survived. Returns the content and that distinctive IP.
+//
+// The padding is placed inside the URI's path (no spaces, no quotes), so the line
+// stays a single valid Apache record that BOTH the streaming bufio.Scanner and the
+// chunked reader frame as one line. The long URI is parsed as a full-regex-free
+// field (this fix is purely line framing; regex filters are untouched).
+func genLongLineLog(nShort, longIdx, pad int, longIPStr string) string {
+	var b strings.Builder
+	filler := strings.Repeat("a", pad)
+	uas := []string{
+		"Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/123.0",
+		"curl/8.5.0",
+	}
+	for i := 0; i < nShort; i++ {
+		if i == longIdx {
+			// One very long but valid line (URI padded > overlap).
+			b.WriteString(fmt.Sprintf(
+				`- - - [10/Oct/2024:13:55:%02d +0000] "GET /pad/%s/end HTTP/1.1" 200 1234 "x" "%s" "%s"`,
+				i%60, filler, uas[i%len(uas)], longIPStr))
+			b.WriteString("\n")
+			continue
+		}
+		ip := fmt.Sprintf("%d.%d.%d.%d", 1+(i%223), (i*7)%256, (i*13)%256, (i*29)%256)
+		b.WriteString(fmt.Sprintf(
+			`- - - [10/Oct/2024:13:55:%02d +0000] "GET /p/%d HTTP/1.1" 200 %d "x" "%s" "%s"`,
+			i%60, i, (i*37)%100000, uas[i%len(uas)], ip))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// TestConcurrentLongLine_DiffFullMode is the AUDIT-11 regression test: a single
+// valid line whose URI is padded far beyond the 8192-byte overlap (32KB here)
+// must be emitted EXACTLY ONCE on the chunked path and the full Request multiset
+// must equal the streaming path's, across chunk sizes that place the long line
+// across a boundary (small chunks << line length, and a chunk near the line's
+// midpoint). Before the fix the long line was silently dropped by the chunked
+// path on every chunk size smaller than the long line, diverging from streaming.
+func TestConcurrentLongLine_DiffFullMode(t *testing.T) {
+	const nShort = 400
+	const pad = 32 * 1024 // line >> 8192 overlap
+	const longIPStr = "203.0.113.207"
+	var longIP uint32 = 203<<24 | 0<<16 | 113<<8 | 207
+
+	// longIdx chosen so the long line is roughly in the middle of the file.
+	content := genLongLineLog(nShort, nShort/2, pad, longIPStr)
+	path := writeTempLog(t, content)
+
+	pp, err := NewParser(concurrentZeroCopyFormat)
+	if err != nil {
+		t.Fatalf("NewParser: %v", err)
+	}
+
+	streamReqs := parseStreamingFull(t, pp, path)
+	streamKeys := make([]reqKey, len(streamReqs))
+	for i, r := range streamReqs {
+		streamKeys[i] = toReqKey(r)
+	}
+	sortReqKeys(streamKeys)
+
+	// Chunk sizes: much smaller than the 32KB line (so it straddles boundaries),
+	// one ~half the line length (long line midpoint near a boundary), and the
+	// default-ish 64KB (line wholly inside one chunk's window — control).
+	chunkSizes := []int64{256, 1024, 4096, 8192, 16 * 1024, 17 * 1024, 64 * 1024}
+
+	for _, cs := range chunkSizes {
+		concReqs := parseConcurrentFull(t, pp, path, cs)
+
+		if len(concReqs) != len(streamReqs) {
+			t.Fatalf("chunk=%d: count mismatch: concurrent=%d streaming=%d (long line lost/dup)",
+				cs, len(concReqs), len(streamReqs))
+		}
+
+		// The long line must appear exactly once on the chunked path.
+		longCount := 0
+		for _, r := range concReqs {
+			if r.IPUint32 == longIP {
+				longCount++
+				if !strings.HasPrefix(r.URI, "/pad/") || len(r.URI) < pad {
+					t.Fatalf("chunk=%d: long line URI corrupted: len=%d prefix-ok=%v",
+						cs, len(r.URI), strings.HasPrefix(r.URI, "/pad/"))
+				}
+			}
+		}
+		if longCount != 1 {
+			t.Fatalf("chunk=%d: long line emitted %d times, want exactly 1", cs, longCount)
+		}
+
+		concKeys := make([]reqKey, len(concReqs))
+		for i, r := range concReqs {
+			concKeys[i] = toReqKey(r)
+		}
+		sortReqKeys(concKeys)
+		for i := range streamKeys {
+			if concKeys[i] != streamKeys[i] {
+				t.Fatalf("chunk=%d: field mismatch at sorted index %d:\n concurrent=%+v\n streaming=%+v",
+					cs, i, concKeys[i], streamKeys[i])
+			}
+		}
+	}
+}
+
+// TestConcurrentLongLine_DiffIPMode is the IP-only counterpart: the long line's IP
+// must be counted exactly once on the chunked IP path and the IP multiset +
+// invalid count must equal the streaming IP path's, across boundary-straddling
+// chunk sizes. ParseFileIPs reuses readChunkBatched verbatim, so the recovery
+// must work identically here.
+func TestConcurrentLongLine_DiffIPMode(t *testing.T) {
+	const nShort = 400
+	const pad = 32 * 1024
+	const longIPStr = "203.0.113.207"
+	var longIP uint32 = 203<<24 | 0<<16 | 113<<8 | 207
+
+	content := genLongLineLog(nShort, nShort/2, pad, longIPStr)
+	path := writeTempLog(t, content)
+
+	pp, err := NewParser(concurrentZeroCopyFormat)
+	if err != nil {
+		t.Fatalf("NewParser: %v", err)
+	}
+	pp.SkipNonIPFields = true
+
+	streamIPs, streamInvalid := parseStreamingIPs(t, pp, path)
+	sortedStream := append([]uint32(nil), streamIPs...)
+	sort.Slice(sortedStream, func(i, j int) bool { return sortedStream[i] < sortedStream[j] })
+
+	chunkSizes := []int64{256, 1024, 4096, 8192, 16 * 1024, 17 * 1024, 64 * 1024}
+
+	for _, cs := range chunkSizes {
+		concIPs, concInvalid := parseConcurrentIPs(t, pp, path, cs)
+
+		if len(concIPs) != len(streamIPs) {
+			t.Fatalf("chunk=%d: IP count mismatch: concurrent=%d streaming=%d",
+				cs, len(concIPs), len(streamIPs))
+		}
+		if concInvalid != streamInvalid {
+			t.Fatalf("chunk=%d: invalid count mismatch: concurrent=%d streaming=%d",
+				cs, concInvalid, streamInvalid)
+		}
+
+		longCount := 0
+		for _, ip := range concIPs {
+			if ip == longIP {
+				longCount++
+			}
+		}
+		if longCount != 1 {
+			t.Fatalf("chunk=%d: long line IP counted %d times, want exactly 1", cs, longCount)
+		}
+
+		sortedConc := append([]uint32(nil), concIPs...)
+		sort.Slice(sortedConc, func(i, j int) bool { return sortedConc[i] < sortedConc[j] })
+		for i := range sortedStream {
+			if sortedConc[i] != sortedStream[i] {
+				t.Fatalf("chunk=%d: IP multiset mismatch at index %d: concurrent=%d streaming=%d",
+					cs, i, sortedConc[i], sortedStream[i])
+			}
+		}
+	}
+}
+
+// TestConcurrentLongLine_StartAtBoundaryAndEOF covers two ownership branches for
+// long lines: (a) a long line whose start is positioned so chunk sizes make it
+// straddle, and (b) a long line that is the FINAL line of the file with NO
+// trailing newline (the long line's tail reaches EOF during recovery). Both must
+// match the streaming path exactly.
+func TestConcurrentLongLine_StartAtBoundaryAndEOF(t *testing.T) {
+	const nShort = 200
+	const pad = 24 * 1024
+	const longIPStr = "198.51.100.42"
+	var longIP uint32 = 198<<24 | 51<<16 | 100<<8 | 42
+
+	// Long line is the LAST line; strip the final '\n' so it terminates at EOF.
+	content := genLongLineLog(nShort, nShort-1, pad, longIPStr)
+	content = strings.TrimSuffix(content, "\n")
+	path := writeTempLog(t, content)
+
+	pp, err := NewParser(concurrentZeroCopyFormat)
+	if err != nil {
+		t.Fatalf("NewParser: %v", err)
+	}
+
+	streamReqs := parseStreamingFull(t, pp, path)
+	streamKeys := make([]reqKey, len(streamReqs))
+	for i, r := range streamReqs {
+		streamKeys[i] = toReqKey(r)
+	}
+	sortReqKeys(streamKeys)
+
+	chunkSizes := []int64{256, 1024, 4096, 8192, 16 * 1024, 64 * 1024}
+	for _, cs := range chunkSizes {
+		concReqs := parseConcurrentFull(t, pp, path, cs)
+		if len(concReqs) != len(streamReqs) {
+			t.Fatalf("chunk=%d: count mismatch: concurrent=%d streaming=%d",
+				cs, len(concReqs), len(streamReqs))
+		}
+		longCount := 0
+		for _, r := range concReqs {
+			if r.IPUint32 == longIP {
+				longCount++
+			}
+		}
+		if longCount != 1 {
+			t.Fatalf("chunk=%d: EOF long line emitted %d times, want exactly 1", cs, longCount)
+		}
+		concKeys := make([]reqKey, len(concReqs))
+		for i, r := range concReqs {
+			concKeys[i] = toReqKey(r)
+		}
+		sortReqKeys(concKeys)
+		for i := range streamKeys {
+			if concKeys[i] != streamKeys[i] {
+				t.Fatalf("chunk=%d: field mismatch at sorted index %d:\n concurrent=%+v\n streaming=%+v",
+					cs, i, concKeys[i], streamKeys[i])
+			}
+		}
+	}
+}
+
 // BenchmarkConcurrentZeroCopy_Full exercises the zero-copy concurrent full-Request
 // path with a small chunk size on a multi-thousand-line file (many chunks,
 // boundary crossings). With ReportAllocs the per-line slab copy that used to be

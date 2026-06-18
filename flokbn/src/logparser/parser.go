@@ -747,9 +747,128 @@ func (pp *Parser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, 
 		}
 	}
 
+	// Cold recovery branch: an OWNED line was longer than the overlap window so
+	// its terminating '\n' fell beyond `readEnd`. The emit loop above scanned to
+	// the end of `buffer` without finding it, leaving `start` pointing at that
+	// owned line's first byte (start < chunkEnd) with bytes still pending
+	// (start < len(buffer)), and we are NOT at EOF (the EOF handler above would
+	// otherwise have emitted it as the final line).
+	//
+	// This branch is entered ONLY for such a boundary-straddling long line. In
+	// the common case every owned line terminates within `buffer`, so the loop
+	// leaves `start` at or past chunkEnd (or at len(buffer)); the guard below is
+	// false and the hot path does ZERO extra work / allocations. Lines shorter
+	// than the 8192 overlap can never reach here.
+	if readEnd != fileSize && start < chunkEnd && start < len(buffer) {
+		if recovered, ok := pp.recoverLongLine(file, readStart+int64(start), fileSize); ok {
+			batch = append(batch, recovered)
+		}
+	}
+
 	// Send remaining lines
 	if len(batch) > 0 {
 		linesChan <- batch
+	}
+}
+
+// maxRecoverLineLen caps recovery of a boundary-straddling long line at the
+// streaming path's 2MB token cap (bufio.Scanner, scanner.Buffer(..., 2*1024*1024)).
+// We stop reading once a line would exceed this cap so the chunked path never emits
+// a line that the streaming path's 2MB Scanner buffer could not hold.
+//
+// PARITY SCOPE: the two I/O paths emit the identical line multiset (and identical
+// error: nil) ONLY for line lengths strictly BELOW this cap. At or above it the
+// paths DIVERGE by design and must not be assumed byte-identical:
+//
+//   - Streaming: bufio.Scanner.Scan returns false on the over-long line and
+//     scanner.Err returns bufio.ErrTooLong, so the streaming entry point returns
+//     (nil, err) — the WHOLE parse aborts and EVERY line is discarded.
+//   - Chunked: recoverLongLine drops only that one over-long line (ok=false) and
+//     the parse continues, returning the remaining lines with a nil error.
+//
+// Surfacing the streaming abort on the chunked path would require an error channel
+// through both concurrent orchestrators (they run readChunkBatched in goroutines
+// and cannot return an error), which this fix deliberately does not add. A
+// >=2MB-line log is pathological; the documented divergence is the contract.
+const maxRecoverLineLen = 2 * 1024 * 1024
+
+// recoverLongLine re-reads, starting at the absolute file offset `lineStart` of an
+// owned line whose terminating '\n' fell beyond this chunk's overlap window, with
+// a GROWING window (doubling from the default overlap) until the '\n' is found or
+// EOF is reached. It returns the line bytes (trailing '\r' stripped to match the
+// streaming path) and ok=true when a complete owned line was recovered.
+//
+// Cold path only: invoked at most once per chunk (a single physical line can
+// straddle a boundary at most once for the owning chunk), so the extra ReadAt and
+// fresh allocation here do not touch the common-case parse cost. The returned
+// slice aliases the freshly allocated `buf`; that alias keeps `buf` reachable, so
+// the zero-copy unsafe.String lifetime invariant documented on readChunkBatched
+// still holds (the recovery buffer is never reused or mutated after this read).
+//
+// Lines at/above maxRecoverLineLen are dropped (return ok=false). NOTE this is NOT
+// byte-identical to streaming at the cap: streaming raises bufio.ErrTooLong and
+// aborts the whole parse, whereas this drops only the one over-long line and
+// continues. See maxRecoverLineLen for the precise (and deliberately divergent)
+// parity scope.
+func (pp *Parser) recoverLongLine(file *os.File, lineStart, fileSize int64) ([]byte, bool) {
+	window := int64(8192) // current overlap; double until '\n' found or capped
+	for {
+		window *= 2
+		if window > maxRecoverLineLen {
+			window = maxRecoverLineLen
+		}
+		readEnd := lineStart + window
+		atEOF := false
+		if readEnd >= fileSize {
+			readEnd = fileSize
+			atEOF = true
+		}
+		readSize := readEnd - lineStart
+		if readSize <= 0 {
+			return nil, false
+		}
+
+		buf := make([]byte, readSize)
+		n, err := file.ReadAt(buf, lineStart)
+		if err != nil && err != io.EOF {
+			fmt.Fprintf(os.Stderr, "recoverLongLine: ReadAt offset %d: %v\n", lineStart, err)
+			return nil, false
+		}
+		buf = buf[:n]
+
+		if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
+			// Found the terminating newline: this is the complete owned line.
+			lineData := buf[:idx]
+			if m := len(lineData); m > 0 && lineData[m-1] == '\r' {
+				lineData = lineData[:m-1]
+			}
+			if len(lineData) == 0 {
+				return nil, false
+			}
+			return lineData, true
+		}
+
+		if atEOF {
+			// No trailing '\n' before EOF: this is the file's final line with no
+			// newline. Emit the whole remaining tail (matches the EOF handler).
+			lineData := buf
+			if m := len(lineData); m > 0 && lineData[m-1] == '\r' {
+				lineData = lineData[:m-1]
+			}
+			if len(lineData) == 0 {
+				return nil, false
+			}
+			return lineData, true
+		}
+
+		if window >= maxRecoverLineLen {
+			// Line exceeds the streaming path's 2MB token cap (no '\n' within the
+			// cap and not at EOF). Drop just this line and keep parsing. This is a
+			// DELIBERATE divergence from streaming, which instead raises
+			// bufio.ErrTooLong and aborts the entire parse — see maxRecoverLineLen.
+			return nil, false
+		}
+		// Otherwise grow the window and re-read.
 	}
 }
 
