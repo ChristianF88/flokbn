@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -74,7 +75,7 @@ func TestConcurrentReadAtError_FullModeSurfaces(t *testing.T) {
 	func() {
 		f, size := openSized(t, path)
 		defer f.Close()
-		reqs, perr := pp.parseFileConcurrentIOChunked(f, size, chunkSize)
+		reqs, perr := pp.parseFileConcurrentIOChunked(f, f.Name(), size, chunkSize)
 		if perr != nil {
 			t.Fatalf("success path returned unexpected error: %v", perr)
 		}
@@ -87,12 +88,16 @@ func TestConcurrentReadAtError_FullModeSurfaces(t *testing.T) {
 	f, size := openSized(t, path)
 	defer f.Close()
 	fr := &failingReaderAt{delegate: f, failAtOffset: chunkSize}
-	reqs, perr := pp.parseFileConcurrentIOChunked(fr, size, chunkSize)
+	reqs, perr := pp.parseFileConcurrentIOChunked(fr, path, size, chunkSize)
 	if perr == nil {
 		t.Fatalf("BUG: ReadAt failure swallowed — got nil error and %d requests (want non-nil error)", len(reqs))
 	}
 	if !errors.Is(perr, errInjectedReadAt) {
 		t.Fatalf("error does not wrap injected failure: %v", perr)
+	}
+	// AUDIT-12: the propagated error must name the source file.
+	if !strings.Contains(perr.Error(), path) {
+		t.Fatalf("error does not name the file %q: %v", path, perr)
 	}
 	// Partial result must not be published.
 	if reqs != nil {
@@ -121,7 +126,7 @@ func TestConcurrentReadAtError_IPModeSurfaces(t *testing.T) {
 	func() {
 		f, size := openSized(t, path)
 		defer f.Close()
-		ips, _, perr := pp.parseFileIPsConcurrentIOChunked(f, size, chunkSize)
+		ips, _, perr := pp.parseFileIPsConcurrentIOChunked(f, f.Name(), size, chunkSize)
 		if perr != nil {
 			t.Fatalf("success path returned unexpected error: %v", perr)
 		}
@@ -134,12 +139,16 @@ func TestConcurrentReadAtError_IPModeSurfaces(t *testing.T) {
 	f, size := openSized(t, path)
 	defer f.Close()
 	fr := &failingReaderAt{delegate: f, failAtOffset: chunkSize}
-	ips, invalid, perr := pp.parseFileIPsConcurrentIOChunked(fr, size, chunkSize)
+	ips, invalid, perr := pp.parseFileIPsConcurrentIOChunked(fr, path, size, chunkSize)
 	if perr == nil {
 		t.Fatalf("BUG: ReadAt failure swallowed — got nil error, %d IPs, invalid=%d (want non-nil error)", len(ips), invalid)
 	}
 	if !errors.Is(perr, errInjectedReadAt) {
 		t.Fatalf("error does not wrap injected failure: %v", perr)
+	}
+	// AUDIT-12: the propagated error must name the source file.
+	if !strings.Contains(perr.Error(), path) {
+		t.Fatalf("error does not name the file %q: %v", path, perr)
 	}
 	if ips != nil || invalid != 0 {
 		t.Fatalf("expected nil result + zero invalid on error, got %d IPs invalid=%d", len(ips), invalid)
@@ -172,7 +181,7 @@ func TestConcurrentReadAtError_EOFStillSucceeds(t *testing.T) {
 	// Reference: streaming full-Request multiset.
 	refReqs := parseStreamingFull(t, pp, path)
 
-	reqs, perr := pp.parseFileConcurrentIOChunked(eofR, size, chunkSize)
+	reqs, perr := pp.parseFileConcurrentIOChunked(eofR, f.Name(), size, chunkSize)
 	if perr != nil {
 		t.Fatalf("io.EOF wrongly treated as error: %v", perr)
 	}
@@ -183,7 +192,7 @@ func TestConcurrentReadAtError_EOFStillSucceeds(t *testing.T) {
 	// IP-only path too.
 	pp.SkipNonIPFields = true
 	refIPs, refInvalid := parseStreamingIPs(t, pp, path)
-	ips, invalid, perr := pp.parseFileIPsConcurrentIOChunked(eofR, size, chunkSize)
+	ips, invalid, perr := pp.parseFileIPsConcurrentIOChunked(eofR, f.Name(), size, chunkSize)
 	if perr != nil {
 		t.Fatalf("io.EOF wrongly treated as error (IP mode): %v", perr)
 	}

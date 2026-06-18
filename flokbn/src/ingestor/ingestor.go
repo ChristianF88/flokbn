@@ -182,7 +182,7 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	// rejected, never stored or appended, and counted via parseErrors
 	// (ParseErrorsTotal), the operator-visible reject counter.
 	if strings.IndexByte(ipTok, ':') != -1 {
-		return 0, errors.New("IPv6 not supported (IPv4-only)")
+		return 0, fmt.Errorf("IPv6 not supported (IPv4-only tool): %q", ipTok)
 	}
 	ip := net.ParseIP(ipTok)
 	if ip == nil {
@@ -190,7 +190,7 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	}
 	ip4 := ip.To4()
 	if ip4 == nil {
-		return 0, errors.New("IPv6 not supported (IPv4-only)")
+		return 0, fmt.Errorf("IPv6 not supported (IPv4-only tool): %q", ipTok)
 	}
 	out.IP = ip
 	out.IPUint32 = binary.BigEndian.Uint32(ip4)

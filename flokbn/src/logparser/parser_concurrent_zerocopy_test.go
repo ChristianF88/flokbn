@@ -161,7 +161,7 @@ func parseConcurrentFull(t *testing.T, pp *Parser, path string, chunkSize int64)
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	reqs, err := pp.parseFileConcurrentIOChunked(f, st.Size(), chunkSize)
+	reqs, err := pp.parseFileConcurrentIOChunked(f, f.Name(), st.Size(), chunkSize)
 	if err != nil {
 		t.Fatalf("parseFileConcurrentIOChunked: %v", err)
 	}
@@ -179,7 +179,7 @@ func parseConcurrentIPs(t *testing.T, pp *Parser, path string, chunkSize int64) 
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	ips, invalid, err := pp.parseFileIPsConcurrentIOChunked(f, st.Size(), chunkSize)
+	ips, invalid, err := pp.parseFileIPsConcurrentIOChunked(f, f.Name(), st.Size(), chunkSize)
 	if err != nil {
 		t.Fatalf("parseFileIPsConcurrentIOChunked: %v", err)
 	}
@@ -691,7 +691,7 @@ func BenchmarkConcurrentZeroCopy_Full(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		reqs, err := pp.parseFileConcurrentIOChunked(f, size, chunkSize)
+		reqs, err := pp.parseFileConcurrentIOChunked(f, f.Name(), size, chunkSize)
 		if err != nil {
 			b.Fatalf("parse: %v", err)
 		}
@@ -725,7 +725,7 @@ func BenchmarkConcurrentZeroCopy_IPOnly(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ips, _, err := pp.parseFileIPsConcurrentIOChunked(f, size, chunkSize)
+		ips, _, err := pp.parseFileIPsConcurrentIOChunked(f, f.Name(), size, chunkSize)
 		if err != nil {
 			b.Fatalf("parse: %v", err)
 		}

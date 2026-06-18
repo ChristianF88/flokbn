@@ -2,6 +2,7 @@ package ingestor
 
 import (
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,14 @@ func TestParseEvent_RejectsIPv6(t *testing.T) {
 			_, err := parseEvent(evt, &req)
 			if err == nil {
 				t.Fatalf("expected error for IPv6 %q, got nil", tc.ip)
+			}
+			// MSG-04: the reject message must use the canonical parenthetical and
+			// quote the offending token, matching the config-load IPv6 wording.
+			if !strings.Contains(err.Error(), "(IPv4-only tool)") {
+				t.Errorf("IPv6 reject message missing canonical %q: %v", "(IPv4-only tool)", err)
+			}
+			if !strings.Contains(err.Error(), tc.ip) {
+				t.Errorf("IPv6 reject message does not quote the offending token %q: %v", tc.ip, err)
 			}
 			if req.IP != nil {
 				t.Errorf("IPv6 must not be stored: req.IP = %v", req.IP)
