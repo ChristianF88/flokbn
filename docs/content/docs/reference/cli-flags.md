@@ -3,7 +3,7 @@ title: "CLI Flags"
 description: "Complete command-line reference for flokbn"
 summary: "Every flokbn command-line flag with type, default value, and description"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-06-18T10:00:00+00:00
 draft: false
 weight: 210
 slug: "cli-flags"
@@ -41,7 +41,7 @@ flokbn static [options]
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `--config` | string | No | - | Path to TOML config file. When used, only `--tui`, `--compact`, `--plain` are allowed alongside it. All other flags produce an error. |
-| `--logfile` | string | Yes (unless `--config`) | - | Path to log file to analyze |
+| `--logfile` | string | Yes (unless `--config`) | - | Path to log file to analyze. Note: the CLI flag is all-lowercase `--logfile`; the equivalent TOML key is camelCase `logFile`. This divergence is intentional. |
 | `--logFormat` | string | No | `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"` | Log format string. See [Log Formats]({{< relref "/docs/reference/log-formats/" >}}). |
 | `--startTime` | string | No | - | Start of time window. Formats: `YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM-DD HH:MM` |
 | `--endTime` | string | No | - | End of time window. Same formats as `--startTime` |

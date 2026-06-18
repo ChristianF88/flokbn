@@ -64,6 +64,7 @@ plotPath = "heatmap.html"
 # ------------------------------------------------------------------------------
 [static.t1_baseline]
 # CIDR-range analysis: one broad /8 and two narrow /16s matching real hotspots.
+# IPv4 CIDRs only - an IPv6 entry aborts the load (IPv4-only tool).
 cidrRanges = ["23.0.0.0/8", "23.253.0.0/16", "87.26.0.0/16"]
 clusterArgSets = [
     [10000, 12, 18, 0.2],   # coarse sweep: only the heaviest hotspot cores
@@ -114,6 +115,7 @@ useragentRegex = "python-requests|curl|Anubis"
 endpointRegex  = "^/fake-endpoint-[1-9]$"
 startTime = "2026-02-04T12:00:00Z"
 endTime   = "2026-02-05T12:00:00Z"
+# IPv4 CIDRs only - an IPv6 entry aborts the load (IPv4-only tool).
 cidrRanges = ["23.0.0.0/8", "23.253.0.0/16"]
 clusterArgSets = [
     [300, 12, 16, 0.2],     # hotspot /16s despite triple filtering

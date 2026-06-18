@@ -90,6 +90,9 @@ All files use the same format:
 - Whitespace is trimmed
 
 #### IP Files Format (whitelist.txt, blacklist.txt)
+**IPv4 CIDRs only** — a malformed CIDR or an IPv6 line aborts the run at
+startup, naming the line number and file (IPv4-only tool). The same IPv4-only
+rule applies to per-trie `cidrRanges` entries in the config.
 ```
 # Comment
 192.168.1.0/24    # Internal network
@@ -161,7 +164,8 @@ flokbn processes filtering in this order:
 
 ### Common Issues
 1. **File not found** - Check file paths and permissions
-2. **Invalid CIDR format** - Verify CIDR syntax (e.g., 192.168.1.0/24)
+2. **Invalid CIDR format** - Verify CIDR syntax (e.g., 192.168.1.0/24). IPv4
+   only: an IPv6 line aborts the run at startup (IPv4-only tool)
 3. **UA entry never matches** - Entries are exact strings; check for missing
    version suffixes or extra whitespace
 4. **Performance issues** - Consider file size and pattern complexity

@@ -3,7 +3,7 @@ title: "Performance"
 description: "Performance benchmarks and optimization guide for flokbn"
 summary: "Benchmarks, memory management, scaling approaches, and optimization techniques"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-06-18T10:00:00+00:00
 draft: false
 weight: 420
 toc: true
@@ -52,6 +52,8 @@ Without filters the IP-only parse path is faster still. Clustering itself runs i
 **Bottleneck**: Disk I/O and log parsing
 
 Optimizations applied: zero-copy chunked file reading, an IP-only parse path that skips all other fields when the analysis does not need them, optimized string parsing, minimal allocations.
+
+The parser picks its I/O strategy by file size at a **500 MB** threshold: files smaller than 500 MB use single-stream sequential reading (lower overhead), while files at or above 500 MB use chunked concurrent I/O (multiple workers `ReadAt` distinct offsets in parallel). A non-EOF `ReadAt` failure during a chunked read is **recorded and surfaced** - the parse returns a non-nil error naming the file and offset rather than silently truncating the result and reporting success on a partial read.
 
 ### Stage 2: Filtering (~20% of total)
 

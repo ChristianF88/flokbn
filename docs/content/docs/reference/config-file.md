@@ -3,7 +3,7 @@ title: "Config File"
 description: "TOML configuration file schema and reference"
 summary: "Complete reference for flokbn TOML configuration files"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-06-18T10:00:00+00:00
 draft: false
 weight: 220
 slug: "config-file"
@@ -51,6 +51,8 @@ All paths should be absolute.
 | `logFormat` | string | No | Log format string (see [Log Formats]({{< relref "/docs/reference/log-formats/" >}})) |
 | `plotPath` | string | No | Path for heatmap HTML output |
 
+> **Note on casing:** the TOML key is `logFile` (camelCase). The equivalent CLI flag is `--logfile` (all lowercase). This divergence is intentional and the two are not interchangeable - use `logFile` in config files and `--logfile` on the command line.
+
 ### Static Tries: [static.NAME]
 
 Each `[static.NAME]` section defines an independent analysis trie. The `NAME` is a freeform label.
@@ -58,8 +60,8 @@ Each `[static.NAME]` section defines an independent analysis trie. The `NAME` is
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `clusterArgSets` | array of arrays | No | Cluster parameters. Without it the trie only reports parse stats and `cidrRanges` analysis. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
-| `useForJail` | array of bools | No | Which cluster arg sets contribute to the jail. Sets without a matching entry default to `false` (detected and reported, but never jailed) - so in practice give it the same length as `clusterArgSets`. |
-| `cidrRanges` | array of strings | No | Focus on specific CIDR ranges |
+| `useForJail` | array of bools | No | Which cluster arg sets contribute to the jail. **Omit it entirely** and every set is detected and reported but never jailed. If you *do* provide it, it must have **exactly one entry per `clusterArgSets` row** - a present-but-mismatched length aborts the load (see [Validation Rules](#validation-rules)). |
+| `cidrRanges` | array of strings | No | Report request counts for specific networks (reporting only, not a filter). **IPv4 CIDRs only**; an IPv6 entry aborts the load (IPv4-only tool). |
 | `useragentRegex` | string | No | User-Agent filter regex |
 | `endpointRegex` | string | No | Endpoint filter regex |
 | `startTime` | string | No | Start of time window (RFC3339, e.g. `"2025-01-15T00:00:00Z"`) |
@@ -82,15 +84,15 @@ All windows are processed by a **single detection loop**: each iteration reads o
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `slidingWindowMaxTime` | string | Yes* | Window time span (e.g. `"2h"`, `"30m"`) |
-| `slidingWindowMaxSize` | int | Yes* | Maximum requests in window |
-| `sleepBetweenIterations` | int | Yes* | Seconds between detection runs (largest value across windows wins, see above) |
-| `clusterArgSets` | array of arrays | Yes* | Cluster parameters |
-| `useForJail` | array of bools | No | Which cluster arg sets contribute to the jail; missing entries default to `false` (detected but never jailed) |
+| `slidingWindowMaxTime` | string | Yes | Window time span (e.g. `"2h"`, `"30m"`); validated `> 0` at load |
+| `slidingWindowMaxSize` | int | Yes | Maximum requests in window; validated `> 0` at load |
+| `sleepBetweenIterations` | int | No | Seconds between detection runs (largest value across windows wins, see above); not load-validated, omitted/`0` is accepted (an internal heartbeat floor still ticks the loop) |
+| `clusterArgSets` | array of arrays | Yes | Cluster parameters; at least one row is required at load |
+| `useForJail` | array of bools | No | Which cluster arg sets contribute to the jail. Omit it entirely and every set is detected but never jailed; if present it must have one entry per `clusterArgSets` row or the load aborts. |
 | `useragentRegex` | string | No | User-Agent filter regex |
 | `endpointRegex` | string | No | Endpoint filter regex |
 
-\* Required for the window to do anything, but **not validated at load time** - a window missing any of these starts fine and silently detects nothing. See [Validation Rules](#validation-rules).
+The fields marked **Yes** are validated at load: a window missing `slidingWindowMaxTime`, `slidingWindowMaxSize`, or `clusterArgSets` (or setting either size/time to `0`) aborts startup with an error naming the offending `[live.NAME]` window. See [Validation Rules](#validation-rules).
 
 Duration strings accept any Go duration: `s` (seconds), `m` (minutes), `h` (hours), also `ms` etc. Examples: `"2h"`, `"30m"`, `"1h30m"`.
 
@@ -132,13 +134,15 @@ Enforced at load/startup (the run aborts with an error):
 3. `statsListen`, when set, must be a valid `host:port`; `topTalkers` must be >= 0
 4. Regex patterns and duration strings must compile/parse
 5. When using `--config`, most other CLI flags produce an error (static allows `--tui`, `--compact`, `--plain`; live allows only `--logLevel`)
-6. `[log]` rejects unknown keys and invalid `level`/`format` values
+6. **Unknown top-level sections and unknown keys are rejected.** A misspelled section header (e.g. `[gloabl]`, `[satic]`) aborts the load naming the unknown section. Unknown keys in `[global]`, `[static]`, `[live]`, `[log]`, and every `[static.NAME]`/`[live.NAME]` trie sub-table are rejected naming the offending key and section. A wrong-typed scalar (e.g. `port = 8080` as an integer instead of a string) also fails loud at load.
+7. `[log]` rejects invalid `level`/`format` values.
+8. **Each `clusterArgSets` row must have exactly 4 numeric values** `[minSize, minDepth, maxDepth, threshold]` with `minDepth <= maxDepth <= 32`. A malformed row (wrong count, non-numeric value, or out-of-range depth) aborts the load naming the offending row index - identical to the CLI flag path.
+9. **A present `useForJail` must have exactly one entry per `clusterArgSets` row.** A present-but-mismatched length aborts the load. (Omitting `useForJail` entirely is still valid and means "never jail any set".)
+10. **`[live.NAME]` windows are validated per window**: `slidingWindowMaxSize > 0`, `slidingWindowMaxTime > 0`, and at least one `clusterArgSets` row. A window missing or zeroing any of these aborts startup with a message naming the `[live.NAME]` window.
+11. `cidrRanges` entries must be valid **IPv4** CIDRs; an IPv6 entry aborts the load (IPv4-only tool), in both static and live tries.
 
-**Not** enforced - silently tolerated, so double-check these by hand:
+**Not** enforced - silently tolerated, so double-check it by hand:
 
-- A `clusterArgSets` entry needs at least 4 values `[minSize, minDepth, maxDepth, threshold]`; entries with fewer values or with `minDepth > maxDepth` are **silently dropped** in TOML (the CLI flags reject them with an error instead).
-- `useForJail` is not length-checked: cluster arg sets without a matching entry are detected but never jailed.
-- The `[live.NAME]` fields marked required above (`slidingWindowMaxTime`, `slidingWindowMaxSize`, `sleepBetweenIterations`, `clusterArgSets`) are not checked: a window missing them starts without error and silently detects nothing.
 - An invalid RFC3339 `startTime`/`endTime` in `[static.NAME]` does **not** abort the run: it surfaces as a diagnostic in the output and the time filter is silently skipped (all requests are analyzed).
 
 ## Complete Static Example
@@ -231,8 +235,10 @@ For a complete, working live config you can run immediately, see `docker-test-co
 
 **Missing required field**: Check the required columns in the tables above.
 
-**Invalid cluster arguments**: Each entry needs 4 values: `[[minSize, minDepth, maxDepth, threshold]]`. Malformed TOML entries are silently dropped - if a set seems ignored, check its value count and that `minDepth <= maxDepth`.
+**Invalid cluster arguments**: A malformed `clusterArgSets` row now **aborts the load** with a message naming the offending row index. Each row needs exactly 4 numeric values `[minSize, minDepth, maxDepth, threshold]` with `minDepth <= maxDepth <= 32`; fix the named row and rerun.
+
+**`useForJail` length mismatch**: If you provide `useForJail`, it must have exactly one entry per `clusterArgSets` row or the load aborts naming both lengths. Either match the lengths or omit `useForJail` entirely (which means "never jail any set").
 
 **File not found**: Verify the path exists and is absolute.
 
-**Detections never banned**: Check `useForJail` - sets without a `true` entry at their position are reported but never jailed.
+**Detections never banned**: Check `useForJail` - sets with a `false` (or omitted `useForJail` entirely) are reported but never jailed.

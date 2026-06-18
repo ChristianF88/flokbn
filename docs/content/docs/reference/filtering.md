@@ -3,7 +3,7 @@ title: "Filtering"
 description: "Whitelist, blacklist, regex, and time-based filtering"
 summary: "Complete reference for all flokbn filtering mechanisms and file formats"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-06-18T10:00:00+00:00
 draft: false
 weight: 250
 slug: "filtering"
@@ -39,11 +39,11 @@ CIDR ranges (`cidrRanges` / `--rangesCidr`) are **not** a filter in either layer
 
 Whitelisted CIDRs can never be banned. The whitelist is applied to detected clusters before the jail update and subtracted from every published ban list - it does not exclude the traffic from analysis or statistics.
 
-All list files (IP and User-Agent, whitelist and blacklist) are loaded **once at startup**. In live mode, restart flokbn to pick up edits; a malformed list file fails loudly at startup rather than silently banning protected ranges.
+All list files (IP and User-Agent, whitelist and blacklist) are loaded **once at startup**. In live mode, restart flokbn to pick up edits; a malformed or unreadable list file fails loudly at startup rather than silently banning protected ranges. This is fatal in every static output mode too - including `--plot` and `--tui`, which take the same full-parse path: a configured-but-unreadable User-Agent whitelist/blacklist aborts the run **before** any clustering or jail/ban-file writes, so a wrong ban file is never produced.
 
 ### File Format
 
-One CIDR per line. Comments with `#`. Blank lines ignored.
+One CIDR per line. Comments with `#`. Blank lines ignored. **IPv4 CIDRs only** (this applies to both the whitelist and the blacklist): a malformed CIDR or an IPv6 line aborts the run at startup, naming the line number and file (IPv4-only tool).
 
 ```
 # /etc/flokbn/whitelist.txt
@@ -232,6 +232,8 @@ CLI:
 ```bash
 --rangesCidr "203.0.113.0/24" --rangesCidr "198.51.100.0/24"
 ```
+
+**IPv4 CIDRs only**: a malformed or IPv6 `cidrRanges` entry aborts the load (IPv4-only tool). In live mode `cidrRanges` is accepted for key-surface parity but **not reported** (the per-range counts only appear in static mode); each entry is still validated, so an IPv6 value fails the load in live mode too.
 
 Useful for keeping an eye on known problematic ASNs or following up on previously detected ranges.
 

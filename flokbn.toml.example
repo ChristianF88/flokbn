@@ -128,7 +128,8 @@ logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
 # endTime = "2024-12-31T23:59:59Z"     # End time (RFC3339 format)
 
 # OPTIONAL: CIDR range analysis
-# Analyze request distribution within specific network ranges
+# Analyze request distribution within specific network ranges.
+# IPv4 CIDRs only - an IPv6 entry aborts the load (IPv4-only tool).
 cidrRanges = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
 # REQUIRED: Clustering configuration
@@ -157,6 +158,7 @@ endpointRegex = "/(admin|api|dashboard|login|auth|config|setup|install).*"
 
 # Admin-endpoint filtering is done by endpointRegex above; cidrRanges is
 # reporting-only and just adds a per-range request count to the report.
+# IPv4 CIDRs only - an IPv6 entry aborts the load (IPv4-only tool).
 cidrRanges = ["192.168.0.0/16"]          # Report request volume in the 192.168.0.0/16 range
 
 # More aggressive clustering for admin endpoints
@@ -180,7 +182,8 @@ useragentRegex = ".*(bot|crawler|spider|scraper|scan|hack|exploit|attack|curl|wg
 # startTime = "2024-07-15T00:00:00Z"
 # endTime = "2024-07-16T00:00:00Z"
 
-# Analyze all networks for suspicious UAs
+# Analyze all networks for suspicious UAs.
+# IPv4 CIDRs only - an IPv6 entry aborts the load (IPv4-only tool).
 cidrRanges = ["0.0.0.0/0"]
 
 # Moderate clustering for suspicious UAs

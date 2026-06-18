@@ -3,7 +3,7 @@ title: "Log Formats"
 description: "Log format specifiers for parsing HTTP access logs"
 summary: "Complete reference for flokbn log format specifiers and common format patterns"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-06-18T10:00:00+00:00
 draft: false
 weight: 230
 slug: "log-formats"
@@ -124,7 +124,7 @@ Expected format: `DD/MMM/YYYY:HH:MM:SS ±ZZZZ`
 
 Months: Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec. Timezone is optional.
 
-**Timezone handling differs between modes.** The static parser reads only the first 20 bytes of the field (`DD/MMM/YYYY:HH:MM:SS`) and **ignores the offset** - timestamps are treated as UTC wall-clock times regardless of the `±ZZZZ` suffix. Live mode does parse the offset. Practical rule: keep your log timestamps and your `--startTime`/`--endTime` values in the same timezone, or time filters will be shifted by the offset.
+**Timezone handling is identical in both modes.** When the `±ZZZZ` offset is present (a 26-byte field like `06/Jul/2025:19:57:26 +0200`), both the static parser and live mode parse it and the timestamp is the true instant it denotes. When the offset is absent (a 20-byte field like `06/Jul/2025:19:57:26`), both modes treat the wall-clock as **UTC**. So static and live agree byte-for-byte on the same line. Practical rule: an offset-less log is interpreted as UTC, so keep offset-less timestamps and your `--startTime`/`--endTime` values both in UTC, or include the `±ZZZZ` offset in your log so the instant is unambiguous.
 
 Include surrounding brackets in the format string if present in the log:
 
