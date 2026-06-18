@@ -143,6 +143,32 @@ func TestParseEvent_RetainsTimezoneOffset(t *testing.T) {
 	}
 }
 
+// TestParseEvent_AcceptsOffsetlessTimestampAsUTC is the AUDIT-07 repro: an
+// offset-less Common/Apache-Log bracket field (e.g. [06/Jul/2025:19:57:26], 20
+// bytes) was previously dropped by live (the offset-required layout failed →
+// ParseError) while static keeps it as UTC. After the fix the live ingestor
+// falls back to the zone-less layout: the event is accepted (err == nil), the
+// wall-clock digits are preserved, and the zone is UTC (offset 0) — matching the
+// static parser exactly. Genuinely malformed brackets ([badtime]) still fail
+// both layouts (see TestParseEvent_InvalidTimestamp).
+func TestParseEvent_AcceptsOffsetlessTimestampAsUTC(t *testing.T) {
+	log := `1.2.3.4 - - [06/Jul/2025:19:57:26] "GET / HTTP/1.1" 200 1 "-" "UA"`
+	var req Request
+	if _, err := parseEvent(map[string]interface{}{"message": log}, &req); err != nil {
+		t.Fatalf("offset-less timestamp must be accepted, got error: %v", err)
+	}
+	if h, m, s := req.Timestamp.Hour(), req.Timestamp.Minute(), req.Timestamp.Second(); h != 19 || m != 57 || s != 26 {
+		t.Errorf("wall-clock = %02d:%02d:%02d, want 19:57:26", h, m, s)
+	}
+	if _, off := req.Timestamp.Zone(); off != 0 {
+		t.Errorf("zone offset = %ds, want 0 (UTC)", off)
+	}
+	want := time.Date(2025, 7, 6, 19, 57, 26, 0, time.UTC)
+	if !req.Timestamp.Equal(want) {
+		t.Errorf("instant = %v, want %v", req.Timestamp.UTC(), want)
+	}
+}
+
 // TestParseEvent_DashStatusBytesAreZeroNotMalformed is the URGENT-09 repro: a
 // "-" (absent) status or bytes field must be treated as a silent zero, NOT
 // counted as malformed — parity with the static log parser. Previously

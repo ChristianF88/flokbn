@@ -201,9 +201,22 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	if start < 0 || end <= start {
 		return 0, errors.New("invalid timestamp format")
 	}
-	t, err := time.Parse("02/Jan/2006:15:04:05 -0700", msg[start+1:end])
+	field := msg[start+1 : end]
+	t, err := time.Parse("02/Jan/2006:15:04:05 -0700", field)
 	if err != nil {
-		return 0, err
+		// Offset-less Common/Apache-Log field (e.g. "06/Jul/2025:19:57:26",
+		// 20 bytes): treat the wall-clock as UTC, mirroring the static parser's
+		// >=26-byte gate (parser.go parseTimestamp). A zone-less layout returns a
+		// time located in time.UTC, byte-identical to static's time.Date(...,
+		// time.UTC) for the same wall-clock — restoring live<->static parity
+		// (AUDIT-07). The offset path is tried first, so well-formed +HHMM lines
+		// do no extra work and incur no extra allocations; the fallback runs only
+		// on the error path. Genuinely malformed brackets (e.g. "badtime") fail
+		// both layouts and are still rejected.
+		t, err = time.Parse("02/Jan/2006:15:04:05", field)
+		if err != nil {
+			return 0, err
+		}
 	}
 	out.Timestamp = t
 
