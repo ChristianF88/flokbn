@@ -50,7 +50,7 @@ flokbn static [options]
 
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `--clusterArgSets` | string | No | - | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. Without it, the run reports parse statistics and any `--rangesCidr` analysis but detects no clusters. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
+| `--clusterArgSets` | string | No | `1000,30,32,0.2` (injected) | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. If omitted, flags mode injects the default set `1000,30,32,0.2` (jailed), matching live flags mode — clusters are still detected and jailed. Note: a `[static.NAME]` TOML trie has **no** such default — without `clusterArgSets` it detects nothing. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
 
 ### Filtering Options
 
@@ -69,7 +69,7 @@ See [Filtering]({{< relref "/docs/reference/filtering/" >}}) for file formats.
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--rangesCidr` | string | Analyze specific CIDR range. Repeatable. |
+| `--rangesCidr` | string | Analyze specific CIDR range. Repeatable. Note: the CLI flag is `--rangesCidr`; the equivalent TOML key is `cidrRanges` (word order swapped). This divergence is intentional. |
 | `--plotPath` | string | Path for HTML heatmap output |
 
 ### Output Options
