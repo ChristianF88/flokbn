@@ -898,6 +898,201 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
+// totalPrisoners is a small helper for the Prune tests.
+func totalPrisoners(j Jail) int {
+	total := 0
+	for _, cell := range j.Cells {
+		total += len(cell.Prisoners)
+	}
+	return total
+}
+
+// assertAllCIDRsConsistent verifies AllCIDRs is exactly the multiset of resident
+// prisoner CIDRs: no orphans (a CIDR in AllCIDRs with no prisoner) and no missing
+// entries / duplicates relative to the residents.
+func assertAllCIDRsConsistent(t *testing.T, j Jail) {
+	t.Helper()
+	resident := map[string]int{}
+	for _, cell := range j.Cells {
+		for _, p := range cell.Prisoners {
+			resident[p.CIDR]++
+		}
+	}
+	inAll := map[string]int{}
+	for _, c := range j.AllCIDRs {
+		inAll[c]++
+	}
+	if len(j.AllCIDRs) != totalPrisoners(j) {
+		t.Fatalf("AllCIDRs len %d != resident prisoner count %d", len(j.AllCIDRs), totalPrisoners(j))
+	}
+	for c, n := range resident {
+		if inAll[c] != n {
+			t.Fatalf("CIDR %s resident %d time(s) but appears %d time(s) in AllCIDRs", c, n, inAll[c])
+		}
+	}
+	for c := range inAll {
+		if resident[c] == 0 {
+			t.Fatalf("orphan CIDR %s in AllCIDRs has no resident prisoner", c)
+		}
+	}
+}
+
+func TestRetentionHorizon_LastCellDuration(t *testing.T) {
+	j := NewJail()
+	want := j.Cells[len(j.Cells)-1].BanDuration
+	if got := j.RetentionHorizon(); got != want {
+		t.Fatalf("RetentionHorizon() = %v, want last-cell BanDuration %v", got, want)
+	}
+	empty := Jail{}
+	if got := empty.RetentionHorizon(); got != 0 {
+		t.Fatalf("RetentionHorizon() on empty jail = %v, want 0", got)
+	}
+}
+
+func TestPrune_EvictsStaleBeyondHorizon(t *testing.T) {
+	j := NewJail()
+	cidr := "203.0.113.0/24"
+	j.Fill(cidr)
+	horizon := j.RetentionHorizon()
+	// Push expiry (BanStart + cell0 duration) to more than horizon in the past
+	// and mark the ban inactive.
+	j.Cells[0].Prisoners[0].BanStart = time.Now().Add(-j.Cells[0].BanDuration - horizon - time.Minute)
+	j.Cells[0].Prisoners[0].BanActive = false
+
+	if n := j.Prune(horizon); n != 1 {
+		t.Fatalf("Prune evicted %d, want 1", n)
+	}
+	if totalPrisoners(j) != 0 {
+		t.Fatalf("expected 0 prisoners after pruning stale entry, got %d", totalPrisoners(j))
+	}
+	for _, c := range j.AllCIDRs {
+		if c == cidr {
+			t.Fatalf("AllCIDRs still contains evicted CIDR %s", cidr)
+		}
+	}
+	assertAllCIDRsConsistent(t, j)
+}
+
+func TestPrune_KeepsActiveAndRecentlyExpired(t *testing.T) {
+	j := NewJail()
+	horizon := j.RetentionHorizon()
+
+	active := "198.51.100.0/24"
+	j.Fill(active) // BanActive=true, fresh BanStart
+
+	recent := "198.51.101.0/24"
+	j.Fill(recent)
+	// Expired (past cell duration) but still WITHIN the retention horizon.
+	j.Cells[0].Prisoners[1].BanStart = time.Now().Add(-j.Cells[0].BanDuration - time.Minute)
+	j.Cells[0].Prisoners[1].BanActive = false
+
+	if n := j.Prune(horizon); n != 0 {
+		t.Fatalf("Prune evicted %d, want 0 (active + within-horizon must survive)", n)
+	}
+	if totalPrisoners(j) != 2 {
+		t.Fatalf("expected 2 prisoners to survive, got %d", totalPrisoners(j))
+	}
+	assertAllCIDRsConsistent(t, j)
+}
+
+func TestPrune_PreservesEscalationOnReDetection(t *testing.T) {
+	j := NewJail()
+	cidr := "192.0.2.0/24"
+	j.Fill(cidr) // cell 0
+
+	horizon := j.RetentionHorizon()
+	// Expired but still within the horizon: must NOT be pruned.
+	j.Cells[0].Prisoners[0].BanStart = time.Now().Add(-j.Cells[0].BanDuration - time.Minute)
+	j.Cells[0].Prisoners[0].BanActive = false
+
+	if n := j.Prune(horizon); n != 0 {
+		t.Fatalf("Prune evicted %d, want 0 (within-horizon expired prisoner is escalation memory)", n)
+	}
+	// Re-detection after expiry must escalate to cell 1, proving the memory
+	// survived the prune.
+	if err := j.Fill(cidr); err != nil {
+		t.Fatalf("re-Fill: %v", err)
+	}
+	if len(j.Cells[0].Prisoners) != 0 {
+		t.Fatalf("expected cell 0 empty after escalation, got %d", len(j.Cells[0].Prisoners))
+	}
+	if len(j.Cells[1].Prisoners) != 1 || j.Cells[1].Prisoners[0].CIDR != cidr {
+		t.Fatalf("expected %s escalated to cell 1 after prune+re-detect", cidr)
+	}
+	assertAllCIDRsConsistent(t, j)
+}
+
+func TestJail_BoundedUnderChurn(t *testing.T) {
+	const n = 2000
+	j := NewJail()
+	cidrs := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		cidrs = append(cidrs, fmtCIDR(10, 0, i/256, i%256, 32))
+	}
+	if err := j.Update(cidrs); err != nil {
+		t.Fatalf("Update(%d /32s): %v", n, err)
+	}
+	if totalPrisoners(j) != n {
+		t.Fatalf("expected %d prisoners after insert, got %d", n, totalPrisoners(j))
+	}
+
+	horizon := j.RetentionHorizon()
+	// Simulate all bans expiring far beyond the retention horizon: push every
+	// prisoner's BanStart so expiry+horizon is in the past and mark inactive.
+	for ci := range j.Cells {
+		for pi := range j.Cells[ci].Prisoners {
+			j.Cells[ci].Prisoners[pi].BanStart = time.Now().Add(-j.Cells[ci].BanDuration - horizon - time.Hour)
+			j.Cells[ci].Prisoners[pi].BanActive = false
+		}
+	}
+
+	if evicted := j.Prune(horizon); evicted != n {
+		t.Fatalf("Prune evicted %d, want %d (jail must be bounded by active+recent, not lifetime-distinct)", evicted, n)
+	}
+	if totalPrisoners(j) != 0 {
+		t.Fatalf("expected jail empty after churn prune, got %d prisoners", totalPrisoners(j))
+	}
+	if len(j.AllCIDRs) != 0 {
+		t.Fatalf("expected AllCIDRs empty after churn prune, got %d", len(j.AllCIDRs))
+	}
+	assertAllCIDRsConsistent(t, j)
+}
+
+// BenchmarkPrune confirms Prune is a linear single pass over a large prisoner
+// set (no O(n^2) per-eviction AllCIDRs scan). Companion to BenchmarkUpdateManyDistinct.
+func BenchmarkPrune(b *testing.B) {
+	const n = 4000
+	cidrs := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		cidrs = append(cidrs, fmtCIDR(10, i/256%256, i/256, i%256, 32))
+	}
+	// Build a template jail with all prisoners stale beyond the horizon.
+	template := NewJail()
+	if err := template.Update(cidrs); err != nil {
+		b.Fatal(err)
+	}
+	horizon := template.RetentionHorizon()
+	for ci := range template.Cells {
+		for pi := range template.Cells[ci].Prisoners {
+			template.Cells[ci].Prisoners[pi].BanStart = time.Now().Add(-template.Cells[ci].BanDuration - horizon - time.Hour)
+			template.Cells[ci].Prisoners[pi].BanActive = false
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		j := NewJail()
+		for ci := range template.Cells {
+			j.Cells[ci].Prisoners = append(j.Cells[ci].Prisoners[:0], template.Cells[ci].Prisoners...)
+		}
+		j.AllCIDRs = append([]string(nil), template.AllCIDRs...)
+		b.StartTimer()
+		if pruned := j.Prune(horizon); pruned != n {
+			b.Fatalf("Prune evicted %d, want %d", pruned, n)
+		}
+	}
+}
+
 // BenchmarkUpdateManyDistinct guards against the per-prisoner net.ParseCIDR
 // storm in the sub/parent range scans: filling many distinct /32s must stay
 // dominated by the cheap cached-bound comparisons, not CIDR re-parsing.

@@ -311,6 +311,73 @@ func (j *Jail) UpdateBanActiveStatus() {
 	}
 }
 
+// RetentionHorizon is the escalation-memory window: the span past a prisoner's
+// expiry during which a re-detection must still escalate it (Fill -> rangeInJail
+// -> MovePrisonerToNextCell relies on the expired-but-resident prisoner). It is
+// the LAST cell's BanDuration (the deepest ban window, 180d for the default
+// ladder). Pruning only entries stale beyond this window guarantees Prune never
+// forgets a prisoner that re-offense escalation still cares about. Returns 0 for
+// a jail with no cells.
+func (j *Jail) RetentionHorizon() time.Duration {
+	if len(j.Cells) == 0 {
+		return 0
+	}
+	return j.Cells[len(j.Cells)-1].BanDuration
+}
+
+// Prune evicts prisoners whose ban expired more than horizon ago, bounding the
+// jail to active+recent bans instead of lifetime-distinct CIDRs. A prisoner is
+// stale iff it is NOT BanActive AND now > BanStart + cellDuration + horizon
+// (i.e. time.Since(expiry) > horizon, measured from EXPIRY so escalation memory
+// is preserved for the full retention window). Active bans are never evicted.
+//
+// Single O(total prisoners) pass: each cell's Prisoners slice is compacted in
+// place (reusing the backing array, zero allocation on the no-evict path), then
+// AllCIDRs is rebuilt ONCE from the survivors so it stays exactly consistent
+// (no orphans, no duplicates). RemovePrisoner is deliberately NOT called per
+// eviction — that would be O(prisoners) per call (AllCIDRs linear scan) and turn
+// Prune into O(prisoners^2). Returns the number of prisoners evicted.
+func (j *Jail) Prune(horizon time.Duration) int {
+	now := time.Now()
+	pruned := 0
+	for ci := range j.Cells {
+		cell := &j.Cells[ci]
+		dur := cell.BanDuration
+		keep := cell.Prisoners[:0]
+		for _, p := range cell.Prisoners {
+			expiry := p.BanStart.Add(dur)
+			if !p.BanActive && now.Sub(expiry) > horizon {
+				pruned++
+				continue
+			}
+			keep = append(keep, p)
+		}
+		// Clear the tail so evicted Prisoner structs don't keep their CIDR
+		// strings alive in the unused capacity.
+		for i := len(keep); i < len(cell.Prisoners); i++ {
+			cell.Prisoners[i] = Prisoner{}
+		}
+		cell.Prisoners = keep
+	}
+	if pruned == 0 {
+		return 0
+	}
+	// Rebuild AllCIDRs once from survivors so it is exactly the set of resident
+	// prisoner CIDRs.
+	survivors := 0
+	for ci := range j.Cells {
+		survivors += len(j.Cells[ci].Prisoners)
+	}
+	allCIDRs := make([]string, 0, survivors)
+	for ci := range j.Cells {
+		for _, p := range j.Cells[ci].Prisoners {
+			allCIDRs = append(allCIDRs, p.CIDR)
+		}
+	}
+	j.AllCIDRs = allCIDRs
+	return pruned
+}
+
 func (j *Jail) Update(cidrs []string) error {
 	j.UpdateBanActiveStatus()
 

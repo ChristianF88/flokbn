@@ -620,6 +620,10 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
 			logger.Warn("some CIDRs failed during jail update", "err", err)
 		}
+		// Evict prisoners stale beyond the escalation-memory window before
+		// persisting, so jail.json (rewritten in full every iteration) tracks
+		// active+recent bans, not lifetime-distinct CIDRs (AUDIT-04).
+		prunedJail := jailInstance.Prune(jailInstance.RetentionHorizon())
 		if err := jail.JailToFile(jailInstance, cfg.GetJailFile()); err != nil {
 			logger.Error("failed to save jail", "path", cfg.GetJailFile(), "err", err)
 		}
@@ -663,6 +667,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			"detected", len(allDetectedCIDRs),
 			"merged", len(mergedCIDRs),
 			"jailed", len(filteredJailCIDRs),
+			"pruned", prunedJail,
 			"active_bans", len(publishBans),
 			"ban_file_written", banFileWritten,
 			"loop_ms", loopEnd.Milliseconds(),
@@ -726,7 +731,12 @@ func runHeartbeat(
 	before := len(jailInstance.ListActiveBans())
 	jailInstance.UpdateBanActiveStatus()
 	after := len(jailInstance.ListActiveBans())
-	if after != before {
+	// Evict prisoners stale beyond the escalation-memory window so jail.json
+	// keeps shrinking even during traffic-free periods (AUDIT-04). Pure
+	// evictions remove already-inactive prisoners, so they do NOT change the
+	// active-ban count; force the save when anything was pruned as well.
+	pruned := jailInstance.Prune(jailInstance.RetentionHorizon())
+	if after != before || pruned > 0 {
 		if err := jail.JailToFile(*jailInstance, cfg.GetJailFile()); err != nil {
 			logger.Error("failed to save jail", "path", cfg.GetJailFile(), "err", err)
 		}
