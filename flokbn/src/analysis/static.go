@@ -234,7 +234,12 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	// Process jail with whitelist/blacklist if configured
 	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
 		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
+			// Fail loud: a jail/ban processing failure must not exit 0 with no ban
+			// file. The barrier (Config.Validate) catches an unloadable jail before
+			// this; this propagation is defense-in-depth for the remaining causes
+			// (jail save / ban-file write).
 			jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
+			return jsonOutput, requests, err
 		}
 	}
 
@@ -654,7 +659,10 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	// Process jail with whitelist/blacklist if configured.
 	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
 		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
+			// Fail loud (see the fast-path site above): defense-in-depth behind the
+			// barrier's jail validation.
 			jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
+			return jsonOutput, err
 		}
 	}
 

@@ -56,9 +56,7 @@ func TestEndTimeBeforeStartTimeGeneratesDiagnostic(t *testing.T) {
 	}
 	jailFile := filepath.Join(tmpDir, "jail.json")
 	banFile := filepath.Join(tmpDir, "ban.txt")
-	if err := os.WriteFile(jailFile, []byte("{}"), 0644); err != nil {
-		t.Fatalf("Failed to create jail file: %v", err)
-	}
+	// No jail file pre-created: flokbn writes a fresh 5-cell jail on first run.
 	if err := os.WriteFile(banFile, []byte(""), 0644); err != nil {
 		t.Fatalf("Failed to create ban file: %v", err)
 	}
@@ -126,10 +124,7 @@ func TestNonOverlappingTimeRangeGeneratesWarning(t *testing.T) {
 	// Create jail and ban files
 	jailFile := filepath.Join(tmpDir, "jail.json")
 	banFile := filepath.Join(tmpDir, "ban.txt")
-	err = os.WriteFile(jailFile, []byte("{}"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create jail file: %v", err)
-	}
+	// No jail file pre-created: flokbn writes a fresh 5-cell jail on first run.
 	err = os.WriteFile(banFile, []byte(""), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create ban file: %v", err)
@@ -201,9 +196,7 @@ func malformedFieldTestEnv(t *testing.T) (logFile, jailFile, banFile string) {
 
 	jailFile = filepath.Join(tmpDir, "jail.json")
 	banFile = filepath.Join(tmpDir, "ban.txt")
-	if err := os.WriteFile(jailFile, []byte("{}"), 0644); err != nil {
-		t.Fatalf("Failed to create jail file: %v", err)
-	}
+	// No jail file pre-created: flokbn writes a fresh 5-cell jail on first run.
 	if err := os.WriteFile(banFile, []byte(""), 0644); err != nil {
 		t.Fatalf("Failed to create ban file: %v", err)
 	}
@@ -316,9 +309,7 @@ func TestCleanLogNoMalformedFieldWarning(t *testing.T) {
 	}
 	jailFile := filepath.Join(tmpDir, "jail.json")
 	banFile := filepath.Join(tmpDir, "ban.txt")
-	if err := os.WriteFile(jailFile, []byte("{}"), 0644); err != nil {
-		t.Fatalf("Failed to create jail file: %v", err)
-	}
+	// No jail file pre-created: flokbn writes a fresh 5-cell jail on first run.
 	if err := os.WriteFile(banFile, []byte(""), 0644); err != nil {
 		t.Fatalf("Failed to create ban file: %v", err)
 	}
@@ -351,10 +342,7 @@ func TestValidTimeFormatNoWarning(t *testing.T) {
 	// Create jail and ban files
 	jailFile := filepath.Join(tmpDir, "jail.json")
 	banFile := filepath.Join(tmpDir, "ban.txt")
-	err = os.WriteFile(jailFile, []byte("{}"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create jail file: %v", err)
-	}
+	// No jail file pre-created: flokbn writes a fresh 5-cell jail on first run.
 	err = os.WriteFile(banFile, []byte(""), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create ban file: %v", err)

@@ -112,7 +112,7 @@ func FileToJail(filename string) (Jail, error) {
 	// or empty file is already handled above (fresh NewJail()); here we
 	// fail loud.
 	if len(jail.Cells) == 0 {
-		return Jail{}, fmt.Errorf("jail file %s parsed to zero cells (corrupt/empty content); refusing to load a cell-less jail that would destroy the escalation ladder", filename)
+		return Jail{}, fmt.Errorf("jail file %s parsed to zero cells (corrupt/empty content); refusing to load a cell-less jail that would destroy the escalation ladder (delete the file to start fresh)", filename)
 	}
 	jail.RefreshBounds()
 	return jail, nil

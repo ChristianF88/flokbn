@@ -15,6 +15,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/ChristianF88/flokbn/config/regexprefilter"
 	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/logging"
 	"github.com/ChristianF88/flokbn/logparser"
 )
@@ -349,6 +350,12 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 			}
 		}
 		c.validateListFiles(diags)
+		// Static processes the jail only when both jailFile and banFile are set
+		// (see ProcessJailWithWhitelist's guard); validate the jail at the barrier
+		// only when it will actually be loaded.
+		if c.Global != nil && c.Global.JailFile != "" && c.Global.BanFile != "" {
+			c.validateJailFile(diags)
+		}
 	case LiveMode:
 		for name, stc := range c.LiveTries {
 			if stc == nil {
@@ -364,6 +371,9 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 		}
 		c.validateLiveInto(diags)
 		c.validateListFiles(diags)
+		// Live always loads the jail (runLiveLoop reads it unconditionally), so
+		// validate it at the barrier in every live run.
+		c.validateJailFile(diags)
 	}
 	return diags
 }
@@ -412,6 +422,18 @@ func (c *Config) validateListFiles(diags *ConfigDiagnostics) {
 		diags.AddRaw(err.Error())
 	}
 	if _, err := c.LoadUserAgentBlacklistPatterns(); err != nil {
+		diags.AddRaw(err.Error())
+	}
+}
+
+// validateJailFile surfaces an unloadable jail (unreadable / invalid-JSON /
+// zero-cell) at the barrier via the SAME loader the run uses, so it aborts
+// before any work instead of the static path silently swallowing it. A
+// missing/empty jail is a valid fresh start and records nothing. It is a load
+// error to surface (operator-visible on-disk state), not a panic; the loader
+// error already names the path.
+func (c *Config) validateJailFile(diags *ConfigDiagnostics) {
+	if _, err := jail.FileToJail(c.GetJailFile()); err != nil {
 		diags.AddRaw(err.Error())
 	}
 }

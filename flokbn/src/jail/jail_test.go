@@ -4,8 +4,6 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	"github.com/ChristianF88/flokbn/config"
 )
 
 func TestFillJail_NewPrisoner(t *testing.T) {
@@ -110,19 +108,18 @@ func TestUpdateBanActiveStatus(t *testing.T) {
 	}
 }
 func TestInitJail_FileExists(t *testing.T) {
-	// Mock the config.JailFile path
-	config.JailFile = "test_jail_file.json"
+	jailFilePath := "test_jail_file.json"
 
 	// Create a mock jail file
 	mockJail := NewJail()
 	mockJail.Fill(
 		"192.218.1.0/24",
 	)
-	err := JailToFile(mockJail, config.JailFile)
+	err := JailToFile(mockJail, jailFilePath)
 	if err != nil {
 		t.Fatalf("Failed to create mock jail file: %v", err)
 	}
-	defer os.Remove(config.JailFile) // Clean up after test
+	defer os.Remove(jailFilePath) // Clean up after test
 
 	// Verify the jail was loaded from the file
 	if len(mockJail.Cells) == 0 {

@@ -62,7 +62,9 @@ UA_BLACKLIST="$TMPDIR/ua_blacklist.txt"
 JAIL_FILE="$TMPDIR/jail.json"
 BAN_FILE="$TMPDIR/ban.txt"
 
-echo '{}' > "$JAIL_FILE"
+# No jail file is pre-created: flokbn treats a missing file as a fresh start and
+# writes a new 5-cell jail on first run (the canonical empty-jail bootstrap). A
+# hand-written '{}' is a zero-cell jail and is deliberately rejected as corrupt.
 
 # IP whitelist: protect 203.0.0.0/24
 cat > "$WHITELIST" <<EOF
@@ -181,7 +183,7 @@ fi
 log "Test 2: Baseline without whitelist/blacklist..."
 JAIL_FILE2="$TMPDIR/jail2.json"
 BAN_FILE2="$TMPDIR/ban2.txt"
-echo '{}' > "$JAIL_FILE2"
+# Missing jail file = fresh start (flokbn writes a new 5-cell jail).
 
 CONFIG_FILE2="$TMPDIR/baseline_config.toml"
 cat > "$CONFIG_FILE2" <<TOML
@@ -232,7 +234,7 @@ JAIL_FILE3="$TMPDIR/jail3.json"
 BAN_FILE3="$TMPDIR/ban3.txt"
 WHITELIST3="$TMPDIR/whitelist3.txt"
 BLACKLIST3="$TMPDIR/blacklist3.txt"
-echo '{}' > "$JAIL_FILE3"
+# Missing jail file = fresh start (flokbn writes a new 5-cell jail).
 
 # Whitelist covers the lower half of the manually blacklisted /24: the
 # published ban file must only contain the non-whitelisted remainder.

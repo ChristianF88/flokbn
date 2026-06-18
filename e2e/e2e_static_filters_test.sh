@@ -28,8 +28,7 @@ CONFIG_FILE="$TMPDIR/filter_test.toml"
 JAIL_FILE="$TMPDIR/jail.json"
 BAN_FILE="$TMPDIR/ban.txt"
 
-# Initialize empty jail
-echo '{}' > "$JAIL_FILE"
+# No jail file pre-created: flokbn writes a fresh 5-cell jail on first run.
 
 python3 -c "
 import random
