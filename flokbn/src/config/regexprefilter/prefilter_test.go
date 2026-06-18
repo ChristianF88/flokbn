@@ -117,6 +117,64 @@ func TestExtractRequiredLiterals(t *testing.T) {
 			exact:   true,
 		},
 		{
+			name:    "heterogeneous-fold alternation is not exact",
+			pattern: `(BOT|(?i:spider))`,
+			// BOT is case-sensitive, (?i:spider) is folded. The set is lowercased
+			// uniformly under one global foldCase, which makes MightMatch
+			// case-insensitive for the BOT branch too -> over-permissive, so the
+			// tree must NOT claim exact and must defer to the real regex.
+			needles: []string{"bot", "spider"},
+			fold:    true,
+			exact:   false,
+		},
+		{
+			name:    "uniform-fold alternation stays exact (control)",
+			pattern: `(?i:bot|spider)`,
+			needles: []string{"bot", "spider"},
+			fold:    true,
+			exact:   true,
+		},
+		{
+			name:    "no-fold alternation stays exact (control)",
+			pattern: `(BOT|CRAWL)`,
+			needles: []string{"BOT", "CRAWL"},
+			fold:    false,
+			exact:   true,
+		},
+		{
+			name:    "heterogeneous-fold concat is not exact",
+			pattern: `BOT(?i:x)`,
+			// Cross-products to "BOTx", lowercased to "botx" under global
+			// foldCase; case-insensitive on the BOT span -> over-permissive, so
+			// not exact. Needle "botx" is >= minLiteralLen so it survives.
+			needles: []string{"botx"},
+			fold:    true,
+			exact:   false,
+		},
+		{
+			name:    "nested heterogeneous-fold run is not exact",
+			pattern: `((Google|(?i:bing))bot)`,
+			// (Google|(?i:bing)) is a heterogeneous-fold alternation, so the run
+			// gluing it with "bot" must not be reported as full -> not exact.
+			needles: []string{"googlebot", "bingbot"},
+			fold:    true,
+			exact:   false,
+		},
+		{
+			name:    "uniform-fold concat stays exact (control)",
+			pattern: `(?i:bot)(?i:x)`,
+			needles: []string{"botx"},
+			fold:    true,
+			exact:   true,
+		},
+		{
+			name:    "no-fold concat stays exact (control)",
+			pattern: `BOT(x)`,
+			needles: []string{"BOTx"},
+			fold:    false,
+			exact:   true,
+		},
+		{
 			name:    "alternation with dotstar branch bails",
 			pattern: `(foo|.*)`,
 			wantNil: true,
@@ -291,6 +349,12 @@ var differentialPatterns = []string{
 	`bot`,
 	`(?i)(scan|masscan)`,
 	`xby*z`,
+	// Heterogeneous case-fold patterns (AUDIT-01): a case-sensitive branch/child
+	// mixed with a scoped (?i:...) one. These must defer to the real regex.
+	`(BOT|(?i:spider))`,
+	`BOT(?i:x)`,
+	`((Google|(?i:bing))bot)`,
+	`(?i:bot|spider)`,
 }
 
 // differentialInputs is a large corpus covering token placement, overlapping
@@ -339,6 +403,16 @@ var differentialInputs = []string{
 	strings.Repeat("/static/asset ", 10),
 	"ac",
 	"abbbc",
+	// Case variants that distinguish case-sensitive vs folded branches
+	// (AUDIT-01): "bot"/"botx" must be REJECTED by (BOT|...) / BOT(?i:x) but the
+	// folded "spider"/"x" half stays case-insensitive.
+	"spider",
+	"SPIDER",
+	"botx",
+	"BOTx",
+	"BOTX",
+	"bingbot",
+	"Googlebot",
 }
 
 // TestPrefilterDifferential asserts that the prefilter gate is identical to the
@@ -361,6 +435,48 @@ func TestPrefilterDifferential(t *testing.T) {
 			}
 			// Necessity invariant: a true match must always pass the prefilter.
 			if want && pf != nil && !pf.MightMatch(in) {
+				t.Errorf("NECESSITY VIOLATED pattern=%q input=%q: regex matched but MightMatch=false (pf=%+v)", pat, in, pf)
+			}
+		}
+	}
+}
+
+// TestHeterogeneousFoldGate is the targeted regression test for AUDIT-01: a
+// pattern mixing a case-sensitive branch/child with a scoped case-insensitive
+// one must defer to the authoritative regex (never claim exact), and the gate
+// result must equal regexp.MatchString for every input including case variants.
+func TestHeterogeneousFoldGate(t *testing.T) {
+	patterns := []string{
+		`(BOT|(?i:spider))`,
+		`BOT(?i:x)`,
+		`((Google|(?i:bing))bot)`,
+		`((?i:Google)|Bing)bot`,
+	}
+	inputs := []string{
+		"", "bot", "BOT", "BoT",
+		"spider", "SPIDER", "Spider",
+		"botx", "BOTx", "BOTX", "botX",
+		"googlebot", "Googlebot", "GOOGLEBOT",
+		"bingbot", "Bingbot", "BINGBOT",
+		"a googlebot here", "the BOT crawls", "scan SPIDER scan",
+	}
+	for _, pat := range patterns {
+		re := regexp.MustCompile(pat)
+		pf := Build(pat)
+		if pf == nil {
+			t.Fatalf("Build(%q) = nil, want a prefilter", pat)
+		}
+		if pf.Exact() {
+			t.Errorf("Build(%q).Exact() = true, want false (heterogeneous fold must defer to regex)", pat)
+		}
+		for _, in := range inputs {
+			want := re.MatchString(in)
+			gate := evalGate(re, pf, in)
+			if gate != want {
+				t.Errorf("gate mismatch pattern=%q input=%q gate=%v want=%v (pf=%+v)", pat, in, gate, want, pf)
+			}
+			// Necessity must still hold: a real match always passes the screen.
+			if want && !pf.MightMatch(in) {
 				t.Errorf("NECESSITY VIOLATED pattern=%q input=%q: regex matched but MightMatch=false (pf=%+v)", pat, in, pf)
 			}
 		}
@@ -409,7 +525,7 @@ func randomPattern(rng *rand.Rand, depth int) string {
 	if depth > 3 {
 		return regexp.QuoteMeta(randTokens[rng.Intn(len(randTokens))])
 	}
-	switch rng.Intn(9) {
+	switch rng.Intn(10) {
 	case 0:
 		return regexp.QuoteMeta(randTokens[rng.Intn(len(randTokens))])
 	case 1: // char class
@@ -438,8 +554,10 @@ func randomPattern(rng *rand.Rand, depth int) string {
 	case 7: // anchored
 		anc := []string{"^", "$"}
 		return anc[rng.Intn(len(anc))] + randomPattern(rng, depth+1)
-	default: // case-insensitive wrap
+	case 8: // whole-pattern case-insensitive wrap
 		return "(?i)" + randomPattern(rng, depth+1)
+	default: // scoped case-insensitive group -> exercises heterogeneous fold
+		return "(?i:" + randomPattern(rng, depth+1) + ")"
 	}
 }
 

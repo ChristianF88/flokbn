@@ -108,6 +108,16 @@ func Build(pattern string) *Prefilter {
 	// point guarantees no needle was dropped, so full => exact is sound.
 	topRes := extract(re)
 	exact := topRes.ok && topRes.full
+	// Heterogeneous-fold guard (AUDIT-01): when the tree folds some members
+	// (fold==true => the WHOLE OR-set is lowercased and matched case-
+	// insensitively) but also contains a member with a case-SENSITIVE ASCII
+	// letter, the screen matches that letter case-insensitively too — strictly
+	// over-permissive vs. the regex. The OR-set is still a valid NECESSARY
+	// condition (no false negative), but it is no longer EXACT, so the
+	// authoritative regex must decide. Refuse to mark such a tree exact.
+	if fold && topRes.csLetter {
+		exact = false
+	}
 
 	return &Prefilter{
 		needles:  kept,
@@ -147,12 +157,19 @@ const maxCrossProduct = 64
 //	       lets a concatenation glue adjacent children together exactly. When
 //	       full is false the members are only guaranteed-contained substrings.
 //	fold : true iff any member was case-folded (screen must be ASCII-insensitive).
+//	csLetter : true iff any member contains an ASCII letter that is NOT being
+//	       case-folded (a case-SENSITIVE letter). If the tree also folds some
+//	       member (fold==true), the prefilter lowercases the WHOLE OR-set under
+//	       one global foldCase, which then matches this case-sensitive letter
+//	       case-insensitively too — over-permissive vs. the regex. Such a
+//	       heterogeneous-fold tree must NOT be marked full/exact; see Build.
 //	ok   : false means "no required literal" (fail closed).
 type litResult struct {
-	set  []string
-	full bool
-	fold bool
-	ok   bool
+	set      []string
+	full     bool
+	fold     bool
+	csLetter bool
+	ok       bool
 }
 
 func failClosed() litResult { return litResult{ok: false} }
@@ -170,20 +187,20 @@ func requiredLiterals(re *syntax.Regexp) (lits []string, fold bool, ok bool) {
 func extract(re *syntax.Regexp) litResult {
 	switch re.Op {
 	case syntax.OpLiteral:
-		l, f, lok := literalFromRunes(re.Rune, re.Flags)
+		l, f, cs, lok := literalFromRunes(re.Rune, re.Flags)
 		if !lok {
 			return failClosed()
 		}
-		return litResult{set: []string{l}, full: true, fold: f, ok: true}
+		return litResult{set: []string{l}, full: true, fold: f, csLetter: cs, ok: true}
 
 	case syntax.OpCharClass:
 		// Exactly-one-rune class behaves like a one-rune literal (full match).
 		if len(re.Rune) == 2 && re.Rune[0] == re.Rune[1] {
-			l, f, lok := literalFromRunes(re.Rune[:1], re.Flags)
+			l, f, cs, lok := literalFromRunes(re.Rune[:1], re.Flags)
 			if !lok {
 				return failClosed()
 			}
-			return litResult{set: []string{l}, full: true, fold: f, ok: true}
+			return litResult{set: []string{l}, full: true, fold: f, csLetter: cs, ok: true}
 		}
 		// Multi-rune class: no required literal, but it is a "matched span" of
 		// some single character — represented as not-ok (contributes nothing).
@@ -222,6 +239,7 @@ func extract(re *syntax.Regexp) litResult {
 		// branch matches exactly one literal), enabling exact concatenation.
 		var all []string
 		anyFold := false
+		anyCS := false
 		allFull := true
 		for _, sub := range re.Sub {
 			r := extract(sub)
@@ -230,9 +248,10 @@ func extract(re *syntax.Regexp) litResult {
 			}
 			all = append(all, r.set...)
 			anyFold = anyFold || r.fold
+			anyCS = anyCS || r.csLetter
 			allFull = allFull && r.full
 		}
-		return litResult{set: all, full: allFull, fold: anyFold, ok: true}
+		return litResult{set: all, full: allFull, fold: anyFold, csLetter: anyCS, ok: true}
 
 	case syntax.OpConcat:
 		return extractConcat(re.Sub)
@@ -272,6 +291,12 @@ func extractConcat(subs []*syntax.Regexp) litResult {
 	var cur []string // current run's cross-product set; nil = empty run
 	curFold := false
 	curFull := true // does the run so far consist solely of FULL children?
+	// anyCS records whether ANY child of the whole concat contributes a literal
+	// holding a case-sensitive ASCII letter. It is OR-ed across all children
+	// (not just the spanning run) and propagated up so that, if the tree also
+	// folds elsewhere, Build can refuse to mark it exact (see litResult.csLetter
+	// and Build). It does not affect the chosen needle set or fold flag.
+	anyCS := false
 	runSpansAll := false
 	sawAnyChild := false
 
@@ -293,6 +318,7 @@ func extractConcat(subs []*syntax.Regexp) litResult {
 	for i, sub := range subs {
 		r := extract(sub)
 		sawAnyChild = true
+		anyCS = anyCS || r.csLetter
 		if !r.ok || len(r.set) == 0 {
 			// Child contributes no literal (charclass+, star, anychar, ...).
 			// It breaks the contiguous run.
@@ -346,7 +372,7 @@ func extractConcat(subs []*syntax.Regexp) litResult {
 	if !sawAnyChild || len(bestRun) == 0 {
 		return failClosed()
 	}
-	return litResult{set: bestRun, full: runSpansAll, fold: bestFold, ok: true}
+	return litResult{set: bestRun, full: runSpansAll, fold: bestFold, csLetter: anyCS, ok: true}
 }
 
 // crossProduct returns every a+b concatenation, or nil if the product would
@@ -380,23 +406,33 @@ func minLen(ss []string) int {
 // requested for a non-ASCII rune, because Unicode case folding can map runes to
 // sequences of different byte length, which would break a byte-substring
 // search and could violate necessity.
-func literalFromRunes(runes []rune, flags syntax.Flags) (lit string, fold bool, ok bool) {
+func literalFromRunes(runes []rune, flags syntax.Flags) (lit string, fold, csLetter bool, ok bool) {
 	foldRequested := flags&syntax.FoldCase != 0
 	var b strings.Builder
 	b.Grow(len(runes))
 	for _, r := range runes {
-		if foldRequested && isASCIILetter(r) {
-			fold = true
+		if isASCIILetter(r) {
+			if foldRequested {
+				// An ASCII letter actually matched case-insensitively.
+				fold = true
+			} else {
+				// An ASCII letter that is matched case-SENSITIVELY. If this
+				// literal's tree also folds elsewhere, the whole OR-set is
+				// lowercased uniformly, which would fold this letter too —
+				// over-permissive vs. the regex. Build uses csLetter+fold to
+				// refuse exactness for such heterogeneous-fold trees.
+				csLetter = true
+			}
 		}
 		if foldRequested && r > 127 {
 			// Non-ASCII rune under (?i): bail. Even if this particular rune has
 			// no fold, a mixed literal could still be unsafe to ASCII-fold, so
 			// be conservative.
-			return "", false, false
+			return "", false, false, false
 		}
 		b.WriteRune(r)
 	}
-	return b.String(), fold, true
+	return b.String(), fold, csLetter, true
 }
 
 func isASCIILetter(r rune) bool {
