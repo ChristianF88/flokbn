@@ -270,6 +270,14 @@ func LoadConfig(configPath string) (*Config, error) {
 					}
 				}
 			}
+		default:
+			// A misspelled top-level section header ([gloabl], [satic]) decodes
+			// into rawConfig under a key matching no case. Without this guard it
+			// is silently dropped, leaving the intended section an empty struct
+			// and (e.g.) nullifying whitelist/blacklist filtering while the run
+			// reports success. Fail loud, naming the unknown section. Absent
+			// optional sections never appear as keys here, so omission stays valid.
+			return nil, fmt.Errorf("unknown top-level section %q", key)
 		}
 	}
 

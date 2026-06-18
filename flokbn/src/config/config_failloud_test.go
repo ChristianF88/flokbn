@@ -171,6 +171,62 @@ topTalkers = "ten"
 	}
 }
 
+// AUDIT-06: a misspelled top-level SECTION header ([gloabl], [satic]) must fail
+// loud at load, naming the section — not be silently dropped (which would leave
+// the intended section an empty struct and nullify e.g. whitelist/blacklist
+// filtering while the run reports success).
+func TestLoadConfig_UnknownTopLevelSectionErrors(t *testing.T) {
+	_, err := loadConfigString(t, `
+[gloabl]
+jailFile = "/x/jail.json"
+`)
+	if err == nil {
+		t.Fatal("expected error for misspelled top-level section, got nil")
+	}
+	if !strings.Contains(err.Error(), "gloabl") || !strings.Contains(err.Error(), "unknown top-level section") {
+		t.Fatalf("error should name the unknown section, got: %v", err)
+	}
+}
+
+// A second misspelling (a mistyped [static]) must also fail loud, confirming the
+// guard is on the section name, not a single hard-coded typo.
+func TestLoadConfig_UnknownTopLevelSectionSaticErrors(t *testing.T) {
+	_, err := loadConfigString(t, `
+[satic]
+logfile = "/x/access.log"
+`)
+	if err == nil {
+		t.Fatal("expected error for misspelled top-level section, got nil")
+	}
+	if !strings.Contains(err.Error(), "satic") || !strings.Contains(err.Error(), "section") {
+		t.Fatalf("error should name the unknown section, got: %v", err)
+	}
+}
+
+// Both-ways regression: a config with some known sections PRESENT and other
+// optional sections OMITTED must load clean — omission != error. Locks in that
+// the new default arm only rejects unknown/misspelled present sections.
+func TestLoadConfig_KnownSectionsPresentOptionalOmittedLoads(t *testing.T) {
+	cfg, err := loadConfigString(t, `
+[global]
+jailFile = "/x/jail.json"
+banFile = "/x/ban.txt"
+
+[static]
+logFile = "/x/access.log"
+`)
+	if err != nil {
+		t.Fatalf("known sections present + optional ([log]/[live]) omitted should load, got: %v", err)
+	}
+	if cfg.Global == nil || cfg.Static == nil {
+		t.Fatal("expected [global] and [static] to be populated")
+	}
+	// Omitted optional sections are filled to empty structs, not errors.
+	if cfg.Log == nil || cfg.Live == nil {
+		t.Fatal("omitted [log]/[live] should be filled to empty structs, not nil")
+	}
+}
+
 // Unknown/misspelled keys in [global] must error.
 func TestLoadConfig_UnknownGlobalKeyErrors(t *testing.T) {
 	_, err := loadConfigString(t, `
