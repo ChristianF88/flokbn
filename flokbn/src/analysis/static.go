@@ -530,7 +530,16 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	// here: the full path is selected whenever any filter is present, so this fast
 	// path never needs to distinguish string fields from other non-IP fields.
 	needsNonIPFields := false
-	userAgentMatcherForCheck, _ := cfg.CreateUserAgentMatcher()
+	userAgentMatcherForCheck, uaErr := cfg.CreateUserAgentMatcher()
+	if uaErr != nil {
+		// A configured-but-unreadable UA whitelist/blacklist file is a fatal
+		// setup error: silently dropping it would skip ALL UA filtering on the
+		// fast path and produce a wrong ban list. Fail loud (stricter than the
+		// sibling StaticWithRequestsCtx, which AddErrors and continues, because
+		// the fast path has no later opportunity to honor the filter).
+		jsonOutput.AddError("useragent_matcher_create", fmt.Sprintf("failed to create User-Agent matcher: %v", uaErr), 1)
+		return jsonOutput, uaErr
+	}
 	hasGlobalUAFilters := userAgentMatcherForCheck != nil && userAgentMatcherForCheck.Count() > 0
 	for _, tc := range cfg.StaticTries {
 		if tc == nil {
