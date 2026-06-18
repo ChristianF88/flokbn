@@ -387,6 +387,133 @@ func TestParseEventSafe_Transparent(t *testing.T) {
 	}
 }
 
+// TestScanQuotedCloseStr asserts the string-typed escape-aware close scanner is
+// byte-identical to the static parser's scanQuotedClose (mirroring
+// logparser/parser_correctness_test.go:TestScanQuotedClose). These cases are the
+// invariant the cross-package parity test relies on: ingestor cannot import
+// logparser (import cycle), so the duplicated helper must match exactly.
+func TestScanQuotedCloseStr(t *testing.T) {
+	cases := []struct {
+		name         string
+		line         string
+		contentStart int
+		firstQuote   int
+		want         int
+	}{
+		// `\"x"` content starting at 0: quote at 1 escaped, closes at 3.
+		{"single escape", `\"x"`, 0, 1, 3},
+		// `\\"` even parity: quote at 2 is NOT escaped.
+		{"double backslash closes", `\\"`, 0, 2, 2},
+		// `\\\"x"` odd parity: quote at 3 escaped, closes at 5.
+		{"triple backslash escapes", `\\\"x"`, 0, 3, 5},
+		// no later quote -> len(line)
+		{"no closing quote", `\"abc`, 0, 1, 5},
+		// backslashes before contentStart must not count toward parity
+		{"parity stops at contentStart", `\"x`, 1, 1, 1},
+	}
+	for _, tc := range cases {
+		if got := scanQuotedCloseStr(tc.line, tc.contentStart, tc.firstQuote); got != tc.want {
+			t.Errorf("%s: scanQuotedCloseStr(%q, %d, %d) = %d, want %d",
+				tc.name, tc.line, tc.contentStart, tc.firstQuote, got, tc.want)
+		}
+	}
+}
+
+// TestParseEvent_EscapedQuotesUserAgent is the AUDIT-08 repro: an Apache-escaped
+// quote (`\"`) inside the request line or referer must NOT shift the UA field.
+// Before the fix, live counted raw `"` bytes from index 0 and captured the wrong
+// substring as UserAgent; now the quoted fields are walked escape-aware so the
+// correct UA is extracted. Field content keeps its raw escape bytes (alignment
+// fix, not unescaping) — matching the static parser exactly.
+func TestParseEvent_EscapedQuotesUserAgent(t *testing.T) {
+	cases := []struct {
+		name    string
+		log     string
+		wantUA  string
+		wantURI string
+	}{
+		{
+			name:    "escaped quote in request URI",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /a\"b HTTP/1.1" 200 10 "-" "RealUA"`,
+			wantUA:  "RealUA",
+			wantURI: `/a\"b`,
+		},
+		{
+			name:    "escaped quote in referer",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "ref\"erer" "RealUA"`,
+			wantUA:  "RealUA",
+			wantURI: "/",
+		},
+		{
+			name:    "escaped quote in both request and referer",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /a\"b HTTP/1.1" 200 10 "r\"ef" "RealUA"`,
+			wantUA:  "RealUA",
+			wantURI: `/a\"b`,
+		},
+		{
+			name:    "escaped quote inside the UA itself is kept raw",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "Mozilla\"Evil"`,
+			wantUA:  `Mozilla\"Evil`,
+			wantURI: "/",
+		},
+		{
+			name:    "even backslashes do NOT escape the request close quote",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /x\\" 200 10 "-" "RealUA"`,
+			wantUA:  "RealUA",
+			wantURI: `/x\\`,
+		},
+		{
+			name:    "triple backslash escapes the inner quote",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /a\\\"b HTTP/1.1" 200 10 "-" "RealUA"`,
+			wantUA:  "RealUA",
+			wantURI: `/a\\\"b`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var req Request
+			if _, err := parseEvent(map[string]interface{}{"message": tc.log}, &req); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if req.UserAgent != tc.wantUA {
+				t.Errorf("UserAgent = %q, want %q", req.UserAgent, tc.wantUA)
+			}
+			if req.URI != tc.wantURI {
+				t.Errorf("URI = %q, want %q", req.URI, tc.wantURI)
+			}
+		})
+	}
+}
+
+// BenchmarkParseEvent guards the AUDIT-08 hot-path performance constraint: the
+// escape-aware field walk must stay a single O(n) pass with no extra allocation
+// on the common (no-escape) line, and the escape slow path must only cost extra
+// when a backslash actually precedes a candidate close quote. "clean" is the
+// dominant case (the demo log has zero escaped quotes); "escaped" exercises the
+// slow path. Report allocs/op to catch any accidental allocation regression.
+func BenchmarkParseEvent(b *testing.B) {
+	clean := `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /api/users HTTP/1.1" 200 1024 "https://example.com/" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"`
+	escaped := `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /a\"b HTTP/1.1" 200 1024 "ref\"erer" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"`
+	for _, tc := range []struct {
+		name string
+		log  string
+	}{
+		{"clean", clean},
+		{"escaped", escaped},
+	} {
+		evt := map[string]interface{}{"message": tc.log}
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			var req Request
+			for i := 0; i < b.N; i++ {
+				if _, err := parseEvent(evt, &req); err != nil {
+					b.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func makeBatch(events ...interface{}) *lj.Batch {
 	return &lj.Batch{
 		Events: events,

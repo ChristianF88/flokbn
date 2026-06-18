@@ -220,17 +220,20 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	}
 	out.Timestamp = t
 
-	// 3. Request line (after first quote)
+	// 3. Request line (after first quote). The closing quote must be escape-aware
+	// so an Apache-escaped `\"` inside the URI does not terminate the field early.
+	// This matches the static parser (parser.go scanQuotedClose) so live and
+	// static align on the same byte offsets — and therefore extract the same
+	// Method/URI/status/bytes/UserAgent — for adversary-controlled escaped quotes.
 	start = strings.IndexByte(msg[end:], '"')
 	if start == -1 {
 		return 0, errors.New("missing request start quote")
 	}
 	start += end + 1
-	end = strings.IndexByte(msg[start:], '"')
+	end = closeQuote(msg, start)
 	if end == -1 {
 		return 0, errors.New("missing request end quote")
 	}
-	end += start
 	requestLine := msg[start:end]
 	parts := strings.Fields(requestLine)
 	if len(parts) >= 2 {
@@ -267,22 +270,86 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 		}
 	}
 
-	// 5. User-Agent (quoted string after 4th quote)
-	q := 0
-	start = 0
-	for i := 0; i < len(msg); i++ {
-		if msg[i] == '"' {
-			q++
-			if q == 5 {
-				start = i + 1
-			} else if q == 6 {
-				out.UserAgent = msg[start:i]
-				break
+	// 5. User-Agent: the second quoted field after the request line (request line
+	// is quotes 1-2, referer is 3-4, UA is 5-6). Walk the quoted fields forward
+	// from the request-line close quote (at `end`) using the SAME escape-aware
+	// close-quote scan as the request line and as the static parser, so an
+	// escaped `\"` inside the URI or the referer cannot shift the quote count and
+	// capture the wrong substring as UserAgent. A missing 5th/6th quote leaves
+	// UserAgent empty, preserving the prior missing-field behavior.
+	//
+	// pos starts just past the request-line closing quote.
+	pos := end + 1
+	// Referer field (quotes 3-4): skip its content escape-aware so an escaped
+	// quote in the referer does not become the UA's opening quote.
+	refOpen := strings.IndexByte(msg[pos:], '"')
+	if refOpen != -1 {
+		refStart := pos + refOpen + 1
+		refClose := closeQuote(msg, refStart)
+		if refClose != -1 {
+			pos = refClose + 1
+			// User-Agent field (quotes 5-6).
+			uaOpen := strings.IndexByte(msg[pos:], '"')
+			if uaOpen != -1 {
+				uaStart := pos + uaOpen + 1
+				uaClose := closeQuote(msg, uaStart)
+				if uaClose != -1 {
+					out.UserAgent = msg[uaStart:uaClose]
+				}
 			}
 		}
 	}
 
 	return malformed, nil
+}
+
+// closeQuote returns the index of the closing quote of a quoted field whose
+// content begins at contentStart, or -1 if there is no (unescaped) closing
+// quote at/after contentStart. The fast path uses strings.IndexByte (SIMD on
+// amd64); the escape-aware slow path runs only when a candidate closing quote
+// is immediately preceded by a backslash, so clean lines never pay for it.
+// Field content keeps its raw escape bytes — this fixes field ALIGNMENT, not
+// unescaping — matching the static parser exactly.
+func closeQuote(s string, contentStart int) int {
+	idx := strings.IndexByte(s[contentStart:], '"')
+	if idx < 0 {
+		return -1
+	}
+	q := contentStart + idx
+	if idx > 0 && s[q-1] == '\\' {
+		// rare slow path: the candidate quote may be escaped.
+		c := scanQuotedCloseStr(s, contentStart, q)
+		if c >= len(s) {
+			return -1 // no unescaped closing quote before end of message
+		}
+		return c
+	}
+	return q
+}
+
+// scanQuotedCloseStr is a string-typed, byte-identical port of the static
+// parser's scanQuotedClose (logparser/parser.go). ingestor is a leaf package
+// and logparser imports it, so ingestor cannot import logparser (import cycle);
+// the logic is duplicated here and proven identical to scanQuotedClose by the
+// cross-package parity test in logparser. A quote is escaped iff preceded by an
+// ODD number of consecutive backslashes back to contentStart. Returns the index
+// of the first unescaped quote at/after firstQuote, or len(s).
+func scanQuotedCloseStr(s string, contentStart, firstQuote int) int {
+	i := firstQuote
+	for {
+		bs := 0
+		for j := i - 1; j >= contentStart && s[j] == '\\'; j-- {
+			bs++
+		}
+		if bs%2 == 0 {
+			return i
+		}
+		next := strings.IndexByte(s[i+1:], '"')
+		if next < 0 {
+			return len(s)
+		}
+		i += 1 + next
+	}
 }
 
 // parseEventSafe parses a single event, recovering from any panic in
@@ -298,6 +365,20 @@ func parseEventSafe(m map[string]interface{}, out *Request) (malformed int, err 
 		}
 	}()
 	return parseEvent(m, out)
+}
+
+// ParseEventForTest parses a single raw log line through the live ingestor's
+// parseEvent and returns the resulting Request. It exists solely so the
+// live<->static UserAgent parity test (logparser/parser_live_ua_parity_test.go)
+// can drive the live parser from a package that ALSO compiles the static format
+// — ingestor is a leaf package that logparser imports, so the parity test cannot
+// live in ingestor (it would have to import logparser, an import cycle). This is
+// a thin wrapper over the unexported parseEvent and is not part of the live data
+// path (ReadBatch uses parseEventSafe directly).
+func ParseEventForTest(line string) (Request, error) {
+	var req Request
+	_, err := parseEvent(map[string]interface{}{"message": line}, &req)
+	return req, err
 }
 
 func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
