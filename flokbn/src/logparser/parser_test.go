@@ -1296,3 +1296,41 @@ func TestValidateFormat_DuplicateMessages(t *testing.T) {
 		t.Errorf("valid %%m+%%r format rejected: %v", err)
 	}
 }
+
+// TestValidateFormat_ExportedWrapper proves the exported ValidateFormat is a
+// faithful thin wrapper over the unexported validateFormat (CFG-02): it accepts
+// the default format and a representative good format, and rejects a missing-%h
+// format with the same message.
+func TestValidateFormat_ExportedWrapper(t *testing.T) {
+	if err := ValidateFormat(DefaultLogFormat); err != nil {
+		t.Errorf("DefaultLogFormat must validate, got: %v", err)
+	}
+	if err := ValidateFormat(`%h %^ %^ [%t] "%r" %s %b %^ "%u"`); err != nil {
+		t.Errorf("a representative good format must validate, got: %v", err)
+	}
+	if err := ValidateFormat("%s %b"); err == nil || !strings.Contains(err.Error(), "no IP field (%h)") {
+		t.Errorf("missing-%%h format must be rejected: %v", err)
+	}
+}
+
+// TestValidateFormat_EquivalentToCompileFormat documents (and locks) the
+// equivalence ValidateFormat(f)==nil <=> compileFormat(f) succeeds, for a
+// representative good and bad format (CFG-02 4a). This is what lets
+// config.Validate gate a barrier-passed format and never have the downstream
+// NewParser reject it.
+func TestValidateFormat_EquivalentToCompileFormat(t *testing.T) {
+	formats := []string{
+		DefaultLogFormat,
+		`%h %^ %^ [%t] "%r" %s %b %^ "%u"`,
+		"%s %b",        // missing %h => both reject
+		"%h %h",        // duplicate => both reject
+		`%h [%t] "%r"`, // good
+	}
+	for _, f := range formats {
+		vfErr := ValidateFormat(f)
+		_, cfErr := compileFormat(f)
+		if (vfErr == nil) != (cfErr == nil) {
+			t.Errorf("format %q: ValidateFormat err=%v but compileFormat err=%v (must agree)", f, vfErr, cfErr)
+		}
+	}
+}

@@ -33,55 +33,43 @@ jailFile = "/x/jail.json"
 
 // The [global] unknown-key error must list the recognized [global] keys.
 func TestUnknownGlobalKey_ListsValidSet(t *testing.T) {
-	_, err := loadConfigString(t, `
+	msg := loadAndReport(t, `
 [global]
 jailfile = "/x/jail.json"
-`)
-	if err == nil {
-		t.Fatal("expected error for unknown [global] key, got nil")
-	}
-	msg := err.Error()
+`, StaticMode)
 	if !strings.Contains(msg, "want:") {
-		t.Fatalf("[global] unknown-key error must list the valid set, got: %v", err)
+		t.Fatalf("[global] unknown-key error must list the valid set, got:\n%s", msg)
 	}
 	for _, want := range []string{"jailFile", "banFile", "whitelist", "blacklist", "userAgentWhitelist", "userAgentBlacklist"} {
 		if !strings.Contains(msg, want) {
-			t.Fatalf("[global] unknown-key error must list %q, got: %v", want, err)
+			t.Fatalf("[global] unknown-key error must list %q, got:\n%s", want, msg)
 		}
 	}
 }
 
 // The [static] unknown-key error must list the recognized [static] keys.
 func TestUnknownStaticKey_ListsValidSet(t *testing.T) {
-	_, err := loadConfigString(t, `
+	msg := loadAndReport(t, `
 [static]
 logfile = "/x/access.log"
-`)
-	if err == nil {
-		t.Fatal("expected error for unknown [static] key, got nil")
-	}
-	msg := err.Error()
+`, StaticMode)
 	for _, want := range []string{"want:", "logFile", "logFormat", "plotPath"} {
 		if !strings.Contains(msg, want) {
-			t.Fatalf("[static] unknown-key error must list %q, got: %v", want, err)
+			t.Fatalf("[static] unknown-key error must list %q, got:\n%s", want, msg)
 		}
 	}
 }
 
 // The [live] unknown-key error must list the recognized [live] scalar keys.
 func TestUnknownLiveKey_ListsValidSet(t *testing.T) {
-	_, err := loadConfigString(t, `
+	msg := loadAndReport(t, `
 [live]
 port = "8080"
 prt = "9090"
-`)
-	if err == nil {
-		t.Fatal("expected error for unknown [live] key, got nil")
-	}
-	msg := err.Error()
+`, LiveMode)
 	for _, want := range []string{"want:", "port", "readTimeout", "statsListen", "topTalkers"} {
 		if !strings.Contains(msg, want) {
-			t.Fatalf("[live] unknown-key error must list %q, got: %v", want, err)
+			t.Fatalf("[live] unknown-key error must list %q, got:\n%s", want, msg)
 		}
 	}
 }
@@ -89,21 +77,17 @@ prt = "9090"
 // An unknown trie key must be reported with the bracket-form, instance-named
 // section label ([static.<name>] trie) AND the valid trie key set.
 func TestUnknownTrieKey_ListsValidSetAndNamedSection(t *testing.T) {
-	_, err := loadConfigString(t, `
+	msg := loadAndReport(t, `
 [static.trie_1]
 clusterArgSets = [[1000, 24, 32, 0.1]]
 useForjail = [true]
-`)
-	if err == nil {
-		t.Fatal("expected error for unknown trie key, got nil")
-	}
-	msg := err.Error()
+`, StaticMode)
 	if !strings.Contains(msg, "[static.trie_1] trie") {
-		t.Fatalf("trie unknown-key error must name the bracket-form section [static.trie_1] trie, got: %v", err)
+		t.Fatalf("trie unknown-key error must name the bracket-form section [static.trie_1] trie, got:\n%s", msg)
 	}
 	for _, want := range []string{"want:", "useForJail", "clusterArgSets", "cidrRanges"} {
 		if !strings.Contains(msg, want) {
-			t.Fatalf("trie unknown-key error must list %q, got: %v", want, err)
+			t.Fatalf("trie unknown-key error must list %q, got:\n%s", want, msg)
 		}
 	}
 }
@@ -111,7 +95,7 @@ useForjail = [true]
 // An unknown sliding-trie key must be reported with the bracket-form,
 // instance-named section label ([live.<name>] sliding-trie) AND the valid set.
 func TestUnknownSlidingTrieKey_ListsValidSetAndNamedSection(t *testing.T) {
-	_, err := loadConfigString(t, `
+	msg := loadAndReport(t, `
 [live]
 port = "8080"
 
@@ -120,16 +104,12 @@ slidingWindowMaxSize = 100
 slidingWindowMaxTime = "1h"
 clusterArgSets = [[100, 24, 32, 0.1]]
 slidingWindowMxTime = "2h"
-`)
-	if err == nil {
-		t.Fatal("expected error for unknown sliding-trie key, got nil")
-	}
-	msg := err.Error()
+`, LiveMode)
 	if !strings.Contains(msg, "[live.win_1] sliding-trie") {
-		t.Fatalf("sliding-trie unknown-key error must name [live.win_1] sliding-trie, got: %v", err)
+		t.Fatalf("sliding-trie unknown-key error must name [live.win_1] sliding-trie, got:\n%s", msg)
 	}
 	if !strings.Contains(msg, "want:") {
-		t.Fatalf("sliding-trie unknown-key error must list the valid set, got: %v", err)
+		t.Fatalf("sliding-trie unknown-key error must list the valid set, got:\n%s", msg)
 	}
 }
 
@@ -137,23 +117,19 @@ slidingWindowMxTime = "2h"
 // "IPv6 not supported (IPv4-only tool)", the section[index] location grammar,
 // and a %q-quoted value.
 func TestCIDRRangeEntry_IPv6UnifiedMessage(t *testing.T) {
-	_, err := loadConfigString(t, `
+	msg := loadAndReport(t, `
 [static.trie_1]
 clusterArgSets = [[1000, 24, 32, 0.1]]
 cidrRanges = ["2001:db8::/48"]
-`)
-	if err == nil {
-		t.Fatal("expected error for IPv6 cidrRanges entry, got nil")
-	}
-	msg := err.Error()
+`, StaticMode)
 	if !strings.Contains(msg, "IPv6 not supported (IPv4-only tool)") {
-		t.Fatalf("cidrRanges IPv6 error must use the unified phrase, got: %v", err)
+		t.Fatalf("cidrRanges IPv6 error must use the unified phrase, got:\n%s", msg)
 	}
 	if !strings.Contains(msg, "cidrRanges[0]") {
-		t.Fatalf("cidrRanges IPv6 error must use the section[index] location grammar, got: %v", err)
+		t.Fatalf("cidrRanges IPv6 error must use the section[index] location grammar, got:\n%s", msg)
 	}
 	if !strings.Contains(msg, `"2001:db8::/48"`) {
-		t.Fatalf("cidrRanges IPv6 error must quote the offending value with %%q, got: %v", err)
+		t.Fatalf("cidrRanges IPv6 error must quote the offending value with %%q, got:\n%s", msg)
 	}
 }
 

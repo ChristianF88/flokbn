@@ -22,83 +22,81 @@ func loadConfigString(t *testing.T, content string) (*Config, error) {
 	return LoadConfig(path)
 }
 
+// loadAndReport loads content (which must NOT trip a HARD LoadConfig error) and
+// returns the Validate(mode).Report() text. CFG-02 migrated most config checks
+// from a hard LoadConfig error to a collect-all diagnostic surfaced ONLY through
+// Validate; these tests assert the (preserved) MSG-02 text on that report.
+func loadAndReport(t *testing.T, content string, mode RunMode) string {
+	t.Helper()
+	cfg, err := loadConfigString(t, content)
+	if err != nil {
+		t.Fatalf("LoadConfig should succeed (checks surface via Validate now): %v", err)
+	}
+	return cfg.Validate(mode).Report()
+}
+
 // minDepth > maxDepth in a TOML clusterArgSets row must error at load, naming
 // the offending row. Previously this row was silently dropped, shifting the
 // positional useForJail alignment.
 func TestLoadConfig_ClusterMinDepthGtMaxDepthErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [static.trie_1]
 clusterArgSets = [[1000, 32, 24, 0.1]]
 useForJail = [true]
-`)
-	if err == nil {
-		t.Fatal("expected error for minDepth > maxDepth, got nil")
-	}
-	if !strings.Contains(err.Error(), "minDepth") || !strings.Contains(err.Error(), "row 0") {
-		t.Fatalf("error should name minDepth and the row index, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "minDepth") || !strings.Contains(report, "row 0") {
+		t.Fatalf("report should name minDepth and the row index, got:\n%s", report)
 	}
 }
 
 // maxDepth > 32 (IPv4 bit width ceiling) must error at load.
 func TestLoadConfig_ClusterMaxDepthOver32Errors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [static.trie_1]
 clusterArgSets = [[1000, 24, 33, 0.1]]
 useForJail = [true]
-`)
-	if err == nil {
-		t.Fatal("expected error for maxDepth > 32, got nil")
-	}
-	if !strings.Contains(err.Error(), "maxDepth") {
-		t.Fatalf("error should name maxDepth, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "maxDepth") {
+		t.Fatalf("report should name maxDepth, got:\n%s", report)
 	}
 }
 
 // A clusterArgSets row with fewer than 4 numeric values must error, surfacing
 // the row index. Previously the >=4 gate silently dropped it.
 func TestLoadConfig_ClusterRowUnderFourErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [static.trie_1]
 clusterArgSets = [[1000, 24, 32, 0.1], [500, 24, 32]]
 useForJail = [true, true]
-`)
-	if err == nil {
-		t.Fatal("expected error for under-specified row, got nil")
-	}
-	if !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), "4") {
-		t.Fatalf("error should name row 1 and require 4 values, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "row 1") || !strings.Contains(report, "4") {
+		t.Fatalf("report should name row 1 and require 4 values, got:\n%s", report)
 	}
 }
 
 // A non-numeric member in a clusterArgSets row must error (it can no longer be
 // silently filtered, which used to drop a 4-element row below the threshold).
 func TestLoadConfig_ClusterNonNumericMemberErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [static.trie_1]
 clusterArgSets = [[1000, 24, "32", 0.1]]
 useForJail = [true]
-`)
-	if err == nil {
-		t.Fatal("expected error for non-numeric cluster member, got nil")
-	}
-	if !strings.Contains(err.Error(), "non-numeric") {
-		t.Fatalf("error should mention non-numeric, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "non-numeric") {
+		t.Fatalf("report should mention non-numeric, got:\n%s", report)
 	}
 }
 
 // A PRESENT useForJail whose length differs from clusterArgSets must error:
 // this is the silent-misalignment landmine the ticket calls out.
 func TestLoadConfig_UseForJailLengthMismatchErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [static.trie_1]
 clusterArgSets = [[1000, 24, 32, 0.1], [500, 24, 32, 0.2]]
 useForJail = [true]
-`)
-	if err == nil {
-		t.Fatal("expected error for useForJail length mismatch, got nil")
-	}
-	if !strings.Contains(err.Error(), "useForJail") || !strings.Contains(err.Error(), "clusterArgSets") {
-		t.Fatalf("error should name both arrays, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "useForJail") || !strings.Contains(report, "clusterArgSets") {
+		t.Fatalf("report should name both arrays, got:\n%s", report)
 	}
 }
 
@@ -229,80 +227,65 @@ logFile = "/x/access.log"
 
 // Unknown/misspelled keys in [global] must error.
 func TestLoadConfig_UnknownGlobalKeyErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [global]
 jailfile = "/x/jail.json"
-`)
-	if err == nil {
-		t.Fatal("expected error for misspelled global key, got nil")
-	}
-	if !strings.Contains(err.Error(), "jailfile") || !strings.Contains(err.Error(), "global") {
-		t.Fatalf("error should name the bad key and section, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "jailfile") || !strings.Contains(report, "global") {
+		t.Fatalf("report should name the bad key and section, got:\n%s", report)
 	}
 }
 
 // Unknown/misspelled keys in [static] (scalar section) must error.
 func TestLoadConfig_UnknownStaticKeyErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [static]
 logfile = "/x/access.log"
-`)
-	if err == nil {
-		t.Fatal("expected error for misspelled static key, got nil")
-	}
-	if !strings.Contains(err.Error(), "logfile") || !strings.Contains(err.Error(), "static") {
-		t.Fatalf("error should name the bad key and section, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "logfile") || !strings.Contains(report, "static") {
+		t.Fatalf("report should name the bad key and section, got:\n%s", report)
 	}
 }
 
 // Unknown/misspelled keys in [live] must error.
 func TestLoadConfig_UnknownLiveKeyErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [live]
 port = "8080"
 prt = "9090"
-`)
-	if err == nil {
-		t.Fatal("expected error for misspelled live key, got nil")
-	}
-	if !strings.Contains(err.Error(), "prt") || !strings.Contains(err.Error(), "live") {
-		t.Fatalf("error should name the bad key and section, got: %v", err)
+`, LiveMode)
+	if !strings.Contains(report, "prt") || !strings.Contains(report, "live") {
+		t.Fatalf("report should name the bad key and section, got:\n%s", report)
 	}
 }
 
 // A misspelled trie key (useForjail with lowercase j) must error rather than
 // silently yielding default behavior.
 func TestLoadConfig_MisspelledTrieKeyErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [static.trie_1]
 clusterArgSets = [[1000, 24, 32, 0.1]]
 useForjail = [true]
-`)
-	if err == nil {
-		t.Fatal("expected error for misspelled useForjail, got nil")
-	}
-	if !strings.Contains(err.Error(), "useForjail") {
-		t.Fatalf("error should name the misspelled key, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "useForjail") {
+		t.Fatalf("report should name the misspelled key, got:\n%s", report)
 	}
 }
 
 // The singular clusterArgSet (vs clusterArgSets) misspelling must error.
 func TestLoadConfig_SingularClusterArgSetKeyErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [static.trie_1]
 clusterArgSet = [[1000, 24, 32, 0.1]]
-`)
-	if err == nil {
-		t.Fatal("expected error for singular clusterArgSet, got nil")
-	}
-	if !strings.Contains(err.Error(), "clusterArgSet") {
-		t.Fatalf("error should name the misspelled key, got: %v", err)
+`, StaticMode)
+	if !strings.Contains(report, "clusterArgSet") {
+		t.Fatalf("report should name the misspelled key, got:\n%s", report)
 	}
 }
 
 // A misspelled sliding-trie key must error.
 func TestLoadConfig_MisspelledSlidingTrieKeyErrors(t *testing.T) {
-	_, err := loadConfigString(t, `
+	report := loadAndReport(t, `
 [live]
 port = "8080"
 
@@ -311,12 +294,9 @@ slidingWindowMaxSize = 100
 slidingWindowMaxTime = "1h"
 clusterArgSets = [[100, 24, 32, 0.1]]
 slidingWindowMxTime = "2h"
-`)
-	if err == nil {
-		t.Fatal("expected error for misspelled sliding trie key, got nil")
-	}
-	if !strings.Contains(err.Error(), "slidingWindowMxTime") {
-		t.Fatalf("error should name the misspelled key, got: %v", err)
+`, LiveMode)
+	if !strings.Contains(report, "slidingWindowMxTime") {
+		t.Fatalf("report should name the misspelled key, got:\n%s", report)
 	}
 }
 

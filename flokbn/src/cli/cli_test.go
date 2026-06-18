@@ -287,23 +287,12 @@ func TestStaticCommandValidation(t *testing.T) {
 				"--rangesCidr", "10.0.0.0/8"},
 			expectError: false,
 		},
-		{
-			name: "Invalid CIDR range",
-			args: []string{"flokbn", "static",
-				"--logfile", tmpFile.Name(),
-				"--clusterArgSets", "1000,24,32,0.2",
-				"--rangesCidr", "192.168.1.0/33"},
-			expectError: true,
-			errorMatch:  "invalid CIDR range",
-		},
-		{
-			name: "Missing log file",
-			args: []string{"flokbn", "static",
-				"--logfile", "/nonexistent/file.log",
-				"--clusterArgSets", "1000,24,32,0.2"},
-			expectError: true,
-			errorMatch:  "does not exist",
-		},
+		// CFG-02: the "Invalid CIDR range" and "Missing log file" cases moved to
+		// SUBPROCESS execution (TestStaticCommandValidation_BarrierRouted) — they
+		// now route through the pre-work barrier whose cli.Exit("",1) fires
+		// os.Exit(1) INSIDE App.Run, which would kill this in-process test binary.
+		// Only the TIER-1 hard-return case (clusterArgSets arity) and the valid
+		// runs stay in-process here.
 		{
 			name: "Invalid cluster argument sets",
 			args: []string{"flokbn", "static",
@@ -366,36 +355,39 @@ func TestStaticCommandValidation(t *testing.T) {
 	}
 }
 
-// TestValidateLogFileExistsEmpty is a regression test for the misleading
-// "logfile does not exist:" (blank path) error shown in static CONFIG mode when
-// cfg.Static.LogFile == "". An empty logFile must now report "logFile is
-// required" and must not fall through to the os.Stat "does not exist" path.
-func TestValidateLogFileExistsEmpty(t *testing.T) {
-	// Config mode surfaces the TOML key `logFile`; flags mode surfaces the CLI
-	// `--logfile`. The shared validator takes the field label so the empty-path
-	// message names the offending key/flag exactly.
+// TestEmptyLogFileIsRequired is a regression test for the misleading
+// "logfile does not exist:" (blank path) error: an empty logFile must report
+// "logFile is required", not fall through to the os.Stat "does not exist" path.
+// Both cases run as a SUBPROCESS so the empty-config path enumerates at the
+// barrier (whose cli.Exit fires os.Exit(1)) without killing the test binary.
+func TestEmptyLogFileIsRequired(t *testing.T) {
+	// Config mode surfaces the TOML key `logFile`: an empty [static] logFile is
+	// recorded by handleStaticConfigMode and enumerates at the barrier.
 	t.Run("config mode names logFile", func(t *testing.T) {
-		err := validateLogFileExists("logFile", "")
-		if err == nil {
-			t.Fatal("expected error for empty logFile, got nil")
+		dir := t.TempDir()
+		body := "[static]\n[static.t]\nclusterArgSets = [[1, 0, 32, 1.0]]\n"
+		cfg := writeFile(t, dir, "config.toml", body)
+		stdout, stderr, code := runFlokbn(t, "static", "--config", cfg)
+		assertReportNoAnalysis(t, stdout, stderr, code)
+		if !strings.Contains(stderr, "logFile is required") {
+			t.Errorf("expected 'logFile is required' in report, got:\n%s", stderr)
 		}
-		if !strings.Contains(err.Error(), "logFile is required") {
-			t.Errorf("expected error to contain 'logFile is required', got: %v", err)
-		}
-		if strings.Contains(err.Error(), "does not exist") {
-			t.Errorf("empty logFile must not produce a 'does not exist' error, got: %v", err)
+		if strings.Contains(stderr, "does not exist") {
+			t.Errorf("empty logFile must not produce a 'does not exist' error, got:\n%s", stderr)
 		}
 	})
+	// Flags mode surfaces the CLI `--logfile`: an unset flag is a hard return
+	// from handleStaticFlagsMode before the config is ever built.
 	t.Run("flags mode names --logfile", func(t *testing.T) {
-		err := validateLogFileExists("--logfile", "")
-		if err == nil {
-			t.Fatal("expected error for empty --logfile, got nil")
+		_, stderr, code := runFlokbn(t, "static", "--clusterArgSets", "1,0,32,0.1")
+		if code == 0 {
+			t.Fatal("expected non-zero exit for missing --logfile")
 		}
-		if !strings.Contains(err.Error(), "--logfile is required") {
-			t.Errorf("expected error to contain '--logfile is required', got: %v", err)
+		if !strings.Contains(stderr, "--logfile is required") {
+			t.Errorf("expected '--logfile is required', got:\n%s", stderr)
 		}
-		if strings.Contains(err.Error(), "does not exist") {
-			t.Errorf("empty --logfile must not produce a 'does not exist' error, got: %v", err)
+		if strings.Contains(stderr, "does not exist") {
+			t.Errorf("missing --logfile must not produce a 'does not exist' error, got:\n%s", stderr)
 		}
 	})
 }
@@ -466,24 +458,11 @@ func TestEnhancedCLIArguments(t *testing.T) {
 				"--clusterArgSets", "1,1,32,0.1"},
 			expectError: false,
 		},
-		{
-			name: "Invalid user agent regex",
-			args: []string{"flokbn", "static",
-				"--logfile", tmpFile.Name(),
-				"--useragentRegex", "[invalid",
-				"--clusterArgSets", "1,1,32,0.1"},
-			expectError: true,
-			errorMatch:  "invalid useragentRegex pattern",
-		},
-		{
-			name: "Invalid endpoint regex",
-			args: []string{"flokbn", "static",
-				"--logfile", tmpFile.Name(),
-				"--endpointRegex", "*invalid",
-				"--clusterArgSets", "1,1,32,0.1"},
-			expectError: true,
-			errorMatch:  "invalid endpointRegex pattern",
-		},
+		// CFG-02: the "Invalid user agent regex" and "Invalid endpoint regex"
+		// cases moved to SUBPROCESS execution
+		// (TestStaticCommandValidation_BarrierRouted) — a bad regex now routes
+		// into cfg.diags and aborts at the barrier (os.Exit(1) inside App.Run),
+		// which would kill this in-process test binary.
 		{
 			name: "Combined filters and time range",
 			args: []string{"flokbn", "static",

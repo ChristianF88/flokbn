@@ -58,11 +58,13 @@ func StaticFromConfig(cfg *config.Config, compact, plain, tui bool) error {
 
 // executeStaticAnalysis handles all static analysis - CLI or config file, doesn't matter
 func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error {
-	// Pre-work barrier. It lives here, the single choke point that TUI, plot,
-	// jail/ban, log parse and clustering all cross, rather than in the CLI
-	// handlers, so any future caller of executeStaticAnalysis inherits the gate.
-	// (validateLogFileExists/validatePlotPath in the config-mode handler still
-	// run before this; they are I/O stat fail-fasts that CFG-02 folds in.)
+	// THE pre-work barrier (CFG-01/CFG-02). This is the single choke point that
+	// TUI, plot, jail/ban, log parse and clustering all cross — placing it here
+	// (rather than in the CLI handlers) makes any future non-CLI caller of
+	// executeStaticAnalysis inherit the gate; a caller that bypasses this function
+	// inherits nothing, so do not add one. CFG-02 folded the logfile-exists /
+	// plotPath-dir / regex / cidrRanges / list-file checks into cfg.Validate, so
+	// every config diagnostic enumerates here before any side-effecting work.
 	if err := barrier(cfg.Validate(config.StaticMode)); err != nil {
 		return err
 	}
@@ -181,11 +183,15 @@ type slidingWindowInstance struct {
 
 // executeLiveAnalysis runs live mode analysis - works for both CLI and config file inputs
 func executeLiveAnalysis(cfg *config.Config) error {
-	// Pre-work barrier, first statement so it precedes both the ingest bind
-	// (NewTCPIngestor below) and the stats bind (newStatsServer): no path reaches
-	// either listener when config diagnostics are non-empty. (ValidateLive /
-	// logging.Setup in the config-mode handler still run before this; CFG-02
-	// migrates them.)
+	// THE pre-work barrier (CFG-01/CFG-02), first statement so it precedes BOTH
+	// the ingest bind (NewTCPIngestor below) AND the stats bind (newStatsServer):
+	// no path reaches either listener when config diagnostics are non-empty.
+	// CFG-02 folded the ValidateLive required-field checks AND the list-file /
+	// regex / cidrRanges / IPv6 checks into cfg.Validate(LiveMode), so an
+	// unreadable whitelist or an IPv6 cidrRanges now fails BEFORE bind. Only
+	// logging.Setup runs before this in the handler (the logger must exist so the
+	// barrier can write to stderr; it binds nothing). live flags mode routes a
+	// bad regex into cfg.diags, which this pass copies and enumerates.
 	if err := barrier(cfg.Validate(config.LiveMode)); err != nil {
 		return err
 	}

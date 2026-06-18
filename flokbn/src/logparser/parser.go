@@ -988,6 +988,25 @@ var codeFieldNames = map[byte]string{
 	'u': "user agent",
 }
 
+// DefaultLogFormat is the canonical combined-log format used when no logFormat
+// is configured. It is the SINGLE source of truth referenced by the static
+// analysis entry points (analysis/static.go), the CLI --logFormat flag default,
+// and config.Validate's empty->default fallback, so the three cannot drift.
+// %h is last (the static default convention).
+const DefaultLogFormat = `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
+
+// ValidateFormat is the exported, side-effect-free precondition check for a log
+// format string. It is a THIN wrapper over the unexported validateFormat, which
+// compileFormat (and therefore NewParser) calls FIRST and which is a TOTAL
+// precondition for compileFormat/NewParser success: compileFormat returns an
+// error ONLY from validateFormat (its build loop merely `continue`s on unknown
+// codes and otherwise returns nil). So ValidateFormat(f)==nil is equivalent to
+// NewParser(f) succeeding w.r.t. the format string — config.Validate can gate a
+// barrier-passed format and never have the downstream NewParser reject it.
+func ValidateFormat(format string) error {
+	return validateFormat(format)
+}
+
 // validateFormat ensures format string doesn't have duplicate non-skippable fields
 func validateFormat(format string) error {
 	fieldCounts := make(map[byte]int)

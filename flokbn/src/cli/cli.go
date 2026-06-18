@@ -3,14 +3,14 @@ package cli
 import (
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/logging"
+	"github.com/ChristianF88/flokbn/logparser"
 	"github.com/ChristianF88/flokbn/version"
 	cli "github.com/urfave/cli/v2"
 )
@@ -127,7 +127,7 @@ var (
 	logFormatFlag = &cli.StringFlag{
 		Name:  "logFormat",
 		Usage: "Log format string (e.g., '%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"')",
-		Value: "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\"",
+		Value: logparser.DefaultLogFormat,
 	}
 	startTimeFlag = &cli.StringFlag{
 		Name:  "startTime",
@@ -195,47 +195,10 @@ func joinFlags(names []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-func validateCIDRRanges(c *cli.Context) error {
-	if rangesCidr := c.StringSlice("rangesCidr"); len(rangesCidr) > 0 {
-		for _, cidr := range rangesCidr {
-			if !iputils.IsValidCidrOrIP(cidr) {
-				return fmt.Errorf("invalid CIDR range %q", cidr)
-			}
-		}
-	}
-	return nil
-}
-
-func validatePlotPath(plotPath string) error {
-	if plotPath != "" {
-		plotDir := filepath.Dir(plotPath)
-		if plotDir == "." {
-			var err error
-			plotDir, err = os.Getwd()
-			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
-			}
-		}
-		if _, err := os.Stat(plotDir); os.IsNotExist(err) {
-			return fmt.Errorf("plot directory %q does not exist", plotDir)
-		}
-	}
-	return nil
-}
-
-// validateLogFileExists checks that the log file path is set and present on
-// disk. It is shared by static config mode (the user-facing key is the TOML
-// `logFile`) and static flags mode (the user-facing flag is `--logfile`), so
-// the caller supplies fieldLabel to name the offending key/flag in the message.
-func validateLogFileExists(fieldLabel, logfilePath string) error {
-	if logfilePath == "" {
-		return fmt.Errorf("%s is required", fieldLabel)
-	}
-	if _, err := os.Stat(logfilePath); os.IsNotExist(err) {
-		return fmt.Errorf("%s %q does not exist", fieldLabel, logfilePath)
-	}
-	return nil
-}
+// CFG-02 moved the static logFile-exists, plotPath-dir-exists and --rangesCidr
+// checks out of dedicated validators here: the file/dir stats now run in
+// config.Validate and --rangesCidr routes into cfg.diags, so all of them
+// enumerate at the single barrier instead of short-circuiting before it.
 
 // parseFlexibleTime parses a CLI --startTime/--endTime bound. It returns the
 // parsed time and whether the bound carried an EXPLICIT timezone offset
@@ -280,6 +243,18 @@ func handleLiveCommand(c *cli.Context) error {
 	return handleLiveFlagsMode(c)
 }
 
+// setupLoggerTolerant installs the process-wide logger before the barrier (the
+// barrier needs slog to write its report) WITHOUT failing on a bad [log] enum.
+// A bad [log] level/format is already a collect-all diagnostic (parseLogConfig),
+// so it must enumerate at the barrier with everything else; returning
+// logging.Setup's hard error here would short-circuit and hide it. On a bad
+// pair we fall back to the defaults (info/text), which always validate.
+func setupLoggerTolerant(level, format string) {
+	if err := logging.Setup(level, format); err != nil {
+		_ = logging.Setup("", "")
+	}
+}
+
 // handleLiveConfigMode handles live command when using config file
 func handleLiveConfigMode(c *cli.Context, configPath string) error {
 	// Validate only allowed flags in config mode
@@ -293,19 +268,23 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 		return fmt.Errorf("cannot load config %q: %w", configPath, err)
 	}
 
-	// Validate live mode configuration
-	if err := cfg.ValidateLive(); err != nil {
-		return fmt.Errorf("invalid live config: %w", err)
-	}
-
-	// Install the process-wide logger; --logLevel overrides [log] level.
+	// CFG-02: the live required-field checks (ValidateLive) and the [log]
+	// level/format enum are folded into config.Validate(LiveMode) / parseLogConfig,
+	// so they enumerate at the barrier (first statement of executeLiveAnalysis)
+	// before any port/stats bind. The logger install below binds nothing and stays
+	// before the barrier, but is tolerant of a bad [log] enum so that enum
+	// enumerates with everything else (see setupLoggerTolerant).
+	//
+	// --logLevel is a direct CLI input with no diagnostic path, so a typo'd flag
+	// stays a hard return here; when set it overrides the [log] level.
 	level := cfg.Log.Level
 	if c.IsSet("logLevel") {
 		level = c.String("logLevel")
+		if _, err := logging.ParseLevel(level); err != nil {
+			return err
+		}
 	}
-	if err := logging.Setup(level, cfg.Log.Format); err != nil {
-		return err
-	}
+	setupLoggerTolerant(level, cfg.Log.Format)
 
 	slog.Info("starting live mode", "config", configPath)
 	return LiveFromConfig(cfg)
@@ -348,10 +327,13 @@ func handleLiveFlagsMode(c *cli.Context) error {
 		SleepBetweenIterations: c.Int("sleepBetweenIterations"),
 	}
 
-	if err := slidingConfig.CompileRegex(); err != nil {
-		return err
-	}
+	// A bad --useragentRegex/--endpointRegex routes into the persistent cfg.diags
+	// (not a throwaway, or a dropped regex error becomes a fail-open no-op filter
+	// that admits all traffic), so it enumerates with static flags at the barrier
+	// in executeLiveAnalysis before any port/stats bind.
+	slidingConfig.CompileRegexInto(cfg.Diagnostics())
 
+	// clusterArgSets arity stays a hard return (parity with static flags mode).
 	clusterArgs, err := config.ParseClusterArgSetsFromStrings(c.StringSlice("clusterArgSet"))
 	if err != nil {
 		return err
@@ -395,17 +377,20 @@ func handleStaticConfigMode(c *cli.Context, configPath string) error {
 		return fmt.Errorf("cannot load config %q: %w", configPath, err)
 	}
 
-	// Validate logfile exists (config mode: name the TOML key `logFile`)
-	if err := validateLogFileExists("logFile", cfg.Static.LogFile); err != nil {
-		return err
+	// CFG-02: the logfile-exists and plotPath-dir-exists checks moved into
+	// config.Validate(StaticMode), so they now ENUMERATE at the single barrier
+	// alongside any other config diagnostic (e.g. a bad startTime) instead of a
+	// stat short-circuit winning before it. The barrier runs as the first
+	// statement of executeStaticAnalysis.
+	//
+	// The empty-logFile "required" case is recorded here (not in Validate) so it
+	// enumerates at the barrier too; Validate stays free of a logFile-required
+	// rule that the trie-fragment unit tests (which drive it without a logFile)
+	// would trip on.
+	if cfg.Static == nil || cfg.Static.LogFile == "" {
+		cfg.Diagnostics().AddRaw("[static] logFile is required")
 	}
 
-	// Validate plot path if provided
-	if err := validatePlotPath(cfg.Static.PlotPath); err != nil {
-		return err
-	}
-
-	// Use unified static interface
 	return StaticFromConfig(cfg, c.Bool("compact"), c.Bool("plain"), c.Bool("tui"))
 }
 
@@ -414,12 +399,12 @@ func handleStaticConfigMode(c *cli.Context, configPath string) error {
 // all features (regex filtering, whitelist/blacklist, jail, CIDR ranges)
 // work identically whether the user provides a config file or CLI flags.
 func handleStaticFlagsMode(c *cli.Context) error {
+	// An unset --logfile is a hard return here (before the config is built); the
+	// exists-on-disk stat migrates to a diagnostic (config.Validate, via
+	// Static.LogFile). Config mode's empty-logFile case is handled separately in
+	// handleStaticConfigMode.
 	if !c.IsSet("logfile") {
 		return fmt.Errorf("--logfile is required when not using --config")
-	}
-
-	if err := validateLogFileExists("--logfile", c.String("logfile")); err != nil {
-		return err
 	}
 
 	cfg := &config.Config{
@@ -438,23 +423,37 @@ func handleStaticFlagsMode(c *cli.Context) error {
 		},
 		StaticTries: make(map[string]*config.TrieConfig),
 	}
+	// The persistent diagnostics accumulator that config.Validate copies; the
+	// regex/cidrRanges failures below route here (never a throwaway, or a dropped
+	// regex error becomes a fail-open no-op filter that admits all traffic).
+	diags := cfg.Diagnostics()
 
 	trieConfig := &config.TrieConfig{
 		UserAgentRegex: c.String("useragentRegex"),
 		EndpointRegex:  c.String("endpointRegex"),
-		CIDRRanges:     c.StringSlice("rangesCidr"),
 	}
 
-	// Compile and validate regex patterns
-	if err := trieConfig.CompileRegex(); err != nil {
-		return err
+	// A bad --useragentRegex/--endpointRegex routes into cfg.diags; the barrier
+	// (in executeStaticAnalysis) enumerates and aborts before analysis. On failure
+	// both compiled+prefilter stay nil; analysis never runs.
+	trieConfig.CompileRegexInto(diags)
+
+	// Validate --rangesCidr into cfg.diags, storing ONLY valid IPv4 entries on the
+	// trie (drop IPv6/malformed before append — never store a bad entry, parity
+	// with the TOML cidrRanges path).
+	for i, cidrStr := range c.StringSlice("rangesCidr") {
+		if !iputils.IsValidCidrOrIP(cidrStr) {
+			diags.AddRaw(fmt.Sprintf("[static.cli_trie] invalid rangesCidr[%d] %s", i, strconv.Quote(cidrStr)))
+			continue
+		}
+		trieConfig.CIDRRanges = append(trieConfig.CIDRRanges, cidrStr)
 	}
 
-	// Parse time arguments. A malformed --startTime/--endTime still hard-errors
-	// here (parseFlexibleTime); the parsed bound is recorded WITH its original
-	// literal so the CFG-01 range diagnostic (endTime<startTime) can echo the
-	// user's text. The barrier fires the range check downstream when both bounds
-	// are zone-equal (both flexible flags are zone-less => offset-equal).
+	// A malformed --startTime/--endTime hard-errors here (parseFlexibleTime); the
+	// parsed bound is recorded WITH its original literal so the CFG-01 range
+	// diagnostic (endTime<startTime) can echo the user's text. The barrier fires
+	// the range check downstream when both bounds are zone-equal (both flexible
+	// flags are zone-less => offset-equal).
 	if start := c.String("startTime"); start != "" {
 		st, hasOffset, err := parseFlexibleTime(start)
 		if err != nil {
@@ -470,7 +469,8 @@ func handleStaticFlagsMode(c *cli.Context) error {
 		trieConfig.SetEndTimeBound(et, hasOffset, end)
 	}
 
-	// Parse cluster arguments
+	// clusterArgSets arity stays a hard return (keeps its direct-call tests green;
+	// a deliberate deviation from full barrier parity).
 	clusterArgs, err := config.ParseClusterArgSetsFromStrings(c.StringSlice("clusterArgSets"))
 	if err != nil {
 		return err
@@ -490,18 +490,10 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	}
 	trieConfig.ClusterArgSets = clusterArgs
 
-	// Validate CIDR ranges
-	if err := validateCIDRRanges(c); err != nil {
-		return err
-	}
-
-	// Validate plot path
-	if err := validatePlotPath(c.String("plotPath")); err != nil {
-		return err
-	}
-
 	cfg.StaticTries["cli_trie"] = trieConfig
 
+	// logfile-exists and plotPath-dir-exists are validated in config.Validate
+	// (Static.LogFile / Static.PlotPath) and enumerate at the barrier.
 	return StaticFromConfig(cfg, c.Bool("compact"), c.Bool("plain"), c.Bool("tui"))
 }
 

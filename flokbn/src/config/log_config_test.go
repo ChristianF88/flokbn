@@ -46,34 +46,52 @@ port = "8080"
 }
 
 func TestLoadConfig_LogSectionRejectsUnknownKey(t *testing.T) {
+	// CFG-02: a [log] unknown key is now a collect-all diagnostic (LoadConfig
+	// succeeds; it surfaces via Validate). MSG text preserved.
 	configPath := writeTestConfig(t, `
 [log]
 level = "info"
 verbosity = "high"
 `)
-
-	_, err := LoadConfig(configPath)
-	if err == nil || !strings.Contains(err.Error(), "verbosity") {
-		t.Fatalf("LoadConfig err = %v, want unknown-key error mentioning %q", err, "verbosity")
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig should succeed (unknown key surfaces via Validate): %v", err)
+	}
+	report := cfg.Validate(StaticMode).Report()
+	if !strings.Contains(report, "verbosity") {
+		t.Fatalf("Validate report = %q, want unknown-key diagnostic mentioning %q", report, "verbosity")
 	}
 }
 
 func TestLoadConfig_LogSectionRejectsBadEnums(t *testing.T) {
+	// BadLevel/BadFormat are value-enum failures: collect-all via Validate.
+	// NonStringLevel is a wrong-TYPE failure: it STAYS a HARD LoadConfig error.
 	cases := []struct {
 		name    string
 		toml    string
 		wantSub string
+		hard    bool
 	}{
-		{"BadLevel", "[log]\nlevel = \"verbose\"\n", "level"},
-		{"BadFormat", "[log]\nformat = \"xml\"\n", "format"},
-		{"NonStringLevel", "[log]\nlevel = 3\n", "level"},
+		{"BadLevel", "[log]\nlevel = \"verbose\"\n", "level", false},
+		{"BadFormat", "[log]\nformat = \"xml\"\n", "format", false},
+		{"NonStringLevel", "[log]\nlevel = 3\n", "level", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			configPath := writeTestConfig(t, tc.toml)
-			_, err := LoadConfig(configPath)
-			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
-				t.Fatalf("LoadConfig err = %v, want error mentioning %q", err, tc.wantSub)
+			cfg, err := LoadConfig(configPath)
+			if tc.hard {
+				if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+					t.Fatalf("LoadConfig err = %v, want hard error mentioning %q", err, tc.wantSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfig should succeed (enum surfaces via Validate): %v", err)
+			}
+			report := cfg.Validate(StaticMode).Report()
+			if !strings.Contains(report, tc.wantSub) {
+				t.Fatalf("Validate report = %q, want diagnostic mentioning %q", report, tc.wantSub)
 			}
 		})
 	}

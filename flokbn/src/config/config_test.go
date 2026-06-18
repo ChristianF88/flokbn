@@ -696,39 +696,45 @@ endpointRegex = "/admin/.*"
 }
 
 func TestInvalidRegexHandling(t *testing.T) {
-	// Test that invalid useragent regex causes LoadConfig to return an error
+	// CFG-02: an invalid regex is now COLLECT-ALL — LoadConfig succeeds and the
+	// failure surfaces through Validate(StaticMode).Report() (the barrier aborts
+	// before any ShouldIncludeRequest call). The MSG text is preserved.
+	tmpDir := t.TempDir()
 	testConfigContent1 := `
 [static.trie_1]
 useragentRegex = "[invalid regex"
 endpointRegex = "/api/.*"
 `
-	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "invalid_ua_regex_config.toml")
-	err := os.WriteFile(configPath, []byte(testConfigContent1), 0644)
-	if err != nil {
+	if err := os.WriteFile(configPath, []byte(testConfigContent1), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
-
-	_, err = LoadConfig(configPath)
-	if err == nil {
-		t.Fatal("Expected LoadConfig to return error for invalid useragentRegex")
+	cfg1, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig should succeed (regex surfaces via Validate now): %v", err)
+	}
+	report1 := cfg1.Validate(StaticMode).Report()
+	if !strings.Contains(report1, "invalid useragentRegex pattern") {
+		t.Fatalf("expected useragentRegex diagnostic, got:\n%s", report1)
 	}
 
-	// Test that invalid endpoint regex causes LoadConfig to return an error
+	// Invalid endpoint regex surfaces the same way.
 	testConfigContent2 := `
 [static.trie_2]
 useragentRegex = ".*valid.*"
 endpointRegex = "*invalid regex"
 `
 	configPath2 := filepath.Join(tmpDir, "invalid_ep_regex_config.toml")
-	err = os.WriteFile(configPath2, []byte(testConfigContent2), 0644)
-	if err != nil {
+	if err := os.WriteFile(configPath2, []byte(testConfigContent2), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
-
-	_, err = LoadConfig(configPath2)
-	if err == nil {
-		t.Fatal("Expected LoadConfig to return error for invalid endpointRegex")
+	cfg2, err := LoadConfig(configPath2)
+	if err != nil {
+		t.Fatalf("LoadConfig should succeed: %v", err)
+	}
+	report2 := cfg2.Validate(StaticMode).Report()
+	if !strings.Contains(report2, "invalid endpointRegex pattern") {
+		t.Fatalf("expected endpointRegex diagnostic, got:\n%s", report2)
 	}
 
 	// Test that valid regex still works fine

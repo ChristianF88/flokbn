@@ -61,10 +61,12 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	// Parse requests once
 	logFormat := cfg.Static.LogFormat
 	if logFormat == "" {
-		logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+		logFormat = logparser.DefaultLogFormat
 	}
 
-	// Create parser
+	// Create parser. NewParser revalidates the format as defense-in-depth;
+	// unreachable for a barrier-passed config (config.Validate already ran
+	// logparser.ValidateFormat, a total precondition for NewParser success).
 	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
 		jsonOutput.AddError("parser_init", fmt.Sprintf("Failed to create parallel parser: %v", err), 1)
@@ -244,13 +246,12 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 // their entry counts. The whitelists drop requests from every trie regardless
 // of per-trie params, so the renderers list them as active filters. Only counts
 // are needed (not the entries), and the files are tiny — loaded once per
-// analysis here, never in the per-request hot loop. Loader errors are treated
-// as a zero count: a missing OR unreadable whitelist must never fail the
-// analysis here, so a loader error simply yields a zero count. Note the
-// consequence: for a whitelist file that is PRESENT but unreadable, the "Active
-// Filters" summary derived from these counts can read 0, even though the real
-// load path (ProcessJailWithWhitelist) would surface/act on that same error.
-// This swallowing is intentional and confined to the summary counts.
+// analysis here, never in the per-request hot loop. A loader error yields a
+// zero count for that summary line. CFG-02: this is now strictly DOWNSTREAM of
+// the pre-work barrier, which already validated every configured list file
+// (config.Validate -> validateListFiles) and aborted on an unreadable/IPv6 list
+// — so a broken list can no longer reach this summary as a phantom 0; the
+// swallow here is a harmless belt-and-suspenders for the count line only.
 func computeGlobalFilters(cfg *config.Config) output.GlobalFilters {
 	var gf output.GlobalFilters
 	if cfg == nil {
@@ -509,9 +510,13 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 
 	logFormat := cfg.Static.LogFormat
 	if logFormat == "" {
-		logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+		logFormat = logparser.DefaultLogFormat
 	}
 
+	// NewParser revalidates the format as defense-in-depth; for a barrier-passed
+	// config this is unreachable (config.Validate ran logparser.ValidateFormat,
+	// a total precondition for NewParser success — see ValidateFormat docs), but
+	// it stays so a future non-barrier caller of Static() still fails loud.
 	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
 		jsonOutput.AddError("parser_init", fmt.Sprintf("Failed to create parallel parser: %v", err), 1)

@@ -635,12 +635,15 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 		t.Fatal(err)
 	}
 
-	_, tomlErr := config.LoadConfig(configPath)
-	if tomlErr == nil {
-		t.Fatal("Expected TOML LoadConfig to fail for invalid regex")
+	// CFG-02: the TOML path is now collect-all — LoadConfig succeeds and the
+	// invalid regex surfaces through Validate(StaticMode).Report(). MSG preserved.
+	cfg, tomlErr := config.LoadConfig(configPath)
+	if tomlErr != nil {
+		t.Fatalf("LoadConfig should succeed (regex surfaces via Validate now): %v", tomlErr)
 	}
+	tomlReport := cfg.Validate(config.StaticMode).Report()
 
-	// CLI path: invalid regex causes CompileRegex to fail
+	// CLI path: invalid regex causes CompileRegex to fail (error channel preserved)
 	cliTrie := &config.TrieConfig{
 		UserAgentRegex: "[invalid regex",
 		ClusterArgSets: []config.ClusterArgSet{
@@ -652,9 +655,9 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 		t.Fatal("Expected CLI CompileRegex to fail for invalid regex")
 	}
 
-	// Both errors should contain the same prefix
-	if !strings.Contains(tomlErr.Error(), "invalid useragentRegex pattern") {
-		t.Errorf("TOML error missing expected prefix: %v", tomlErr)
+	// Both should carry the same MSG-02 prefix (one via report, one via error).
+	if !strings.Contains(tomlReport, "invalid useragentRegex pattern") {
+		t.Errorf("TOML report missing expected prefix:\n%s", tomlReport)
 	}
 	if !strings.Contains(cliErr.Error(), "invalid useragentRegex pattern") {
 		t.Errorf("CLI error missing expected prefix: %v", cliErr)
@@ -684,10 +687,12 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 		t.Fatal(err)
 	}
 
-	_, tomlErr := config.LoadConfig(configPath)
-	if tomlErr == nil {
-		t.Fatal("Expected TOML LoadConfig to fail for invalid endpoint regex")
+	// CFG-02: collect-all — surfaces via Validate(StaticMode).Report().
+	cfg, tomlErr := config.LoadConfig(configPath)
+	if tomlErr != nil {
+		t.Fatalf("LoadConfig should succeed (regex surfaces via Validate now): %v", tomlErr)
 	}
+	tomlReport := cfg.Validate(config.StaticMode).Report()
 
 	// CLI path
 	cliTrie := &config.TrieConfig{
@@ -698,8 +703,8 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 		t.Fatal("Expected CLI CompileRegex to fail for invalid endpoint regex")
 	}
 
-	if !strings.Contains(tomlErr.Error(), "invalid endpointRegex pattern") {
-		t.Errorf("TOML error missing expected prefix: %v", tomlErr)
+	if !strings.Contains(tomlReport, "invalid endpointRegex pattern") {
+		t.Errorf("TOML report missing expected prefix:\n%s", tomlReport)
 	}
 	if !strings.Contains(cliErr.Error(), "invalid endpointRegex pattern") {
 		t.Errorf("CLI error missing expected prefix: %v", cliErr)

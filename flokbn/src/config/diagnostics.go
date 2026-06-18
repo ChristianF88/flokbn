@@ -52,13 +52,77 @@ func quoteCapped(value string) string {
 //
 // where qvalue is quoteCapped(value). The cross-field range class is AddRange.
 //
-// cause is the CFG-02 migration seam: CFG-01 callers pass nil (nothing appended).
+// cause is the underlying-error seam: when nil, nothing is appended (most
+// callers); when non-nil, ": <cause>" is appended. CFG-02 exercises it for the
+// logFormat check (Validate passes the validateFormat error as the cause). The
+// whole assembled line is sanitized (sanitizeLine) so a cause carrying a control
+// char cannot break the one-line-per-error contract.
 func (d *ConfigDiagnostics) Add(section, key, value, want string, cause error) {
 	line := fmt.Sprintf("[%s] invalid %s %s: want %s", section, key, quoteCapped(value), want)
 	if cause != nil {
 		line += ": " + cause.Error()
 	}
-	d.msgs = append(d.msgs, line)
+	d.msgs = append(d.msgs, sanitizeLine(line))
+}
+
+// AddRaw appends a fully-formed diagnostic line VERBATIM. It exists for the
+// bespoke MSG-02 grammars that Add's "[section] invalid key qval: want X"
+// template cannot express: the unknown-key "(want: ...)" line, the
+// clusterArgSets "row N ..." lines, the cidrRanges "IPv6 not supported
+// (IPv4-only tool) in cidrRanges[i]: ..." line, the useForJail alignment line,
+// the list-file "cannot open"/path:line errors, and the ValidateLive lines.
+//
+// SANITATION CONTRACT (CFG-02, HARD): callers MUST pre-format every UNTRUSTED
+// substring (unknown-key NAME, offending CIDR string, offending raw values)
+// through quoteCapped (or strconv.Quote) BEFORE assembling the line — TOML
+// quoted-key syntax allows embedded newlines/control chars (`"a\nb" = 1`),
+// reachable from a hostile config, which would otherwise forge a fake numbered
+// line, break the one-line-per-error contract, or make Len() lie. As
+// DEFENSE-IN-DEPTH, AddRaw additionally escapes any control character on the
+// WHOLE assembled line (via sanitizeLine) so a single forgetful caller cannot
+// inject a newline or other control byte. The trusted, well-formed prefix is
+// preserved; only control runes are escaped.
+func (d *ConfigDiagnostics) AddRaw(line string) {
+	d.msgs = append(d.msgs, sanitizeLine(line))
+}
+
+// sanitizeLine strips/escapes any control character (rune < 0x20, plus DEL) on
+// a fully-assembled diagnostic line. A newline would break the one-line-per-
+// error contract that Report()'s enumeration and Len() rely on; any other
+// control byte could garble the terminal. Escaping is done with the Go
+// backslash form (\n, \t, \x7f, ...) so the operator still sees the offending
+// content, just rendered safely. The common case (no control runes) returns the
+// input unchanged with zero allocation.
+func sanitizeLine(line string) string {
+	hasControl := false
+	for i := 0; i < len(line); i++ {
+		if c := line[i]; c < 0x20 || c == 0x7f {
+			hasControl = true
+			break
+		}
+	}
+	if !hasControl {
+		return line
+	}
+	var b strings.Builder
+	b.Grow(len(line) + 8)
+	for _, r := range line {
+		if r < 0x20 || r == 0x7f {
+			switch r {
+			case '\n':
+				b.WriteString(`\n`)
+			case '\r':
+				b.WriteString(`\r`)
+			case '\t':
+				b.WriteString(`\t`)
+			default:
+				fmt.Fprintf(&b, `\x%02x`, r)
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // AddRange records the cross-field "endTime is before startTime" diagnostic, a
