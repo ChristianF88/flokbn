@@ -1,7 +1,6 @@
 package sliding
 
 import (
-	"net"
 	"time"
 
 	"github.com/ChristianF88/flokbn/iputils"
@@ -11,8 +10,14 @@ import (
 
 // --- Sliding Window Wrapper ---
 
+// TimedIP carries the IP as a uint32 (the already-validated IPv4 value), not a
+// net.IP. The byte form was only ever re-decoded to uint32 on every window op
+// (trie Insert/Delete, IPStats key) and built per accepted request via a
+// net.IPv4 heap allocation; storing uint32 removes that allocation and every
+// IPToUint32 round-trip (AUDIT-05). IPv4-only is preserved upstream: the live
+// loop populates this from msg.IPUint32, which is rejected/zeroed for IPv6.
 type TimedIP struct {
-	IP   net.IP
+	IP   uint32
 	Time time.Time
 }
 
@@ -61,7 +66,12 @@ func (s *SlidingWindow) rebuildTrie() {
 	if len(s.IPQueue) > 0 {
 		ips := make([]uint32, 0, len(s.IPQueue))
 		for i := range s.IPQueue {
-			v := iputils.IPToUint32(s.IPQueue[i].IP)
+			v := s.IPQueue[i].IP
+			// Keep the 0 skip as defense-in-depth: the failed-parse / non-IPv4
+			// sentinel (uint32 0) must stay excluded from the trie, exactly as
+			// the static path excludes it, so clusters are byte-identical. The
+			// live loop already filters IPUint32==0 (cli/api.go), so this is
+			// belt-and-suspenders.
 			if v == 0 {
 				continue
 			}
@@ -74,9 +84,8 @@ func (s *SlidingWindow) rebuildTrie() {
 	s.evictedSinceRebuild = 0
 }
 
-func addIPStat(m *haxmap.Map[uint32, IPStat], ip net.IP, timedIP TimedIP) {
-	ipUint32 := iputils.IPToUint32(ip)
-	stat, exists := m.Get(ipUint32)
+func addIPStat(m *haxmap.Map[uint32, IPStat], ip uint32, timedIP TimedIP) {
+	stat, exists := m.Get(ip)
 	if !exists {
 		stat = IPStat{
 			Last:  timedIP.Time,
@@ -85,27 +94,26 @@ func addIPStat(m *haxmap.Map[uint32, IPStat], ip net.IP, timedIP TimedIP) {
 	}
 	stat.Last = timedIP.Time
 	stat.Count++
-	m.Set(ipUint32, stat)
+	m.Set(ip, stat)
 }
 
-func removeIPStat(m *haxmap.Map[uint32, IPStat], ip net.IP) {
-	ipUint32 := iputils.IPToUint32(ip)
-	stat, exists := m.Get(ipUint32)
+func removeIPStat(m *haxmap.Map[uint32, IPStat], ip uint32) {
+	stat, exists := m.Get(ip)
 	if !exists {
 		return
 	}
 	stat.Count--
 	if stat.Count <= 0 {
-		m.Del(ipUint32)
+		m.Del(ip)
 		return
 	}
-	m.Set(ipUint32, stat)
+	m.Set(ip, stat)
 }
 
 func (s *SlidingWindow) InsertNew(timedIPs []TimedIP) {
 	s.IPQueue = append(s.IPQueue, timedIPs...)
 	for _, timedIP := range timedIPs {
-		s.Trie.Insert(timedIP.IP)
+		s.Trie.InsertUint32(timedIP.IP)
 		addIPStat(s.IPStats, timedIP.IP, timedIP)
 	}
 }
@@ -121,7 +129,7 @@ func (s *SlidingWindow) DropOld() {
 	cutoff := time.Now().Add(-s.timeLimit)
 	idxTime := 0
 	for idxTime < len(s.IPQueue) && s.IPQueue[idxTime].Time.Before(cutoff) {
-		s.Trie.Delete(s.IPQueue[idxTime].IP)
+		s.Trie.DeleteUint32(s.IPQueue[idxTime].IP)
 		removeIPStat(s.IPStats, s.IPQueue[idxTime].IP)
 		idxTime++
 	}
@@ -130,7 +138,7 @@ func (s *SlidingWindow) DropOld() {
 	if remainingLen > s.maxEntries {
 		toDelete := remainingLen - s.maxEntries
 		for idxLen := 0; idxLen < toDelete; idxLen++ {
-			s.Trie.Delete(s.IPQueue[idxTime+idxLen].IP)
+			s.Trie.DeleteUint32(s.IPQueue[idxTime+idxLen].IP)
 			removeIPStat(s.IPStats, s.IPQueue[idxTime+idxLen].IP)
 		}
 		idxTime += toDelete

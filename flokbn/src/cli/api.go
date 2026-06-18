@@ -512,8 +512,14 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 					continue
 				}
 
+				// Carry the already-validated IPv4 value as uint32 directly
+				// (AUDIT-05). msg.IPUint32 is the upstream-validated IP
+				// (IPv6/non-To4 rejected at the ingestor, 0 = reject sentinel,
+				// and IPUint32==0 is filtered just above), so this avoids the
+				// per-request net.IPv4 heap allocation that GetIPNet() incurred
+				// plus the redundant IPToUint32 round-trips in the window.
 				timedIps = append(timedIps, sliding.TimedIP{
-					IP:   msg.GetIPNet(),
+					IP:   msg.IPUint32,
 					Time: msg.Timestamp,
 				})
 			}

@@ -19,23 +19,23 @@ func TestSlidingWindowTrieInsert(t *testing.T) {
 		{
 			name: "Insert single IP",
 			timedIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now()},
 			},
 			expectedCount: 1,
 		},
 		{
 			name: "Insert multiple unique IPs",
 			timedIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now()},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now()},
 			},
 			expectedCount: 2,
 		},
 		{
 			name: "Insert duplicate IPs",
 			timedIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now()},
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now()},
 			},
 			expectedCount: 2,
 		},
@@ -80,8 +80,8 @@ func TestSlidingWindowTrieCleanup(t *testing.T) {
 		{
 			name: "Cleanup removes expired IPs",
 			timedIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-15 * time.Second)},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-5 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-15 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-5 * time.Second)},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -90,8 +90,8 @@ func TestSlidingWindowTrieCleanup(t *testing.T) {
 		{
 			name: "Cleanup keeps all IPs within time limit",
 			timedIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-3 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-5 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-3 * time.Second)},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -100,8 +100,8 @@ func TestSlidingWindowTrieCleanup(t *testing.T) {
 		{
 			name: "Cleanup removes all IPs when all are expired",
 			timedIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-15 * time.Second)},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-12 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-15 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-12 * time.Second)},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -152,11 +152,11 @@ func TestSlidingWindowTrieUpdate(t *testing.T) {
 		{
 			name: "Update adds new IPs and removes expired ones",
 			initialIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-15 * time.Second)},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-5 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-15 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-5 * time.Second)},
 			},
 			newIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.3"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.3")), Time: time.Now()},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -165,11 +165,11 @@ func TestSlidingWindowTrieUpdate(t *testing.T) {
 		{
 			name: "Update keeps all valid IPs and adds new ones",
 			initialIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-3 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-5 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-3 * time.Second)},
 			},
 			newIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.3"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.3")), Time: time.Now()},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -178,11 +178,11 @@ func TestSlidingWindowTrieUpdate(t *testing.T) {
 		{
 			name: "Update removes all expired IPs and adds new ones",
 			initialIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-15 * time.Second)},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-12 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-15 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-12 * time.Second)},
 			},
 			newIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.3"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.3")), Time: time.Now()},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -233,8 +233,8 @@ func TestSlidingWindowTrieUpdateOnlyInsert(t *testing.T) {
 		{
 			name: "Update inserts new IPs",
 			newIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now()},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now()},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -283,11 +283,11 @@ func TestSlidingWindowTrieUpdateWithDifferentLengths(t *testing.T) {
 		{
 			name: "Update with more new IPs than initial",
 			initialIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-5 * time.Second)},
 			},
 			newIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now()},
-				{IP: net.ParseIP("192.168.1.3"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.3")), Time: time.Now()},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -296,11 +296,11 @@ func TestSlidingWindowTrieUpdateWithDifferentLengths(t *testing.T) {
 		{
 			name: "Update with fewer new IPs than initial",
 			initialIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-3 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-5 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-3 * time.Second)},
 			},
 			newIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.3"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.3")), Time: time.Now()},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -309,10 +309,10 @@ func TestSlidingWindowTrieUpdateWithDifferentLengths(t *testing.T) {
 		{
 			name: "Update with equal number of initial and new IPs",
 			initialIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-5 * time.Second)},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-5 * time.Second)},
 			},
 			newIPs: []TimedIP{
-				{IP: net.ParseIP("192.168.1.2"), Time: time.Now()},
+				{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now()},
 			},
 			timeLimit:     10 * time.Second,
 			maxEntries:    5,
@@ -344,11 +344,11 @@ func TestSlidingWindowTrieUpdateWithDifferentLengths(t *testing.T) {
 
 func TestSlidingWindowTrieMaxLength(t *testing.T) {
 	timeIPs := []TimedIP{
-		{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-25 * time.Second)},
-		{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-20 * time.Second)},
-		{IP: net.ParseIP("192.168.1.3"), Time: time.Now().Add(-15 * time.Second)},
-		{IP: net.ParseIP("192.168.1.4"), Time: time.Now().Add(-10 * time.Second)},
-		{IP: net.ParseIP("192.168.1.5"), Time: time.Now().Add(-5 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-25 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-20 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.3")), Time: time.Now().Add(-15 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.4")), Time: time.Now().Add(-10 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.5")), Time: time.Now().Add(-5 * time.Second)},
 	}
 	tests := []struct {
 		name          string
@@ -413,11 +413,11 @@ func TestSlidingWindowTrieMaxLength(t *testing.T) {
 
 func TestSlidingWindowTrieMaxLengthAndTimeLimitAreEnforced(t *testing.T) {
 	timeIPs := []TimedIP{
-		{IP: net.ParseIP("192.168.1.1"), Time: time.Now().Add(-25 * time.Second)},
-		{IP: net.ParseIP("192.168.1.2"), Time: time.Now().Add(-20 * time.Second)},
-		{IP: net.ParseIP("192.168.1.3"), Time: time.Now().Add(-15 * time.Second)},
-		{IP: net.ParseIP("192.168.1.4"), Time: time.Now().Add(-10 * time.Second)},
-		{IP: net.ParseIP("192.168.1.5"), Time: time.Now().Add(-5 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.1")), Time: time.Now().Add(-25 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.2")), Time: time.Now().Add(-20 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.3")), Time: time.Now().Add(-15 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.4")), Time: time.Now().Add(-10 * time.Second)},
+		{IP: iputils.IPToUint32(net.ParseIP("192.168.1.5")), Time: time.Now().Add(-5 * time.Second)},
 	}
 	tests := []struct {
 		name          string
@@ -486,8 +486,8 @@ func TestSlidingWindowTrieMaxLengthAndTimeLimitAreEnforced(t *testing.T) {
 }
 func TestAddIPStat(t *testing.T) {
 	now := time.Now()
-	ip1 := net.ParseIP("192.168.1.1")
-	ip2 := net.ParseIP("192.168.1.2")
+	ip1 := iputils.IPToUint32(net.ParseIP("192.168.1.1"))
+	ip2 := iputils.IPToUint32(net.ParseIP("192.168.1.2"))
 
 	t.Run("Insert new IP", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
@@ -496,7 +496,7 @@ func TestAddIPStat(t *testing.T) {
 			Time: now,
 		}
 		addIPStat(m, ip1, ti)
-		ipUint32 := iputils.IPToUint32(ip1)
+		ipUint32 := ip1
 		stat, exists := m.Get(ipUint32)
 		if !exists {
 			t.Fatalf("Expected IP stat to exist after insert")
@@ -521,7 +521,7 @@ func TestAddIPStat(t *testing.T) {
 		}
 		addIPStat(m, ip1, ti1)
 		addIPStat(m, ip1, ti2)
-		ipUint32 := iputils.IPToUint32(ip1)
+		ipUint32 := ip1
 		stat, exists := m.Get(ipUint32)
 		if !exists {
 			t.Fatalf("Expected IP stat to exist after insert")
@@ -546,23 +546,23 @@ func TestAddIPStat(t *testing.T) {
 		}
 		addIPStat(m, ip1, ti1)
 		addIPStat(m, ip2, ti2)
-		if _, exists := m.Get(iputils.IPToUint32(ip1)); !exists {
+		if _, exists := m.Get(ip1); !exists {
 			t.Errorf("Expected ip1 to exist in map")
 		}
-		if _, exists := m.Get(iputils.IPToUint32(ip2)); !exists {
+		if _, exists := m.Get(ip2); !exists {
 			t.Errorf("Expected ip2 to exist in map")
 		}
 	})
 }
 func TestRemoveIPStat(t *testing.T) {
 	now := time.Now()
-	ip1 := net.ParseIP("192.168.1.1")
-	ip2 := net.ParseIP("192.168.1.2")
+	ip1 := iputils.IPToUint32(net.ParseIP("192.168.1.1"))
+	ip2 := iputils.IPToUint32(net.ParseIP("192.168.1.2"))
 
 	t.Run("Delete from empty map does nothing", func(t *testing.T) {
 		m := haxmap.New[uint32, IPStat](8)
 		removeIPStat(m, ip1)
-		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
+		if _, exists := m.Get(ip1); exists {
 			t.Errorf("Expected ip1 to not exist in map")
 		}
 	})
@@ -573,9 +573,9 @@ func TestRemoveIPStat(t *testing.T) {
 			Last:  now,
 			Count: 1,
 		}
-		m.Set(iputils.IPToUint32(ip1), stat)
+		m.Set(ip1, stat)
 		removeIPStat(m, ip1)
-		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
+		if _, exists := m.Get(ip1); exists {
 			t.Errorf("Expected ip1 to be deleted from map")
 		}
 	})
@@ -586,9 +586,9 @@ func TestRemoveIPStat(t *testing.T) {
 			Last:  now,
 			Count: 3,
 		}
-		m.Set(iputils.IPToUint32(ip1), stat)
+		m.Set(ip1, stat)
 		removeIPStat(m, ip1)
-		got, exists := m.Get(iputils.IPToUint32(ip1))
+		got, exists := m.Get(ip1)
 		if !exists {
 			t.Fatalf("Expected ip1 to still exist in map")
 		}
@@ -603,9 +603,9 @@ func TestRemoveIPStat(t *testing.T) {
 			Last:  now,
 			Count: 1,
 		}
-		m.Set(iputils.IPToUint32(ip1), stat)
+		m.Set(ip1, stat)
 		removeIPStat(m, ip1)
-		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
+		if _, exists := m.Get(ip1); exists {
 			t.Errorf("Expected ip1 to be deleted from map")
 		}
 	})
@@ -620,13 +620,13 @@ func TestRemoveIPStat(t *testing.T) {
 			Last:  now,
 			Count: 1,
 		}
-		m.Set(iputils.IPToUint32(ip1), stat1)
-		m.Set(iputils.IPToUint32(ip2), stat2)
+		m.Set(ip1, stat1)
+		m.Set(ip2, stat2)
 		removeIPStat(m, ip1)
-		if _, exists := m.Get(iputils.IPToUint32(ip1)); exists {
+		if _, exists := m.Get(ip1); exists {
 			t.Errorf("Expected ip1 to be deleted from map")
 		}
-		if _, exists := m.Get(iputils.IPToUint32(ip2)); !exists {
+		if _, exists := m.Get(ip2); !exists {
 			t.Errorf("Expected ip2 to still exist in map")
 		}
 	})
@@ -635,8 +635,7 @@ func TestRemoveIPStat_DecrementKeepsEntry(t *testing.T) {
 	// Verify that removeIPStat decrements the count and keeps the entry when
 	// the count stays above zero.
 	m := haxmap.New[uint32, IPStat](8)
-	ip := net.ParseIP("10.0.0.1")
-	ipUint32 := iputils.IPToUint32(ip)
+	ipUint32 := iputils.IPToUint32(net.ParseIP("10.0.0.1"))
 
 	stat := IPStat{
 		Last:  time.Now(),
@@ -644,7 +643,7 @@ func TestRemoveIPStat_DecrementKeepsEntry(t *testing.T) {
 	}
 	m.Set(ipUint32, stat)
 
-	removeIPStat(m, ip)
+	removeIPStat(m, ipUint32)
 
 	got, exists := m.Get(ipUint32)
 	if !exists {
@@ -657,9 +656,9 @@ func TestRemoveIPStat_DecrementKeepsEntry(t *testing.T) {
 
 func TestSlidingWindow_Update(t *testing.T) {
 	now := time.Now()
-	ip1 := net.ParseIP("192.168.1.1")
-	ip2 := net.ParseIP("192.168.1.2")
-	ip3 := net.ParseIP("192.168.1.3")
+	ip1 := iputils.IPToUint32(net.ParseIP("192.168.1.1"))
+	ip2 := iputils.IPToUint32(net.ParseIP("192.168.1.2"))
+	ip3 := iputils.IPToUint32(net.ParseIP("192.168.1.3"))
 
 	t.Run("Update inserts new IPs and drops none if within window and maxEntries", func(t *testing.T) {
 		s := NewSlidingWindowTrie(10*time.Second, 10)
@@ -691,13 +690,13 @@ func TestSlidingWindow_Update(t *testing.T) {
 		if len(s.IPQueue) != 1 {
 			t.Errorf("Expected 1 IP in queue, got %d", len(s.IPQueue))
 		}
-		if !s.IPQueue[0].IP.Equal(ip2) {
+		if s.IPQueue[0].IP != ip2 {
 			t.Errorf("Expected remaining IP to be ip2, got %v", s.IPQueue[0].IP)
 		}
 		if s.IPStats.Len() != 1 {
 			t.Errorf("Expected 1 IP stat, got %d", s.IPStats.Len())
 		}
-		val, exists := s.IPStats.Get(iputils.IPToUint32(ip2))
+		val, exists := s.IPStats.Get(ip2)
 		if !exists {
 			t.Fatalf("Expected ip2 to exist in stats")
 		}
@@ -720,7 +719,7 @@ func TestSlidingWindow_Update(t *testing.T) {
 			t.Errorf("Expected 2 IPs in queue, got %d", len(s.IPQueue))
 		}
 		// Should keep the last two inserted
-		if !s.IPQueue[0].IP.Equal(ip2) || !s.IPQueue[1].IP.Equal(ip3) {
+		if s.IPQueue[0].IP != ip2 || s.IPQueue[1].IP != ip3 {
 			t.Errorf("Expected queue to have ip2 and ip3, got %v and %v", s.IPQueue[0].IP, s.IPQueue[1].IP)
 		}
 	})
@@ -737,7 +736,7 @@ func TestSlidingWindow_Update(t *testing.T) {
 		if len(s.IPQueue) != 1 {
 			t.Errorf("Expected 1 IP in queue, got %d", len(s.IPQueue))
 		}
-		val, exists := s.IPStats.Get(iputils.IPToUint32(ip1))
+		val, exists := s.IPStats.Get(ip1)
 		if !exists {
 			t.Fatalf("Expected ip1 to exist in stats")
 		}
@@ -761,7 +760,7 @@ func TestSlidingWindow_Update(t *testing.T) {
 		if s.IPStats.Len() != 0 {
 			t.Errorf("Expected 0 IP stats, got %d", s.IPStats.Len())
 		}
-		if _, exists := s.IPStats.Get(iputils.IPToUint32(ip1)); exists {
+		if _, exists := s.IPStats.Get(ip1); exists {
 			t.Errorf("Expected ip1 to be deleted from stats")
 		}
 	})
@@ -777,7 +776,7 @@ func TestSlidingWindow_ClusterDetection(t *testing.T) {
 	batch := make([]TimedIP, 5000)
 	for i := range batch {
 		v := i + 1
-		ip := net.IPv4(10, 20, byte(v/256), byte(v%256))
+		ip := iputils.IPToUint32(net.IPv4(10, 20, byte(v/256), byte(v%256)))
 		batch[i] = TimedIP{IP: ip, Time: now}
 	}
 	s.Update(batch)
@@ -811,9 +810,9 @@ func TestSlidingWindow_EvictionByTime_Ordering(t *testing.T) {
 
 	// Insert 3 IPs at different times
 	ips := []TimedIP{
-		{IP: net.ParseIP("10.0.0.1"), Time: now.Add(-10 * time.Second)}, // expired
-		{IP: net.ParseIP("10.0.0.2"), Time: now.Add(-7 * time.Second)},  // expired
-		{IP: net.ParseIP("10.0.0.3"), Time: now.Add(-2 * time.Second)},  // active
+		{IP: iputils.IPToUint32(net.ParseIP("10.0.0.1")), Time: now.Add(-10 * time.Second)}, // expired
+		{IP: iputils.IPToUint32(net.ParseIP("10.0.0.2")), Time: now.Add(-7 * time.Second)},  // expired
+		{IP: iputils.IPToUint32(net.ParseIP("10.0.0.3")), Time: now.Add(-2 * time.Second)},  // active
 	}
 	s.InsertNew(ips)
 
@@ -827,8 +826,8 @@ func TestSlidingWindow_EvictionByTime_Ordering(t *testing.T) {
 		t.Fatalf("Expected 1 IP after cleanup, got %d", len(s.IPQueue))
 	}
 
-	if !s.IPQueue[0].IP.Equal(net.ParseIP("10.0.0.3")) {
-		t.Errorf("Expected remaining IP to be 10.0.0.3, got %v", s.IPQueue[0].IP)
+	if s.IPQueue[0].IP != iputils.IPToUint32(net.ParseIP("10.0.0.3")) {
+		t.Errorf("Expected remaining IP to be 10.0.0.3, got %v", iputils.Uint32ToIP(s.IPQueue[0].IP))
 	}
 
 	// Trie should also only have 1 entry
@@ -847,7 +846,7 @@ func TestSlidingWindow_EvictionBySize_OldestFirst(t *testing.T) {
 	ips := make([]TimedIP, 5)
 	for i := range ips {
 		ips[i] = TimedIP{
-			IP:   net.IPv4(10, 0, 0, byte(i+1)),
+			IP:   iputils.IPToUint32(net.IPv4(10, 0, 0, byte(i+1))),
 			Time: now.Add(time.Duration(i) * time.Second),
 		}
 	}
@@ -863,9 +862,9 @@ func TestSlidingWindow_EvictionBySize_OldestFirst(t *testing.T) {
 
 	// Verify the kept IPs are 10.0.0.3, 10.0.0.4, 10.0.0.5
 	for i, qip := range s.IPQueue {
-		expected := net.IPv4(10, 0, 0, byte(i+3))
-		if !qip.IP.Equal(expected) {
-			t.Errorf("Queue[%d]: expected %v, got %v", i, expected, qip.IP)
+		expected := iputils.IPToUint32(net.IPv4(10, 0, 0, byte(i+3)))
+		if qip.IP != expected {
+			t.Errorf("Queue[%d]: expected %v, got %v", i, iputils.Uint32ToIP(expected), iputils.Uint32ToIP(qip.IP))
 		}
 	}
 }
@@ -876,7 +875,7 @@ func TestSlidingWindow_IPStatAccumulation(t *testing.T) {
 	s := NewSlidingWindowTrie(60*time.Second, 100)
 	now := time.Now()
 
-	ip := net.ParseIP("192.168.1.1")
+	ip := iputils.IPToUint32(net.ParseIP("192.168.1.1"))
 	ips := []TimedIP{
 		{IP: ip, Time: now},
 		{IP: ip, Time: now.Add(2 * time.Second)},
@@ -884,7 +883,7 @@ func TestSlidingWindow_IPStatAccumulation(t *testing.T) {
 	}
 	s.Update(ips)
 
-	stat, exists := s.IPStats.Get(iputils.IPToUint32(ip))
+	stat, exists := s.IPStats.Get(ip)
 	if !exists {
 		t.Fatal("Expected IP stat to exist")
 	}
@@ -923,8 +922,8 @@ func TestSlidingWindowMemoryBoundedByWindow(t *testing.T) {
 	// A fully distinct IP for every single insert across all cycles, so a
 	// leaking trie would accumulate cycles*perCycle = 40,000 distinct leaves.
 	var counter uint32 = 1
-	nextIP := func() net.IP {
-		ip := iputils.Uint32ToIP(counter)
+	nextIP := func() uint32 {
+		ip := counter
 		counter++
 		return ip
 	}

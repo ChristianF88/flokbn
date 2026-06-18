@@ -16,6 +16,16 @@ func BenchmarkSlidingWindowUpdate(b *testing.B) {
 		b.Fatalf("Failed to generate random IPs: %v", err)
 	}
 
+	// Pre-convert net.IP -> uint32 OUTSIDE the timed region. TimedIP.IP is now a
+	// uint32 (AUDIT-05); doing the conversion here keeps the benchmark measuring
+	// window ops (insert/evict) rather than the one-time IPToUint32 cost, so the
+	// allocs/op reduction from dropping the per-request net.IP is attributable to
+	// the window path and not muddied by setup conversions.
+	ipsU32 := make([]uint32, len(Ips))
+	for i := range Ips {
+		ipsU32[i] = iputils.IPToUint32(Ips[i])
+	}
+
 	batchSize := 1000
 
 	b.ResetTimer() // Start timing after setup
@@ -25,9 +35,9 @@ func BenchmarkSlidingWindowUpdate(b *testing.B) {
 		timedIPs := make([]TimedIP, 0, batchSize)
 		b.StartTimer()
 
-		for u := 0; u < len(Ips); u++ {
+		for u := 0; u < len(ipsU32); u++ {
 			timedIPs = append(timedIPs, TimedIP{
-				IP:   Ips[u],
+				IP:   ipsU32[u],
 				Time: time.Now(),
 			})
 

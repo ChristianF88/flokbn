@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ChristianF88/flokbn/config"
+	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/ChristianF88/flokbn/sliding"
@@ -81,7 +82,7 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 
 	w := sliding.NewSlidingWindowTrie(24*time.Hour, 1000)
 	now := time.Now()
-	w.InsertNew([]sliding.TimedIP{{IP: net.IPv4(10, 0, 0, 1), Time: now}})
+	w.InsertNew([]sliding.TimedIP{{IP: iputils.IPToUint32(net.IPv4(10, 0, 0, 1)), Time: now}})
 	windows := []slidingWindowInstance{{name: "w", window: w, config: &config.SlidingTrieConfig{}}}
 
 	// Iteration 1 computes top talkers.
@@ -169,7 +170,7 @@ func BenchmarkBuildSnapshot(b *testing.B) {
 	timed := make([]sliding.TimedIP, 0, 10000)
 	for i := 0; i < 10000; i++ {
 		timed = append(timed, sliding.TimedIP{
-			IP:   net.IPv4(10, byte(i>>16), byte(i>>8), byte(i)),
+			IP:   iputils.IPToUint32(net.IPv4(10, byte(i>>16), byte(i>>8), byte(i))),
 			Time: now,
 		})
 	}

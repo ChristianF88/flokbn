@@ -221,8 +221,17 @@ func (t *Trie) insertUint32WithCount(val uint32, count uint32) {
 //     resident for the allocator's lifetime; the sliding window therefore also
 //     periodically rebuilds its trie from a fresh allocator to bound RSS.
 func (t *Trie) Delete(ip net.IP) {
+	t.DeleteUint32(iputils.IPToUint32(ip))
+}
+
+// DeleteUint32 removes a uint32 IP directly, eliminating the net.IP -> uint32
+// conversion. It is the implementation behind Delete(net.IP) (which simply
+// converts then delegates here), so the bit walk, underflow guard, and
+// deepest-first pruning are byte-identical for the net.IP and uint32 entry
+// points. The single-goroutine sliding window calls this directly to avoid the
+// per-evict round-trip; the TCP/static paths keep using Delete(net.IP).
+func (t *Trie) DeleteUint32(val uint32) {
 	node := t.Root
-	val := iputils.IPToUint32(ip)
 
 	// path[k] is the node reached after matching bit position (31-k); its
 	// parent is path[k-1] (or Root when k==0). bitAt[k] is the child slot in
