@@ -10,7 +10,7 @@ import (
 // This file locks in the IPv4-only boundary fix in loadCIDRFile. net.ParseCIDR
 // accepts IPv6, which would otherwise reach the uint32 numeric hot path in the
 // cidr package and corrupt IPv4 ban computation. loadCIDRFile now rejects any
-// non-IPv4 CIDR with a clear "IPv6 CIDR not supported" error at the boundary.
+// non-IPv4 CIDR with a clear "IPv6 not supported" error at the boundary.
 
 // An IPv6 CIDR line must be rejected with a clear error.
 func TestLoadCIDRFile_RejectsIPv6(t *testing.T) {
@@ -23,7 +23,7 @@ func TestLoadCIDRFile_RejectsIPv6(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for IPv6 CIDR, got nil")
 	}
-	if !strings.Contains(err.Error(), "IPv6 CIDR not supported") {
+	if !strings.Contains(err.Error(), "IPv6 not supported") {
 		t.Fatalf("error does not mention IPv6/not supported: %v", err)
 	}
 }
@@ -40,7 +40,7 @@ func TestLoadCIDRFile_RejectsIPv6DefaultRoute(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for ::/0, got nil")
 	}
-	if !strings.Contains(err.Error(), "IPv6 CIDR not supported") {
+	if !strings.Contains(err.Error(), "IPv6 not supported") {
 		t.Fatalf("error does not mention IPv6/not supported: %v", err)
 	}
 }
@@ -58,7 +58,7 @@ func TestLoadCIDRFile_RejectsMappedIPv6(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for IPv4-mapped IPv6 CIDR, got nil")
 	}
-	if !strings.Contains(err.Error(), "IPv6 CIDR not supported") {
+	if !strings.Contains(err.Error(), "IPv6 not supported") {
 		t.Fatalf("error does not mention IPv6/not supported: %v", err)
 	}
 }
@@ -105,10 +105,10 @@ func TestLoadCIDRFile_MixedFileErrorsAtIPv6Line(t *testing.T) {
 		t.Fatal("expected error for mixed IPv4/IPv6 file, got nil")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "IPv6 CIDR not supported") {
+	if !strings.Contains(msg, "IPv6 not supported") {
 		t.Fatalf("error does not mention IPv6/not supported: %v", err)
 	}
-	if !strings.Contains(msg, "line 3") {
+	if !strings.Contains(msg, ":3:") {
 		t.Fatalf("error does not point at line 3 (the IPv6 line): %v", err)
 	}
 	// Sanity: the offending line text should be echoed for operator clarity.
@@ -134,7 +134,7 @@ func TestLoadCIDRFile_IPv6LineNumberWithCommentsAndBlanks(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for IPv6 line, got nil")
 	}
-	if !strings.Contains(err.Error(), "line 4") {
+	if !strings.Contains(err.Error(), ":4:") {
 		t.Fatalf("error does not point at line 4 (IPv6 line after comment+blank): %v", err)
 	}
 }

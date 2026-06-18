@@ -481,7 +481,7 @@ func TestLoadCIDRFile_InlineCommentStillValidatesAndRejectsIPv6(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected IPv6 rejection even with inline comment, got nil")
 	}
-	if !strings.Contains(err.Error(), "IPv6 CIDR not supported") {
+	if !strings.Contains(err.Error(), "IPv6 not supported") {
 		t.Fatalf("error should mention IPv6 not supported, got: %v", err)
 	}
 }

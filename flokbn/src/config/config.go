@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -112,6 +113,19 @@ type LogConfig struct {
 // [live] section does not specify a readTimeout.
 const DefaultLiveReadTimeout = 5 * time.Second
 
+// globalScalarKeys are the recognized keys of the [global] section. It backs
+// the valid-set hint on parseGlobalConfig's unknown-key rejection (via
+// wantKeysFromSet); parseGlobalConfig's own dispatch is a hardcoded switch and
+// does not read this map.
+var globalScalarKeys = map[string]struct{}{
+	"jailFile":           {},
+	"banFile":            {},
+	"whitelist":          {},
+	"blacklist":          {},
+	"userAgentWhitelist": {},
+	"userAgentBlacklist": {},
+}
+
 // staticScalarKeys are the recognized scalar keys of the [static] section.
 // Any other [static] sub-key is treated as a trie sub-table. This set is the
 // single source of truth shared by LoadConfig's dispatch and parseStaticConfig's
@@ -123,8 +137,9 @@ var staticScalarKeys = map[string]struct{}{
 }
 
 // liveScalarKeys are the recognized scalar keys of the [live] section. Any
-// other [live] sub-key is treated as a sliding-trie sub-table. Shared by
-// LoadConfig's dispatch and parseLiveConfig's strict unknown-key check.
+// other [live] sub-key is treated as a sliding-trie sub-table. Used by
+// LoadConfig's dispatch to split [live] scalars from sliding-trie sub-tables;
+// parseLiveConfig's strict unknown-key check uses the narrower liveSectionKeys.
 var liveScalarKeys = map[string]struct{}{
 	"port":                   {},
 	"readTimeout":            {},
@@ -133,6 +148,24 @@ var liveScalarKeys = map[string]struct{}{
 	"slidingWindowMaxTime":   {},
 	"slidingWindowMaxSize":   {},
 	"sleepBetweenIterations": {},
+}
+
+// liveSectionKeys are the scalar keys parseLiveConfig actually accepts on the
+// [live] table itself (a subset of liveScalarKeys: the remaining liveScalarKeys
+// are sliding-trie params consumed under [live.<name>], not on [live]). It backs
+// the valid-set hint on parseLiveConfig's unknown-key rejection.
+var liveSectionKeys = map[string]struct{}{
+	"port":        {},
+	"readTimeout": {},
+	"statsListen": {},
+	"topTalkers":  {},
+}
+
+// logScalarKeys are the recognized keys of the [log] section. It backs the
+// valid-set hint on parseLogConfig's unknown-key rejection.
+var logScalarKeys = map[string]struct{}{
+	"level":  {},
+	"format": {},
 }
 
 // trieKeys are the recognized keys of a [static.<name>] trie sub-table.
@@ -225,7 +258,7 @@ func LoadConfig(configPath string) (*Config, error) {
 						continue
 					}
 					if trieMap, ok := subValue.(map[string]any); ok {
-						trieConfig, err := parseTrieConfig(trieMap)
+						trieConfig, err := parseTrieConfig(subKey, trieMap)
 						if err != nil {
 							return nil, fmt.Errorf("parsing trie config %q: %w", subKey, err)
 						}
@@ -251,16 +284,15 @@ func LoadConfig(configPath string) (*Config, error) {
 				}
 				config.Live = liveConfig
 				// Parse live tries from nested config. Only the recognized
-				// scalar keys (liveScalarKeys — the same set parseLiveConfig
-				// checks against) are section fields; everything else is a
-				// sliding-trie sub-table. One shared set keeps dispatch and the
-				// strict unknown-key check aligned.
+				// scalar keys (liveScalarKeys) are section fields; everything
+				// else is a sliding-trie sub-table. (parseLiveConfig validates
+				// the narrower [live]-table set, liveSectionKeys.)
 				for subKey, subValue := range liveMap {
 					if _, isScalar := liveScalarKeys[subKey]; isScalar {
 						continue
 					}
 					if trieMap, ok := subValue.(map[string]any); ok {
-						trieConfig, err := parseSlidingTrieConfig(trieMap)
+						trieConfig, err := parseSlidingTrieConfig(subKey, trieMap)
 						if err != nil {
 							return nil, fmt.Errorf("parsing sliding trie config %q: %w", subKey, err)
 						}
@@ -277,7 +309,7 @@ func LoadConfig(configPath string) (*Config, error) {
 			// and (e.g.) nullifying whitelist/blacklist filtering while the run
 			// reports success. Fail loud, naming the unknown section. Absent
 			// optional sections never appear as keys here, so omission stays valid.
-			return nil, fmt.Errorf("unknown top-level section %q", key)
+			return nil, fmt.Errorf("unknown top-level section %q (want [global], [static], [live], [log], and [static.<name>]/[live.<name>] tables)", key)
 		}
 	}
 
@@ -327,7 +359,7 @@ func parseGlobalConfig(m map[string]any) (*GlobalConfig, error) {
 		case "userAgentBlacklist":
 			err = stringField(key, &config.UserAgentBlacklist)
 		default:
-			return nil, fmt.Errorf("unknown key %q in [global] section", key)
+			return nil, fmt.Errorf("unknown key %q in [global] section %s", key, wantKeysFromSet(globalScalarKeys))
 		}
 		if err != nil {
 			return nil, err
@@ -363,7 +395,7 @@ func parseStaticConfig(m map[string]any) (*StaticConfig, error) {
 		case "plotPath":
 			err = stringField(key, &config.PlotPath)
 		default:
-			return nil, fmt.Errorf("unknown key %q in [static] section", key)
+			return nil, fmt.Errorf("unknown key %q in [static] section %s", key, wantKeysFromSet(staticScalarKeys))
 		}
 		if err != nil {
 			return nil, err
@@ -413,7 +445,7 @@ func parseLiveConfig(m map[string]any) (*LiveConfig, error) {
 			}
 			config.TopTalkers = int(v)
 		default:
-			return nil, fmt.Errorf("unknown key %q in [live] section", key)
+			return nil, fmt.Errorf("unknown key %q in [live] section %s", key, wantKeysFromSet(liveSectionKeys))
 		}
 	}
 	return config, nil
@@ -440,7 +472,7 @@ func parseLogConfig(m map[string]any) (*LogConfig, error) {
 			}
 			config.Format = v
 		default:
-			return nil, fmt.Errorf("unknown key %q in [log] section (want level, format)", key)
+			return nil, fmt.Errorf("unknown key %q in [log] section %s", key, wantKeysFromSet(logScalarKeys))
 		}
 	}
 	if err := logging.Validate(config.Level, config.Format); err != nil {
@@ -469,13 +501,27 @@ func parseRegexFields(m map[string]any) (useragentRegex, endpointRegex string, e
 	return useragentRegex, endpointRegex, nil
 }
 
+// wantKeysFromSet renders a recognized-key set as a deterministic
+// "(want: a, b, c)" suffix for unknown-key errors. Keys are sorted so the
+// emitted text is stable (tests assert on it). The valid set is always listed
+// on a rejection so an operator knows exactly which key to use.
+func wantKeysFromSet(allowed map[string]struct{}) string {
+	keys := make([]string, 0, len(allowed))
+	for k := range allowed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return "(want: " + strings.Join(keys, ", ") + ")"
+}
+
 // checkUnknownKeys returns an error if m contains any key not in allowed,
-// naming the offending key and section. Shared by the trie parsers so a
-// misspelled key (e.g. useForjail, clusterArgSet) fails loud at load time.
+// naming the offending key and section AND listing the valid set. Shared by
+// the trie parsers so a misspelled key (e.g. useForjail, clusterArgSet) fails
+// loud at load time with an actionable message.
 func checkUnknownKeys(m map[string]any, allowed map[string]struct{}, section string) error {
 	for key := range m {
 		if _, ok := allowed[key]; !ok {
-			return fmt.Errorf("unknown key %q in %s section", key, section)
+			return fmt.Errorf("unknown key %q in %s section %s", key, section, wantKeysFromSet(allowed))
 		}
 	}
 	return nil
@@ -562,8 +608,8 @@ func parseUseForJail(m map[string]any) ([]bool, error) {
 	return result, nil
 }
 
-func parseTrieConfig(m map[string]any) (*TrieConfig, error) {
-	if err := checkUnknownKeys(m, trieKeys, "trie"); err != nil {
+func parseTrieConfig(name string, m map[string]any) (*TrieConfig, error) {
+	if err := checkUnknownKeys(m, trieKeys, "[static."+name+"] trie"); err != nil {
 		return nil, err
 	}
 	uaRegex, epRegex, err := parseRegexFields(m)
@@ -652,13 +698,13 @@ func validateCIDRRangeEntry(field string, i int, str string) error {
 		return fmt.Errorf("invalid %s[%d] %q: %w", field, i, str, err)
 	}
 	if len(ipNet.Mask) != 4 {
-		return fmt.Errorf("IPv6 CIDR not supported (IPv4-only tool) in %s[%d]: %s", field, i, str)
+		return fmt.Errorf("IPv6 not supported (IPv4-only tool) in %s[%d]: %q", field, i, str)
 	}
 	return nil
 }
 
-func parseSlidingTrieConfig(m map[string]any) (*SlidingTrieConfig, error) {
-	if err := checkUnknownKeys(m, slidingTrieKeys, "sliding trie"); err != nil {
+func parseSlidingTrieConfig(name string, m map[string]any) (*SlidingTrieConfig, error) {
+	if err := checkUnknownKeys(m, slidingTrieKeys, "[live."+name+"] sliding-trie"); err != nil {
 		return nil, err
 	}
 	uaRegex, epRegex, err := parseRegexFields(m)
@@ -781,11 +827,11 @@ func (c *Config) GetReadTimeout() time.Duration {
 
 func (c *Config) ValidateLive() error {
 	if c.Live == nil {
-		return fmt.Errorf("live configuration section is required")
+		return fmt.Errorf("live config section is required")
 	}
 
 	if c.Live.Port == "" {
-		return fmt.Errorf("port is required in live configuration")
+		return fmt.Errorf("port is required in live config")
 	}
 
 	if c.Live.StatsListen != "" {
@@ -801,15 +847,15 @@ func (c *Config) ValidateLive() error {
 
 	// Validate required global fields for live mode
 	if c.Global == nil {
-		return fmt.Errorf("global configuration section is required for live mode")
+		return fmt.Errorf("global config section is required for live mode")
 	}
 
 	if c.Global.JailFile == "" {
-		return fmt.Errorf("jailFile is required in global configuration for live mode")
+		return fmt.Errorf("jailFile is required in global config for live mode")
 	}
 
 	if c.Global.BanFile == "" {
-		return fmt.Errorf("banFile is required in global configuration for live mode")
+		return fmt.Errorf("banFile is required in global config for live mode")
 	}
 
 	// Validate that at least one LiveTries configuration exists
@@ -965,7 +1011,7 @@ func ParseClusterArgSetsFromStrings(args []string) ([]ClusterArgSet, error) {
 		return nil, nil
 	}
 	if len(args)%4 != 0 {
-		return nil, fmt.Errorf("invalid cluster argument sets: each set requires 4 values (minClusterSize,minDepth,maxDepth,meanSubnetDifference)")
+		return nil, fmt.Errorf("invalid clusterArgSets: each set requires 4 values (minClusterSize,minDepth,maxDepth,meanSubnetDifference)")
 	}
 
 	sets := make([]ClusterArgSet, 0, len(args)/4)
@@ -987,10 +1033,10 @@ func ParseClusterArgSetsFromStrings(args []string) ([]ClusterArgSet, error) {
 			return nil, fmt.Errorf("invalid meanSubnetDifference %q: %w", args[i+3], err)
 		}
 		if minDepth > maxDepth {
-			return nil, fmt.Errorf("minDepth (%.0f) must be <= maxDepth (%.0f)", minDepth, maxDepth)
+			return nil, fmt.Errorf("clusterArgSets set %d: minDepth (%d) must be <= maxDepth (%d)", i/4, uint32(minDepth), uint32(maxDepth))
 		}
 		if maxDepth > 32 {
-			return nil, fmt.Errorf("maxDepth (%.0f) must be <= 32", maxDepth)
+			return nil, fmt.Errorf("clusterArgSets set %d: maxDepth (%d) must be <= 32", i/4, uint32(maxDepth))
 		}
 		sets = append(sets, ClusterArgSet{
 			MinClusterSize:       uint32(minClusterSize),
@@ -1040,7 +1086,7 @@ func stripCommentLine(raw string) (string, bool) {
 func loadPatternFile(filename string) ([]string, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
+		return nil, fmt.Errorf("cannot open %q: %w", filename, err)
 	}
 	defer file.Close()
 
@@ -1056,7 +1102,7 @@ func loadPatternFile(filename string) ([]string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading file %s: %w", filename, err)
+		return nil, fmt.Errorf("cannot read %q: %w", filename, err)
 	}
 
 	return patterns, nil
@@ -1066,7 +1112,7 @@ func loadPatternFile(filename string) ([]string, error) {
 func loadCIDRFile(filename string) ([]string, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
+		return nil, fmt.Errorf("cannot open %q: %w", filename, err)
 	}
 	defer file.Close()
 
@@ -1079,7 +1125,7 @@ func loadCIDRFile(filename string) ([]string, error) {
 		raw := scanner.Text()
 
 		// Skip empty/comment lines and strip any trailing inline '#' comment.
-		// lineNum tracks physical lines; the original line text is echoed in
+		// lineNum tracks physical lines; the cleaned token is echoed (quoted) in
 		// diagnostics for operator clarity (ipv4_only_test.go relies on this).
 		line, ok := stripCommentLine(raw)
 		if !ok {
@@ -1089,7 +1135,7 @@ func loadCIDRFile(filename string) ([]string, error) {
 		// Validate CIDR format
 		_, ipNet, err := net.ParseCIDR(line)
 		if err != nil {
-			return nil, fmt.Errorf("invalid CIDR format at line %d in %s: %s", lineNum, filename, strings.TrimSpace(raw))
+			return nil, fmt.Errorf("invalid CIDR format in %s:%d: %q", filename, lineNum, line)
 		}
 		// IPv4-only tool: reject IPv6 at the boundary (fail-loud). net.ParseCIDR
 		// accepts IPv6, which would otherwise reach the uint32 numeric hot path.
@@ -1097,14 +1143,14 @@ func loadCIDRFile(filename string) ([]string, error) {
 		// a non-nil To4() but a 16-byte mask; the mask is 4 bytes only for
 		// IPv4-notation CIDRs, so len != 4 rejects every IPv6 form.
 		if len(ipNet.Mask) != 4 {
-			return nil, fmt.Errorf("IPv6 CIDR not supported (IPv4-only tool) at line %d in %s: %s", lineNum, filename, line)
+			return nil, fmt.Errorf("IPv6 not supported (IPv4-only tool) in %s:%d: %q", filename, lineNum, line)
 		}
 
 		cidrs = append(cidrs, line)
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading file %s: %w", filename, err)
+		return nil, fmt.Errorf("cannot read %q: %w", filename, err)
 	}
 
 	return cidrs, nil

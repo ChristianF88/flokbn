@@ -310,7 +310,7 @@ func TestStaticCommandValidation(t *testing.T) {
 				"--logfile", tmpFile.Name(),
 				"--clusterArgSets", "1000,24,32"},
 			expectError: true,
-			errorMatch:  "invalid cluster argument sets",
+			errorMatch:  "invalid clusterArgSets",
 		},
 	}
 
