@@ -9,97 +9,60 @@ import (
 	"github.com/ChristianF88/flokbn/config"
 )
 
-func TestInvalidTimeFormatGeneratesWarning(t *testing.T) {
-	// Create a temp directory for test files
+// TestInvalidTimeFormatGeneratesDiagnostic was TestInvalidTimeFormatGeneratesWarning.
+// CFG-01 moved the malformed-timestamp check from an analysis-time warning to a
+// config-load diagnostic that fails loud at the pre-work barrier. The check no
+// longer lives in analysis.Static (the exported StartTimeRaw field is gone), so
+// this drives config.Validate(StaticMode) directly.
+func TestInvalidTimeFormatGeneratesDiagnostic(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create a minimal log file
-	logFile := filepath.Join(tmpDir, "test.log")
-	logContent := `192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] "GET /test HTTP/1.1" 200 100 "-" "Mozilla/5.0" "192.168.1.1"
-192.168.1.2 - - [01/Jan/2025:00:00:01 +0000] "GET /test HTTP/1.1" 200 100 "-" "Mozilla/5.0" "192.168.1.2"
+	configContent := `
+[static.test_trie]
+startTime = "2025-01-01T00:00:00"
 `
-	err := os.WriteFile(logFile, []byte(logContent), 0644)
+	configFile := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to create config file: %v", err)
+	}
+
+	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
-		t.Fatalf("Failed to create log file: %v", err)
+		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Create jail and ban files
-	jailFile := filepath.Join(tmpDir, "jail.json")
-	banFile := filepath.Join(tmpDir, "ban.txt")
-	err = os.WriteFile(jailFile, []byte("{}"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create jail file: %v", err)
+	diags := cfg.Validate(config.StaticMode)
+	if !diags.HasErrors() {
+		t.Fatalf("Expected diagnostics for invalid startTime, got none")
 	}
-	err = os.WriteFile(banFile, []byte(""), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create ban file: %v", err)
-	}
-
-	// Create config with invalid time format (missing Z)
-	cfg := &config.Config{
-		Global: &config.GlobalConfig{
-			JailFile: jailFile,
-			BanFile:  banFile,
-		},
-		Static: &config.StaticConfig{
-			LogFile:   logFile,
-			LogFormat: "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%^\"",
-		},
-		StaticTries: map[string]*config.TrieConfig{
-			"test_trie": {
-				StartTimeRaw: "2025-01-01T00:00:00", // Invalid - missing Z
-				// StartTime is nil because parsing failed
-			},
-		},
-	}
-
-	// Run analysis
-	result, err := Static(cfg)
-	if err != nil {
-		t.Fatalf("Analysis failed: %v", err)
-	}
-
-	// Check for warning
-	foundWarning := false
-	for _, warning := range result.Warnings {
-		if warning.Type == "invalid_time_format" {
-			foundWarning = true
-			t.Logf("Found expected warning: %s", warning.Message)
-			break
-		}
-	}
-
-	if !foundWarning {
-		t.Errorf("Expected warning for invalid time format, but none found. Warnings: %+v", result.Warnings)
+	if report := diags.Report(); !strings.Contains(report, "[static.test_trie] invalid startTime") {
+		t.Errorf("Expected startTime diagnostic, got:\n%s", report)
 	}
 }
 
-func TestEndTimeBeforeStartTimeGeneratesWarning(t *testing.T) {
-	// Create a temp directory for test files
+// TestEndTimeBeforeStartTimeGeneratesDiagnostic was
+// TestEndTimeBeforeStartTimeGeneratesWarning. CFG-01 deleted the analysis-time
+// invalid_time_range warning; the endTime<startTime check is now a config
+// diagnostic. This drives config.Validate(StaticMode) (NOT Static()) and also
+// asserts Static() no longer emits the old invalid_time_range warning type.
+func TestEndTimeBeforeStartTimeGeneratesDiagnostic(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create a minimal log file
 	logFile := filepath.Join(tmpDir, "test.log")
 	logContent := `192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] "GET /test HTTP/1.1" 200 100 "-" "Mozilla/5.0" "192.168.1.1"
 `
-	err := os.WriteFile(logFile, []byte(logContent), 0644)
-	if err != nil {
+	if err := os.WriteFile(logFile, []byte(logContent), 0644); err != nil {
 		t.Fatalf("Failed to create log file: %v", err)
 	}
-
-	// Create jail and ban files
 	jailFile := filepath.Join(tmpDir, "jail.json")
 	banFile := filepath.Join(tmpDir, "ban.txt")
-	err = os.WriteFile(jailFile, []byte("{}"), 0644)
-	if err != nil {
+	if err := os.WriteFile(jailFile, []byte("{}"), 0644); err != nil {
 		t.Fatalf("Failed to create jail file: %v", err)
 	}
-	err = os.WriteFile(banFile, []byte(""), 0644)
-	if err != nil {
+	if err := os.WriteFile(banFile, []byte(""), 0644); err != nil {
 		t.Fatalf("Failed to create ban file: %v", err)
 	}
 
-	// Load config with endTime BEFORE startTime (invalid)
 	configContent := `
 [global]
 jailFile = "` + jailFile + `"
@@ -114,8 +77,7 @@ startTime = "2025-01-15T00:00:00Z"
 endTime = "2025-01-01T00:00:00Z"
 `
 	configFile := filepath.Join(tmpDir, "config.toml")
-	err = os.WriteFile(configFile, []byte(configContent), 0644)
-	if err != nil {
+	if err := os.WriteFile(configFile, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to create config file: %v", err)
 	}
 
@@ -124,24 +86,26 @@ endTime = "2025-01-01T00:00:00Z"
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Run analysis
+	// The range diagnostic is now surfaced by Validate, not by Static().
+	diags := cfg.Validate(config.StaticMode)
+	if !diags.HasErrors() {
+		t.Fatalf("Expected range diagnostic for endTime before startTime, got none")
+	}
+	if report := diags.Report(); !strings.Contains(report, "[static.test_trie] endTime") ||
+		!strings.Contains(report, "is before startTime") {
+		t.Errorf("Expected endTime<startTime range diagnostic, got:\n%s", report)
+	}
+
+	// The old analysis-time invalid_time_range warning is gone: Static() must not
+	// emit it (the bounds parse validly, so analysis still runs).
 	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
-
-	// Check for warning about invalid time range
-	foundWarning := false
 	for _, warning := range result.Warnings {
 		if warning.Type == "invalid_time_range" {
-			foundWarning = true
-			t.Logf("Found expected warning: %s", warning.Message)
-			break
+			t.Errorf("Static() should no longer emit invalid_time_range warning: %s", warning.Message)
 		}
-	}
-
-	if !foundWarning {
-		t.Errorf("Expected warning for endTime before startTime, but none found. Warnings: %+v", result.Warnings)
 	}
 }
 
@@ -420,13 +384,18 @@ startTime = "2025-01-01T00:00:00Z"
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
+	// Valid bounds produce no config diagnostics (would fail loud at the barrier).
+	if diags := cfg.Validate(config.StaticMode); diags.HasErrors() {
+		t.Errorf("Unexpected diagnostics for valid time format:\n%s", diags.Report())
+	}
+
 	// Run analysis
 	result, err := Static(cfg)
 	if err != nil {
 		t.Fatalf("Analysis failed: %v", err)
 	}
 
-	// Check that there's NO invalid_time_format warning
+	// And no residual invalid_time_format warning from the analysis path.
 	for _, warning := range result.Warnings {
 		if warning.Type == "invalid_time_format" {
 			t.Errorf("Unexpected warning for valid time format: %s", warning.Message)

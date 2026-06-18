@@ -58,6 +58,15 @@ func StaticFromConfig(cfg *config.Config, compact, plain, tui bool) error {
 
 // executeStaticAnalysis handles all static analysis - CLI or config file, doesn't matter
 func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error {
+	// Pre-work barrier. It lives here, the single choke point that TUI, plot,
+	// jail/ban, log parse and clustering all cross, rather than in the CLI
+	// handlers, so any future caller of executeStaticAnalysis inherits the gate.
+	// (validateLogFileExists/validatePlotPath in the config-mode handler still
+	// run before this; they are I/O stat fail-fasts that CFG-02 folds in.)
+	if err := barrier(cfg.Validate(config.StaticMode)); err != nil {
+		return err
+	}
+
 	// Route to TUI if requested
 	if outputConfig.TUI {
 		return executeTUI(cfg)
@@ -172,6 +181,15 @@ type slidingWindowInstance struct {
 
 // executeLiveAnalysis runs live mode analysis - works for both CLI and config file inputs
 func executeLiveAnalysis(cfg *config.Config) error {
+	// Pre-work barrier, first statement so it precedes both the ingest bind
+	// (NewTCPIngestor below) and the stats bind (newStatsServer): no path reaches
+	// either listener when config diagnostics are non-empty. (ValidateLive /
+	// logging.Setup in the config-mode handler still run before this; CFG-02
+	// migrates them.)
+	if err := barrier(cfg.Validate(config.LiveMode)); err != nil {
+		return err
+	}
+
 	if len(cfg.LiveTries) == 0 {
 		return fmt.Errorf("at least one sliding window is required in live mode (e.g. [live.<name>])")
 	}

@@ -450,22 +450,24 @@ func handleStaticFlagsMode(c *cli.Context) error {
 		return err
 	}
 
-	// Parse time arguments
+	// Parse time arguments. A malformed --startTime/--endTime still hard-errors
+	// here (parseFlexibleTime); the parsed bound is recorded WITH its original
+	// literal so the CFG-01 range diagnostic (endTime<startTime) can echo the
+	// user's text. The barrier fires the range check downstream when both bounds
+	// are zone-equal (both flexible flags are zone-less => offset-equal).
 	if start := c.String("startTime"); start != "" {
 		st, hasOffset, err := parseFlexibleTime(start)
 		if err != nil {
 			return fmt.Errorf("parsing --startTime: %w", err)
 		}
-		trieConfig.StartTime = &st
-		trieConfig.StartTimeHasOffset = hasOffset
+		trieConfig.SetStartTimeBound(st, hasOffset, start)
 	}
 	if end := c.String("endTime"); end != "" {
 		et, hasOffset, err := parseFlexibleTime(end)
 		if err != nil {
 			return fmt.Errorf("parsing --endTime: %w", err)
 		}
-		trieConfig.EndTime = &et
-		trieConfig.EndTimeHasOffset = hasOffset
+		trieConfig.SetEndTimeBound(et, hasOffset, end)
 	}
 
 	// Parse cluster arguments

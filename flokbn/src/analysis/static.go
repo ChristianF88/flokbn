@@ -286,24 +286,11 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 		return trieResult, nil, nil
 	}
 
-	// Warn if time parsing failed
-	if trieConfig.StartTimeRaw != "" && trieConfig.StartTime == nil {
-		jsonOutput.AddWarning("invalid_time_format",
-			fmt.Sprintf("Trie %q: failed to parse startTime %q - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
-				trieName, trieConfig.StartTimeRaw), 1)
-	}
-	if trieConfig.EndTimeRaw != "" && trieConfig.EndTime == nil {
-		jsonOutput.AddWarning("invalid_time_format",
-			fmt.Sprintf("Trie %q: failed to parse endTime %q - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
-				trieName, trieConfig.EndTimeRaw), 1)
-	}
-
-	// Warn if endTime is before startTime (invalid time range)
-	if trieConfig.StartTime != nil && trieConfig.EndTime != nil && trieConfig.EndTime.Before(*trieConfig.StartTime) {
-		jsonOutput.AddWarning("invalid_time_range",
-			fmt.Sprintf("Trie %q: endTime %q is before startTime %q - no requests can match this range",
-				trieName, trieConfig.EndTime.Format(time.RFC3339), trieConfig.StartTime.Format(time.RFC3339)), 1)
-	}
+	// Malformed/inverted startTime/endTime are now caught at config load and
+	// reported by the pre-work barrier (CFG-01), which fails loud before analysis
+	// runs — so the old invalid_time_format / invalid_time_range warnings here
+	// are dead and removed. The time_filter_no_results warning (below, ~line 455)
+	// is a RUNTIME observation on VALIDLY-parsed bounds and STAYS.
 
 	// Set CIDRRanges after null check
 	trieResult.Parameters.CIDRRanges = trieConfig.CIDRRanges
@@ -696,24 +683,11 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 		return trieResult
 	}
 
-	// Warn if time parsing failed (mirrors processTrie). A trie whose
-	// StartTimeRaw/EndTimeRaw failed to parse has nil StartTime/EndTime and thus
-	// reaches this unfiltered fast path — the warning must still fire.
-	if trieConfig.StartTimeRaw != "" && trieConfig.StartTime == nil {
-		jsonOutput.AddWarning("invalid_time_format",
-			fmt.Sprintf("Trie %q: failed to parse startTime %q - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
-				trieName, trieConfig.StartTimeRaw), 1)
-	}
-	if trieConfig.EndTimeRaw != "" && trieConfig.EndTime == nil {
-		jsonOutput.AddWarning("invalid_time_format",
-			fmt.Sprintf("Trie %q: failed to parse endTime %q - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
-				trieName, trieConfig.EndTimeRaw), 1)
-	}
-
-	// The time-range warning in processTrie needs both StartTime and
-	// EndTime non-nil, which forces the full (filtered) path, so it can never
-	// fire here; we mirror that by only carrying the CIDRRanges parameter (and
-	// UseForJail, which is filter independent).
+	// Malformed startTime/endTime are caught at config load and fail loud at the
+	// pre-work barrier (CFG-01) before analysis runs, so the old invalid_time_format
+	// warning that used to mirror processTrie here is dead and removed. This
+	// unfiltered fast path carries only the CIDRRanges parameter (and UseForJail,
+	// which is filter independent).
 	trieResult.Parameters.CIDRRanges = trieConfig.CIDRRanges
 	if len(trieConfig.UseForJail) > 0 {
 		trieResult.Parameters.UseForJail = trieConfig.UseForJail

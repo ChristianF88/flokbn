@@ -56,9 +56,12 @@ type TrieConfig struct {
 	StartTimeHasOffset bool `toml:"-"`
 	EndTimeHasOffset   bool `toml:"-"`
 
-	// Raw values for validation reporting when parsing fails
-	StartTimeRaw string `toml:"-"`
-	EndTimeRaw   string `toml:"-"`
+	// Original timestamp literal as written in the config, captured whenever the
+	// key was present and non-empty (on parse failure and on success). Unexported.
+	// Validate's format check is `startTimeRaw != "" && StartTime == nil`; the
+	// range diagnostic echoes these literals rather than a normalized round-trip.
+	startTimeRaw string
+	endTimeRaw   string
 
 	// Compiled regex patterns for fast filtering
 	userAgentRegexCompiled *regexp.Regexp
@@ -78,6 +81,18 @@ type SlidingTrieConfig struct {
 	SleepBetweenIterations int           `toml:"sleepBetweenIterations"`
 	ClusterArgSets         []ClusterArgSet
 	UseForJail             []bool `toml:"useForJail"`
+
+	// Sliding tries do not consume these bounds for filtering (the window is
+	// time-bounded by SlidingWindowMaxTime); they exist only so Validate(LiveMode)
+	// can surface a malformed or inverted [live.<name>] startTime/endTime, parsed
+	// identically to a [static.<name>] bound.
+	StartTime          *time.Time `toml:"-"`
+	EndTime            *time.Time `toml:"-"`
+	StartTimeHasOffset bool       `toml:"-"`
+	EndTimeHasOffset   bool       `toml:"-"`
+	// Original timestamp literal (see TrieConfig.startTimeRaw).
+	startTimeRaw string
+	endTimeRaw   string
 
 	// Compiled regex patterns for fast filtering
 	userAgentRegexCompiled *regexp.Regexp
@@ -213,6 +228,73 @@ type Config struct {
 	// trie. Keep the hand-parsing; do not reintroduce a decode tag.
 	StaticTries map[string]*TrieConfig        `toml:"-"`
 	LiveTries   map[string]*SlidingTrieConfig `toml:"-"`
+}
+
+// RunMode selects which trie map Validate inspects: StaticMode walks
+// StaticTries, LiveMode walks LiveTries. The shared Validate pass runs for both
+// --config and flags modes of each command (one pass per command).
+type RunMode int
+
+const (
+	StaticMode RunMode = iota
+	LiveMode
+)
+
+// Validate runs the user-value config diagnostics for the given run mode and
+// returns the accumulator. It is pure (no I/O) and collect-all (never
+// early-returns), so one pass surfaces every timestamp problem at once.
+//
+// It only ranges c.StaticTries / c.LiveTries (ranging a nil map is safe) and
+// never dereferences the scalar c.Static / c.Live sections, so a config with an
+// absent section yields zero diagnostics rather than a panic. CFG-01 routes only
+// the trie timestamp checks here; CFG-02 migrates the remaining checks.
+func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
+	diags := &ConfigDiagnostics{}
+	switch mode {
+	case StaticMode:
+		for name, tc := range c.StaticTries {
+			if tc == nil {
+				continue
+			}
+			validateTrieTimestamps(diags, "static."+name,
+				tc.startTimeRaw, tc.endTimeRaw,
+				tc.StartTime, tc.EndTime,
+				tc.StartTimeHasOffset, tc.EndTimeHasOffset)
+		}
+	case LiveMode:
+		for name, stc := range c.LiveTries {
+			if stc == nil {
+				continue
+			}
+			validateTrieTimestamps(diags, "live."+name,
+				stc.startTimeRaw, stc.endTimeRaw,
+				stc.StartTime, stc.EndTime,
+				stc.StartTimeHasOffset, stc.EndTimeHasOffset)
+		}
+	}
+	return diags
+}
+
+// validateTrieTimestamps runs the startTime-format, endTime-format, and
+// endTime<startTime range checks for one trie with no early return, so a trie
+// with both a bad startTime and a bad endTime yields two messages. The section
+// is passed without brackets (Add/AddRange add them).
+func validateTrieTimestamps(diags *ConfigDiagnostics, section string,
+	startRaw, endRaw string, start, end *time.Time, startHasOffset, endHasOffset bool) {
+
+	// Format: raw captured (non-empty) but never parsed => RFC3339 failure.
+	if startRaw != "" && start == nil {
+		diags.Add(section, "startTime", startRaw, "RFC3339 (e.g. 2025-01-01T00:00:00Z)", nil)
+	}
+	if endRaw != "" && end == nil {
+		diags.Add(section, "endTime", endRaw, "RFC3339 (e.g. 2025-01-01T00:00:00Z)", nil)
+	}
+	// Range: only when both bounds parsed. The offset-equality gate matches
+	// makeTimeBounds (URGENT-09): a zone-less wall-clock bound and an
+	// offset-bearing instant are not comparable via time.Before, so skip then.
+	if start != nil && end != nil && startHasOffset == endHasOffset && end.Before(*start) {
+		diags.AddRange(section, endRaw, startRaw)
+	}
 }
 
 func LoadConfig(configPath string) (*Config, error) {
@@ -608,6 +690,32 @@ func parseUseForJail(m map[string]any) ([]bool, error) {
 	return result, nil
 }
 
+// parseTimeBound reads an RFC3339 timestamp bound (startTime/endTime) from a
+// trie TOML map. A present-but-non-string value is a hard fail-fast (structural
+// error); an empty or absent value yields the zero result, accepted as before.
+// A non-empty string is returned as raw and, when it parses, as a non-nil
+// instant with hasOffset=true (RFC3339 always carries a zone designator;
+// URGENT-09). The raw literal is returned even on parse failure so Validate can
+// echo the operator's text. Shared by both trie parsers so the static and
+// sliding bound paths cannot drift.
+func parseTimeBound(m map[string]any, key string) (raw string, t *time.Time, hasOffset bool, err error) {
+	v, present := m[key]
+	if !present {
+		return "", nil, false, nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", nil, false, fmt.Errorf("%s must be a string, got %T", key, v)
+	}
+	if s == "" {
+		return "", nil, false, nil
+	}
+	if parsed, perr := time.Parse(time.RFC3339, s); perr == nil {
+		return s, &parsed, true, nil
+	}
+	return s, nil, false, nil
+}
+
 func parseTrieConfig(name string, m map[string]any) (*TrieConfig, error) {
 	if err := checkUnknownKeys(m, trieKeys, "[static."+name+"] trie"); err != nil {
 		return nil, err
@@ -636,35 +744,15 @@ func parseTrieConfig(name string, m map[string]any) (*TrieConfig, error) {
 	if err := tc.CompileRegex(); err != nil {
 		return nil, err
 	}
-	if v, present := m["startTime"]; present {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("startTime must be a string, got %T", v)
-		}
-		if s != "" {
-			// RFC3339 inherently carries a zone designator (Z or +hh:mm), so a
-			// config bound is an EXPLICIT-offset / true-instant bound (URGENT-09).
-			if t, err := time.Parse(time.RFC3339, s); err == nil {
-				tc.StartTime = &t
-				tc.StartTimeHasOffset = true
-			} else {
-				tc.StartTimeRaw = s
-			}
-		}
+	// A non-empty but non-RFC3339 startTime/endTime sets the raw carrier (not the
+	// parsed pointer) and is surfaced as a diagnostic at Validate, not here; a
+	// wrong-TYPE value stays a hard fail-fast. The raw literal is also captured
+	// on success so the range diagnostic echoes the operator's original text.
+	if tc.startTimeRaw, tc.StartTime, tc.StartTimeHasOffset, err = parseTimeBound(m, "startTime"); err != nil {
+		return nil, err
 	}
-	if v, present := m["endTime"]; present {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("endTime must be a string, got %T", v)
-		}
-		if s != "" {
-			if t, err := time.Parse(time.RFC3339, s); err == nil {
-				tc.EndTime = &t
-				tc.EndTimeHasOffset = true
-			} else {
-				tc.EndTimeRaw = s
-			}
-		}
+	if tc.endTimeRaw, tc.EndTime, tc.EndTimeHasOffset, err = parseTimeBound(m, "endTime"); err != nil {
+		return nil, err
 	}
 	if v, present := m["cidrRanges"]; present {
 		arr, ok := v.([]any)
@@ -729,6 +817,18 @@ func parseSlidingTrieConfig(name string, m map[string]any) (*SlidingTrieConfig, 
 		UseForJail:     useForJail,
 	}
 	if err := stc.CompileRegex(); err != nil {
+		return nil, err
+	}
+	// Sliding tries never consume these bounds for filtering; they feed only
+	// Validate(LiveMode), so a [live.<n>] bound is parsed (and thus accepted or
+	// rejected) identically to a [static.<n>] bound via the shared helper. A live
+	// config that previously set a non-RFC3339 startTime/endTime was silently
+	// ignored and now fails load at the barrier (deliberate strictness increase,
+	// mirroring the cidrRanges validate-and-discard precedent in this function).
+	if stc.startTimeRaw, stc.StartTime, stc.StartTimeHasOffset, err = parseTimeBound(m, "startTime"); err != nil {
+		return nil, err
+	}
+	if stc.endTimeRaw, stc.EndTime, stc.EndTimeHasOffset, err = parseTimeBound(m, "endTime"); err != nil {
 		return nil, err
 	}
 	if v, present := m["slidingWindowMaxTime"]; present {
@@ -800,6 +900,24 @@ func validateUseForJailAlignment(clusterArgSets []ClusterArgSet, useForJail []bo
 		return fmt.Errorf("useForJail has %d entries but clusterArgSets has %d; they must match one-to-one (omit useForJail to apply no jail rules)", len(useForJail), len(clusterArgSets))
 	}
 	return nil
+}
+
+// SetStartTimeBound records a parsed startTime bound plus the original user
+// literal on a TrieConfig built outside the TOML parser (static flags mode).
+// It keeps the unexported raw carrier populated so Validate's range diagnostic
+// echoes the operator's literal (e.g. "2025-12-01") rather than an empty string.
+// hasOffset mirrors the TOML path's StartTimeHasOffset semantics.
+func (tc *TrieConfig) SetStartTimeBound(t time.Time, hasOffset bool, raw string) {
+	tc.StartTime = &t
+	tc.StartTimeHasOffset = hasOffset
+	tc.startTimeRaw = raw
+}
+
+// SetEndTimeBound is the endTime counterpart of SetStartTimeBound.
+func (tc *TrieConfig) SetEndTimeBound(t time.Time, hasOffset bool, raw string) {
+	tc.EndTime = &t
+	tc.EndTimeHasOffset = hasOffset
+	tc.endTimeRaw = raw
 }
 
 func (c *Config) GetJailFile() string {

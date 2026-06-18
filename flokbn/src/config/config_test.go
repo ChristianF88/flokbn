@@ -789,20 +789,26 @@ useForJail = [true]
 		t.Fatal("Expected trie_1 to exist")
 	}
 
-	// StartTime should be nil (parse failed) but StartTimeRaw should be set
+	// Both bounds failed RFC3339 parse, so the parsed pointers stay nil and the
+	// raw carriers feed the diagnostics pass (the exported StartTimeRaw/EndTimeRaw
+	// fields are gone — CFG-01 surfaces these through Validate instead).
 	if trie1.StartTime != nil {
 		t.Errorf("Expected StartTime to be nil for invalid format, got %v", trie1.StartTime)
 	}
-	if trie1.StartTimeRaw != "2025-01-01T00:00:00" {
-		t.Errorf("Expected StartTimeRaw to be '2025-01-01T00:00:00', got '%s'", trie1.StartTimeRaw)
-	}
-
-	// EndTime should be nil (parse failed) but EndTimeRaw should be set
 	if trie1.EndTime != nil {
 		t.Errorf("Expected EndTime to be nil for invalid format, got %v", trie1.EndTime)
 	}
-	if trie1.EndTimeRaw != "2025-12-31" {
-		t.Errorf("Expected EndTimeRaw to be '2025-12-31', got '%s'", trie1.EndTimeRaw)
+
+	diags := config.Validate(StaticMode)
+	if !diags.HasErrors() {
+		t.Fatalf("Expected diagnostics for invalid time formats, got none")
+	}
+	report := diags.Report()
+	if !strings.Contains(report, `[static.trie_1] invalid startTime "2025-01-01T00:00:00"`) {
+		t.Errorf("Expected startTime diagnostic, got:\n%s", report)
+	}
+	if !strings.Contains(report, `[static.trie_1] invalid endTime "2025-12-31"`) {
+		t.Errorf("Expected endTime diagnostic, got:\n%s", report)
 	}
 }
 
@@ -834,20 +840,17 @@ useForJail = [true]
 		t.Fatal("Expected trie_1 to exist")
 	}
 
-	// StartTime should be set (parse succeeded) and StartTimeRaw should be empty
+	// Both bounds parsed successfully.
 	if trie1.StartTime == nil {
 		t.Error("Expected StartTime to be set for valid format, got nil")
 	}
-	if trie1.StartTimeRaw != "" {
-		t.Errorf("Expected StartTimeRaw to be empty for valid format, got '%s'", trie1.StartTimeRaw)
-	}
-
-	// EndTime should be set (parse succeeded) and EndTimeRaw should be empty
 	if trie1.EndTime == nil {
 		t.Error("Expected EndTime to be set for valid format, got nil")
 	}
-	if trie1.EndTimeRaw != "" {
-		t.Errorf("Expected EndTimeRaw to be empty for valid format, got '%s'", trie1.EndTimeRaw)
+
+	// Valid bounds produce no diagnostics (strictness boundary unchanged).
+	if diags := config.Validate(StaticMode); diags.HasErrors() {
+		t.Errorf("Expected no diagnostics for valid time formats, got:\n%s", diags.Report())
 	}
 }
 
