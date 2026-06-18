@@ -67,7 +67,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	// Create parser
 	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
-		jsonOutput.AddError("parser_init", fmt.Sprintf("failed to create parallel parser: %v", err), 1)
+		jsonOutput.AddError("parser_init", fmt.Sprintf("Failed to create parallel parser: %v", err), 1)
 		return jsonOutput, nil, err
 	}
 
@@ -79,8 +79,14 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	needsNonIPFields := false
 	sharedUAMatcher, uaMatcherErr := cfg.CreateUserAgentMatcher()
 	if uaMatcherErr != nil {
-		jsonOutput.AddError("useragent_matcher_create", fmt.Sprintf("failed to create User-Agent matcher: %v", uaMatcherErr), 1)
-		sharedUAMatcher = nil
+		// A configured-but-unreadable UA whitelist/blacklist file is a fatal
+		// setup error: continuing would skip ALL UA filtering and persist a wrong
+		// ban file (UA-whitelisted IPs bannable, UA-blacklisted bots not
+		// force-banned) on a "successful" exit. Fail loud BEFORE any trie work or
+		// the jail/ban-file side effects below — identical severity to the fast
+		// path Static(). The wrapped loader error already names the file.
+		jsonOutput.AddError("useragent_matcher_create", fmt.Sprintf("Failed to create User-Agent matcher: %v", uaMatcherErr), 1)
+		return jsonOutput, nil, uaMatcherErr
 	}
 	hasGlobalUAFilters := sharedUAMatcher != nil && sharedUAMatcher.Count() > 0
 	for _, tc := range cfg.StaticTries {
@@ -102,7 +108,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	requests, err := parser.ParseFile(cfg.Static.LogFile)
 	parseDuration := time.Since(parseStart)
 	if err != nil {
-		jsonOutput.AddError("parse_file", fmt.Sprintf("failed to parse log file %s: %v", cfg.Static.LogFile, err), 1)
+		jsonOutput.AddError("parse_file", fmt.Sprintf("Failed to parse log file %q: %v", cfg.Static.LogFile, err), 1)
 		return jsonOutput, nil, err
 	}
 
@@ -226,7 +232,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	// Process jail with whitelist/blacklist if configured
 	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
 		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
-			jsonOutput.AddError("jail_processing", fmt.Sprintf("failed to process jail with whitelist/blacklist: %v", err), 1)
+			jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
 		}
 	}
 
@@ -276,26 +282,26 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	}
 
 	if trieConfig == nil {
-		jsonOutput.AddWarning("config_warning", fmt.Sprintf("trie configuration '%s' is nil, skipping", trieName), 1)
+		jsonOutput.AddWarning("config_warning", fmt.Sprintf("Trie configuration %q is nil, skipping", trieName), 1)
 		return trieResult, nil, nil
 	}
 
 	// Warn if time parsing failed
 	if trieConfig.StartTimeRaw != "" && trieConfig.StartTime == nil {
 		jsonOutput.AddWarning("invalid_time_format",
-			fmt.Sprintf("Trie '%s': Failed to parse startTime '%s' - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
+			fmt.Sprintf("Trie %q: failed to parse startTime %q - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
 				trieName, trieConfig.StartTimeRaw), 1)
 	}
 	if trieConfig.EndTimeRaw != "" && trieConfig.EndTime == nil {
 		jsonOutput.AddWarning("invalid_time_format",
-			fmt.Sprintf("Trie '%s': Failed to parse endTime '%s' - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
+			fmt.Sprintf("Trie %q: failed to parse endTime %q - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
 				trieName, trieConfig.EndTimeRaw), 1)
 	}
 
 	// Warn if endTime is before startTime (invalid time range)
 	if trieConfig.StartTime != nil && trieConfig.EndTime != nil && trieConfig.EndTime.Before(*trieConfig.StartTime) {
 		jsonOutput.AddWarning("invalid_time_range",
-			fmt.Sprintf("Trie '%s': endTime (%s) is before startTime (%s) - no requests can match this range",
+			fmt.Sprintf("Trie %q: endTime %q is before startTime %q - no requests can match this range",
 				trieName, trieConfig.EndTime.Format(time.RFC3339), trieConfig.StartTime.Format(time.RFC3339)), 1)
 	}
 
@@ -408,7 +414,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
 				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
 				&filteredRequestCount, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded); err != nil {
-				jsonOutput.AddError("concurrent_filtering", fmt.Sprintf("failed to process requests concurrently: %v", err), 1)
+				jsonOutput.AddError("concurrent_filtering", fmt.Sprintf("Failed to process requests concurrently: %v", err), 1)
 			}
 		} else {
 			// Sequential filtering for simple cases (faster for small datasets)
@@ -457,7 +463,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 			timeRangeStr = fmt.Sprintf("before %s", endTime.Format(time.RFC3339))
 		}
 		jsonOutput.AddWarning("time_filter_no_results",
-			fmt.Sprintf("Trie '%s': Time filter (%s) resulted in 0 requests - the time range may not overlap with log data",
+			fmt.Sprintf("Trie %q: time filter %q resulted in 0 requests - the time range may not overlap with log data",
 				trieName, timeRangeStr), 1)
 	}
 
@@ -466,7 +472,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 		for _, cidrRange := range trieConfig.CIDRRanges {
 			count, err := trieInstance.CountInRange(cidrRange)
 			if err != nil {
-				jsonOutput.AddWarning("invalid_cidr", fmt.Sprintf("Invalid CIDR range '%s': %v", cidrRange, err), 1)
+				jsonOutput.AddWarning("invalid_cidr", fmt.Sprintf("Invalid CIDR range %q: %v", cidrRange, err), 1)
 				continue
 			}
 
@@ -521,7 +527,7 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 
 	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
-		jsonOutput.AddError("parser_init", fmt.Sprintf("failed to create parallel parser: %v", err), 1)
+		jsonOutput.AddError("parser_init", fmt.Sprintf("Failed to create parallel parser: %v", err), 1)
 		return jsonOutput, err
 	}
 
@@ -533,11 +539,11 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	userAgentMatcherForCheck, uaErr := cfg.CreateUserAgentMatcher()
 	if uaErr != nil {
 		// A configured-but-unreadable UA whitelist/blacklist file is a fatal
-		// setup error: silently dropping it would skip ALL UA filtering on the
-		// fast path and produce a wrong ban list. Fail loud (stricter than the
-		// sibling StaticWithRequestsCtx, which AddErrors and continues, because
-		// the fast path has no later opportunity to honor the filter).
-		jsonOutput.AddError("useragent_matcher_create", fmt.Sprintf("failed to create User-Agent matcher: %v", uaErr), 1)
+		// setup error: silently dropping it would skip ALL UA filtering and
+		// produce a wrong ban list. Both static entrypoints fail loud here with
+		// identical severity (StaticWithRequestsCtx returns the same error before
+		// its trie/jail work). The wrapped loader error already names the file.
+		jsonOutput.AddError("useragent_matcher_create", fmt.Sprintf("Failed to create User-Agent matcher: %v", uaErr), 1)
 		return jsonOutput, uaErr
 	}
 	hasGlobalUAFilters := userAgentMatcherForCheck != nil && userAgentMatcherForCheck.Count() > 0
@@ -568,7 +574,7 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	ips, invalidCount, perr := parser.ParseFileIPs(cfg.Static.LogFile)
 	parseDuration := time.Since(parseStart)
 	if perr != nil {
-		jsonOutput.AddError("parse_file", fmt.Sprintf("failed to parse log file %s: %v", cfg.Static.LogFile, perr), 1)
+		jsonOutput.AddError("parse_file", fmt.Sprintf("Failed to parse log file %q: %v", cfg.Static.LogFile, perr), 1)
 		return jsonOutput, perr
 	}
 
@@ -656,7 +662,7 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	// Process jail with whitelist/blacklist if configured.
 	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
 		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
-			jsonOutput.AddError("jail_processing", fmt.Sprintf("failed to process jail with whitelist/blacklist: %v", err), 1)
+			jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
 		}
 	}
 
@@ -686,7 +692,7 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 	}
 
 	if trieConfig == nil {
-		jsonOutput.AddWarning("config_warning", fmt.Sprintf("trie configuration '%s' is nil, skipping", trieName), 1)
+		jsonOutput.AddWarning("config_warning", fmt.Sprintf("Trie configuration %q is nil, skipping", trieName), 1)
 		return trieResult
 	}
 
@@ -695,12 +701,12 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 	// reaches this unfiltered fast path — the warning must still fire.
 	if trieConfig.StartTimeRaw != "" && trieConfig.StartTime == nil {
 		jsonOutput.AddWarning("invalid_time_format",
-			fmt.Sprintf("Trie '%s': Failed to parse startTime '%s' - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
+			fmt.Sprintf("Trie %q: failed to parse startTime %q - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
 				trieName, trieConfig.StartTimeRaw), 1)
 	}
 	if trieConfig.EndTimeRaw != "" && trieConfig.EndTime == nil {
 		jsonOutput.AddWarning("invalid_time_format",
-			fmt.Sprintf("Trie '%s': Failed to parse endTime '%s' - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
+			fmt.Sprintf("Trie %q: failed to parse endTime %q - expected RFC3339 format (e.g., 2025-01-01T00:00:00Z)",
 				trieName, trieConfig.EndTimeRaw), 1)
 	}
 
@@ -741,7 +747,7 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 		for _, cidrRange := range trieConfig.CIDRRanges {
 			count, err := trieInstance.CountInRange(cidrRange)
 			if err != nil {
-				jsonOutput.AddWarning("invalid_cidr", fmt.Sprintf("Invalid CIDR range '%s': %v", cidrRange, err), 1)
+				jsonOutput.AddWarning("invalid_cidr", fmt.Sprintf("Invalid CIDR range %q: %v", cidrRange, err), 1)
 				continue
 			}
 			var percentage float64
@@ -1009,7 +1015,7 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 			_, ipNet, err := net.ParseCIDR(cidrStr)
 			if err != nil {
 				jsonOutput.AddWarning("cidr_parse_error",
-					fmt.Sprintf("error parsing CIDR %s: %v", cidrStr, err), 1)
+					fmt.Sprintf("Error parsing CIDR %q: %v", cidrStr, err), 1)
 				continue
 			}
 			cidrIPNets = append(cidrIPNets, ipNet)
@@ -1057,12 +1063,12 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 	// Load whitelist and blacklist
 	whitelistCIDRs, err := cfg.LoadWhitelistCIDRs()
 	if err != nil {
-		jsonOutput.AddError("whitelist_load", fmt.Sprintf("failed to load whitelist: %v", err), 1)
+		jsonOutput.AddError("whitelist_load", fmt.Sprintf("Failed to load whitelist: %v", err), 1)
 		return err
 	}
 	blacklistCIDRs, err := cfg.LoadBlacklistCIDRs()
 	if err != nil {
-		jsonOutput.AddError("blacklist_load", fmt.Sprintf("failed to load blacklist: %v", err), 1)
+		jsonOutput.AddError("blacklist_load", fmt.Sprintf("Failed to load blacklist: %v", err), 1)
 		return err
 	}
 
@@ -1104,7 +1110,7 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 	// Load existing jail
 	jailInstance, err := jail.FileToJail(cfg.GetJailFile())
 	if err != nil {
-		jsonOutput.AddError("jail_load", fmt.Sprintf("failed to load jail: %v", err), 1)
+		jsonOutput.AddError("jail_load", fmt.Sprintf("Failed to load jail %q: %v", cfg.GetJailFile(), err), 1)
 		return err
 	}
 
@@ -1121,12 +1127,12 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 	// Update jail with filtered CIDRs
 	if len(filteredJailCIDRs) > 0 {
 		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
-			jsonOutput.AddWarning("jail_update", fmt.Sprintf("some CIDRs failed during jail update: %v", err), 1)
+			jsonOutput.AddWarning("jail_update", fmt.Sprintf("Some CIDRs failed during jail update: %v", err), 1)
 		}
 
 		err = jail.JailToFile(jailInstance, cfg.GetJailFile())
 		if err != nil {
-			jsonOutput.AddError("jail_save", fmt.Sprintf("failed to save jail: %v", err), 1)
+			jsonOutput.AddError("jail_save", fmt.Sprintf("Failed to save jail %q: %v", cfg.GetJailFile(), err), 1)
 			return err
 		}
 	}
@@ -1138,7 +1144,7 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 
 	err = jail.WriteBanFileWithBlacklist(cfg.GetBanFile(), publishBans, publishBlacklist)
 	if err != nil {
-		jsonOutput.AddError("banfile_write", fmt.Sprintf("failed to write ban file: %v", err), 1)
+		jsonOutput.AddError("banfile_write", fmt.Sprintf("Failed to write ban file %q: %v", cfg.GetBanFile(), err), 1)
 		return err
 	}
 
