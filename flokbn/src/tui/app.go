@@ -131,8 +131,8 @@ func (a *App) SetAnalysisResults(multiResult *output.JSONOutput) {
 		a.pages.SwitchToPage("results")
 	})
 
-	// Pre-initialize visualization in background for instant switching
-	go a.preInitializeVisualization()
+	// The visualization view is built and precached off the UI goroutine in
+	// SetRequestData (which has the request data needed to populate it).
 }
 
 // ShowError displays an error message in the TUI and stops the progress animation
@@ -152,35 +152,15 @@ func (a *App) ShowError(message string) {
 	})
 }
 
-// preInitializeVisualization creates and prepares the visualization view in background
-func (a *App) preInitializeVisualization() {
-	// Wait for requests to be available (SetRequestData to be called)
-	<-a.requestsReady
-
-	// Create visualization view if it doesn't exist
-	if a.visualizationView == nil {
-		a.visualizationView = a.NewVisualizationView()
-
-		// Create visualization page layout on UI thread
-		a.app.QueueUpdateDraw(func() {
-			visualizationLayout := tview.NewFlex().SetDirection(tview.FlexRow).
-				AddItem(a.visualizationView.GetView(), 0, 1, true).
-				AddItem(a.statusBar, minStatusBarHeight, 0, false)
-			a.visualizationLayout = visualizationLayout
-
-			a.pages.AddPage("visualization", visualizationLayout, true, false)
-		})
-	}
-
-	// Pre-process traffic data in background (expensive operation)
-	if len(a.requests) > 0 {
-		a.visualizationView.ProcessTrafficData(a.requests)
-		// Pre-render initial visualization
-		a.visualizationView.Render()
-	}
-}
-
-// SetRequestData sets the real request data for visualization and pre-caches all tries
+// SetRequestData sets the real request data for visualization and pre-caches all
+// tries.
+//
+// Concurrency model (AUDIT-02): the visualization build/precache runs on a single
+// background goroutine (buildAndPrecacheVisualization). It builds and precaches
+// the view privately, OFF the UI goroutine, then publishes the finished pointer to
+// a.visualizationView exclusively on the UI goroutine — which from that point is
+// its sole owner. This keeps the heavy precache off the event loop while ensuring
+// the view's fields/maps are never written by two goroutines at once.
 func (a *App) SetRequestData(requests []ingestor.Request) {
 	if a.shuttingDown.Load() {
 		return
@@ -189,7 +169,7 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 	a.requests = requests
 	a.mu.Unlock()
 
-	// Signal that requests are available
+	// Signal that requests are available (kept for any external waiters).
 	close(a.requestsReady)
 
 	if a.trieCache != nil && a.multiTrieResult != nil {
@@ -198,13 +178,56 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 		}()
 	}
 
-	// Update visualization if it exists and pre-cache all tries for instant switching
+	go a.buildAndPrecacheVisualization(requests)
+}
+
+// buildAndPrecacheVisualization builds a visualization view OFF the UI goroutine
+// (the sole writer of that view's fields/caches while it owns it), runs the heavy
+// precache there, and only then publishes the fully built view to the UI thread
+// — which from that point is its sole owner. This closes all three AUDIT-02
+// findings:
+//   - The pointer is published exactly once, on the UI goroutine (finding #2).
+//   - The view's fields/maps are written by exactly one goroutine at a time: this
+//     goroutine before publication (nothing else references it), the UI goroutine
+//     after (finding #1). The publish enqueue establishes happens-before.
+//   - The expensive PreCacheAllTries runs off the event loop (finding #3).
+//
+// The view is built from a locally derived single-trie output (trie 0, always
+// current right after analysis), so no UI-owned a.jsonResult/currentTrie is read
+// off-thread. If showVisualization already created the view on demand (on the UI
+// thread) before this goroutine publishes, the locally built view is discarded so
+// there is never more than one live view.
+func (a *App) buildAndPrecacheVisualization(requests []ingestor.Request) {
+	// Build the view locally; nothing else can reference it yet. Seed the
+	// cluster-set count from a locally derived output so we never read the
+	// UI-owned a.jsonResult off-thread.
+	initial := a.singleTrieOutput(0)
+	if initial == nil {
+		return
+	}
+	v := a.newVisualizationViewWith(len(initial.Clustering.Data))
+
+	// Heavy precache OFF the UI goroutine, on the not-yet-published view. Restore
+	// to the initial trie (0) without reading UI-owned state.
+	v.PreCacheAllTriesFor(requests, 0)
+
+	// Publish on the UI goroutine: assign the pointer, add the page, and render
+	// the precached output. After this closure runs, the UI goroutine is the
+	// view's sole owner. Discard the built view if one already exists (created
+	// on demand by showVisualization, also on the UI thread).
 	a.app.QueueUpdateDraw(func() {
 		if a.visualizationView != nil {
-			// Pre-cache traffic data with complete results
-			a.visualizationView.PreCacheAllTries(a.requests)
-			a.visualizationView.RenderCached()
+			return
 		}
+		a.visualizationView = v
+
+		visualizationLayout := tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(v.GetView(), 0, 1, true).
+			AddItem(a.statusBar, minStatusBarHeight, 0, false)
+		a.visualizationLayout = visualizationLayout
+		a.pages.AddPage("visualization", visualizationLayout, true, false)
+
+		v.RenderCached()
 	})
 }
 

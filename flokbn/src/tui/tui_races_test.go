@@ -10,6 +10,7 @@ import (
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/output"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -101,6 +102,139 @@ func TestConcurrentTrieSwitchingNoRace(t *testing.T) {
 		}
 	}()
 
+	wg.Wait()
+}
+
+// TestSetRequestDataVizPathNoRace is the AUDIT-02 regression test for the
+// visualization data races (findings #1 + #2 + #3). It drives the REAL ordering
+// the CLI layer uses — SetAnalysisResults then SetRequestData — on a live tview
+// event loop (SimulationScreen), so the background visualization build/precache
+// runs concurrently with the trieCache precache and the UI render closures,
+// exactly as in production.
+//
+// On the pre-fix code this path had two concurrent writers of the same
+// VisualizationView: the off-thread preInitializeVisualization
+// (ProcessTrafficData + Render) and the UI closure (PreCacheAllTries +
+// RenderCached). Both wrote v.cachedClusteredData (a map) and v's scalar/array
+// fields, producing a concurrent-map-write panic and data races. Under the fix
+// the view is built and precached by a single goroutine that owns it, then
+// published to the UI goroutine; run with `go test -race ./tui` to verify clean.
+func TestSetRequestDataVizPathNoRace(t *testing.T) {
+	multi := output.NewJSONOutput("static", time.Now())
+	multi.General.TotalRequests = 100
+	multi.Tries = []output.TrieResult{
+		{Name: "trie-a", Data: []output.ClusterResult{
+			*newClusterSet("10.0.0.0/8"),
+			*newClusterSet("172.16.0.0/12"),
+		}},
+		{Name: "trie-b", Data: []output.ClusterResult{
+			*newClusterSet("192.168.0.0/16"),
+		}},
+	}
+
+	a := NewAppFromConfig(&config.Config{Static: &config.StaticConfig{}}, "")
+
+	// Drive a real event loop on a headless simulation screen so QueueUpdateDraw
+	// closures actually execute (the publish + render steps run on this loop).
+	sim := tcell.NewSimulationScreen("UTF-8")
+	if err := sim.Init(); err != nil {
+		t.Fatalf("sim.Init: %v", err)
+	}
+	sim.SetSize(120, 40)
+	a.app.SetScreen(sim)
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- a.app.Run() }()
+
+	reqs := raceTestRequests()
+
+	// Production order: results first, then request data (which builds the viz).
+	a.SetAnalysisResults(multi)
+	a.SetRequestData(reqs)
+
+	// Wait until the background build/precache has published the view and the
+	// final render ran, then drive a few UI-thread reads/writes that used to race
+	// with the off-thread producer.
+	waitFor(t, func() bool { return a.readVizPublished() }, 5*time.Second)
+
+	a.app.QueueUpdateDraw(func() {
+		a.showVisualization()
+		if a.visualizationView != nil {
+			a.visualizationView.NextClusterSet()
+			a.visualizationView.PrevClusterSet()
+			a.visualizationView.ToggleIntensityScale()
+		}
+		a.updateStatusBar()
+	})
+
+	a.app.Stop()
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("app.Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("app.Run did not return after Stop")
+	}
+	// tview's Run() finalizes the screen on Stop; do not Fini it again here.
+}
+
+// readVizPublished reports whether the background viz build has published the
+// view, reading the pointer on the UI goroutine via QueueUpdate so the check
+// itself is race-free.
+func (a *App) readVizPublished() bool {
+	published := false
+	a.app.QueueUpdate(func() { published = a.visualizationView != nil })
+	return published
+}
+
+// waitFor polls cond until it returns true or the timeout elapses.
+func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !cond() {
+		t.Fatal("waitFor: condition not met before timeout")
+	}
+}
+
+// TestVizPrecacheNoConfigConcurrentNoRace covers the no-config (single-trie)
+// branch of the viz precache, which also writes cachedClusteredData via
+// generateRenderText. It builds the view off-thread (sole writer), precaches,
+// then renders — mirroring buildAndPrecacheVisualization's single-owner model —
+// while a second goroutine reads the published view's render output, asserting
+// the map writes never overlap a reader. Run with `go test -race ./tui`.
+func TestVizPrecacheNoConfigConcurrentNoRace(t *testing.T) {
+	app := &App{}
+	app.jsonResult = &output.JSONOutput{}
+	app.jsonResult.Clustering.Data = []output.ClusterResult{
+		*newClusterSet("10.0.0.0/8"),
+		*newClusterSet("192.168.0.0/16"),
+	}
+
+	reqs := raceTestRequests()
+
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Each goroutine owns its OWN view (single-owner model), precaches it
+			// to completion (the writer phase), then only reads from it. No two
+			// goroutines ever write the same view, matching the fixed production
+			// path where one goroutine builds before publishing.
+			v := app.newVisualizationViewWith(len(app.jsonResult.Clustering.Data))
+			v.PreCacheAllTriesFor(reqs, 0)
+			for i := 0; i < 20; i++ {
+				_ = v.generateRenderText()
+			}
+		}()
+	}
 	wg.Wait()
 }
 

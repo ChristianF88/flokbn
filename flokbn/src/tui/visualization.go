@@ -72,12 +72,23 @@ func (v *VisualizationView) effectiveTrie() int {
 	return v.app.currentTrie
 }
 
-// NewVisualizationView creates a new visualization view
+// NewVisualizationView creates a new visualization view, seeding the initial
+// cluster-set count from the UI-owned a.jsonResult. It reads a.jsonResult and so
+// must be called on the UI goroutine (e.g. showVisualization's on-demand path).
+// The background precache path uses newVisualizationViewWith with a locally
+// derived count to avoid reading UI-owned state off-thread.
 func (a *App) NewVisualizationView() *VisualizationView {
+	return a.newVisualizationViewWith(len(a.jsonResult.Clustering.Data))
+}
+
+// newVisualizationViewWith creates a visualization view with an explicit initial
+// cluster-set count, so callers off the UI goroutine need not read the UI-owned
+// a.jsonResult.
+func (a *App) newVisualizationViewWith(totalClusterSets int) *VisualizationView {
 	v := &VisualizationView{
 		app:                 a,
 		currentClusterSet:   0,
-		totalClusterSets:    len(a.jsonResult.Clustering.Data),
+		totalClusterSets:    totalClusterSets,
 		cachedTrafficData:   make(map[int][256][256]uint32),
 		cachedMaxTraffic:    make(map[int]uint32),
 		cachedRenderText:    make(map[renderKey]string),
@@ -93,8 +104,22 @@ func (a *App) NewVisualizationView() *VisualizationView {
 	return v
 }
 
-// PreCacheAllTries processes and caches traffic data for all tries to eliminate switching delays
+// PreCacheAllTries processes and caches traffic data for all tries to eliminate
+// switching delays. It restores the view's display state to the App's current
+// trie afterwards, so it must be called on the UI goroutine (its existing
+// callers — trie-switch closures and tests — already are). The background
+// initial-precache path must use PreCacheAllTriesFor, which never reads the
+// UI-owned App.jsonResult/currentTrie.
 func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
+	v.PreCacheAllTriesFor(requests, v.app.currentTrie)
+}
+
+// PreCacheAllTriesFor caches traffic/render data for all tries and restores the
+// view's display state to restoreTrie, deriving that trie's output locally
+// rather than reading the UI-owned App.jsonResult/currentTrie. This lets the
+// background initial-precache goroutine (which owns the view before it is
+// published to the UI) run with no cross-goroutine reads of UI-owned state.
+func (v *VisualizationView) PreCacheAllTriesFor(requests []ingestor.Request, restoreTrie int) {
 	if v.app.cfg == nil || v.app.multiTrieResult == nil {
 		// No-config mode - cache single trie
 		v.ProcessTrafficData(requests)
@@ -139,22 +164,24 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 		}
 	}
 
+	// Restore view state to restoreTrie. Derive its cluster-set count from the
+	// locally-built single-trie output (not v.app.jsonResult) so this remains
+	// safe to run off the UI goroutine before the view is published.
+	if restoreResult := v.app.singleTrieOutput(restoreTrie); restoreResult != nil {
+		v.totalClusterSets = len(restoreResult.Clustering.Data)
+	}
+
 	// Clear the override so the render chain reads the UI-owned App state again.
 	v.renderResult = nil
 	v.renderTrie = 0
 
-	// Restore view state to the UI's current trie.
-	originalTrie := v.app.currentTrie
-	if v.app.jsonResult != nil {
-		v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
-	}
 	v.currentClusterSet = 0
 	v.requests = originalRequests
 
-	// Load the original trie's cached data
-	if cachedData, exists := v.cachedTrafficData[originalTrie]; exists {
+	// Load the restore trie's cached data
+	if cachedData, exists := v.cachedTrafficData[restoreTrie]; exists {
 		v.trafficData = cachedData
-		v.maxTraffic = v.cachedMaxTraffic[originalTrie]
+		v.maxTraffic = v.cachedMaxTraffic[restoreTrie]
 	}
 }
 
