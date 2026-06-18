@@ -277,7 +277,11 @@ const defaultConcurrentChunkSize = 64 * 1024 * 1024
 // parseFileIPsConcurrentIOChunked is the chunk-size-parameterized implementation
 // of parseFileIPsConcurrentIO. Production callers use defaultConcurrentChunkSize;
 // tests override chunkSize to exercise boundary handling on small files.
-func (pp *Parser) parseFileIPsConcurrentIOChunked(file *os.File, fileSize int64, chunkSize int64) ([]uint32, int, error) {
+// The read source is io.ReaderAt (forwarded to readChunkBatched, which uses only
+// ReadAt) so a test can drive the chunked path with a fault-injecting reader on a
+// small file. Production callers pass *os.File, which satisfies io.ReaderAt;
+// Stat/Close stay at the ParseFile* entry points, so file ownership is unchanged.
+func (pp *Parser) parseFileIPsConcurrentIOChunked(file io.ReaderAt, fileSize int64, chunkSize int64) ([]uint32, int, error) {
 	numChunks := int(fileSize / chunkSize)
 	if fileSize%chunkSize != 0 {
 		numChunks++
@@ -297,13 +301,14 @@ func (pp *Parser) parseFileIPsConcurrentIOChunked(file *os.File, fileSize int64,
 	linesChan := make(chan [][]byte, pp.workers*2)
 	resultsChan := make(chan ipResult, pp.workers*2)
 
+	var readErr chunkErrCapture
 	var wg sync.WaitGroup
 	for i := 0; i < maxConcurrentChunks; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for job := range chunkJobs {
-				pp.readChunkBatched(file, job, fileSize, linesChan)
+				pp.readChunkBatched(file, job, fileSize, linesChan, &readErr)
 			}
 		}()
 	}
@@ -359,6 +364,16 @@ func (pp *Parser) parseFileIPsConcurrentIOChunked(file *os.File, fileSize int64,
 	parserWG.Wait()
 	close(resultsChan)
 	collectorWG.Wait()
+
+	// Surface any chunk-read I/O error (parity with the streaming path's
+	// scanner.Err() check). A failed read previously left a truncated result with
+	// a nil error (silent under-banning); now ParseFileIPs returns a non-nil error
+	// and analysis.Static fails loud. The full shutdown sequence above already ran,
+	// so no goroutine leaks — only the return value changes. A partial result must
+	// not be published, so return nil on error.
+	if err := readErr.load(); err != nil {
+		return nil, 0, err
+	}
 
 	return ips, invalidCount, nil
 }
@@ -503,7 +518,11 @@ func (pp *Parser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]in
 // parseFileConcurrentIOChunked is the chunk-size-parameterized implementation of
 // parseFileWithConcurrentIO. Production callers use defaultConcurrentChunkSize
 // (64MB); tests override chunkSize to exercise the concurrent path on small files.
-func (pp *Parser) parseFileConcurrentIOChunked(file *os.File, fileSize int64, chunkSize int64) ([]ingestor.Request, error) {
+// The read source is io.ReaderAt (forwarded to readChunkBatched, which uses only
+// ReadAt) so a test can drive the chunked path with a fault-injecting reader on a
+// small file. Production callers pass *os.File, which satisfies io.ReaderAt;
+// Stat/Close stay at the ParseFile* entry points, so file ownership is unchanged.
+func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, fileSize int64, chunkSize int64) ([]ingestor.Request, error) {
 	numChunks := int(fileSize / chunkSize)
 	if fileSize%chunkSize != 0 {
 		numChunks++
@@ -526,6 +545,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file *os.File, fileSize int64, ch
 	linesChan := make(chan [][]byte, pp.workers*2)
 	resultsChan := make(chan []ingestor.Request, pp.workers*2)
 
+	var readErr chunkErrCapture
 	var wg sync.WaitGroup
 
 	// Start chunk readers — use ReadAt (pread64) for thread-safe parallel reads
@@ -535,7 +555,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file *os.File, fileSize int64, ch
 		go func() {
 			defer wg.Done()
 			for job := range chunkJobs {
-				pp.readChunkBatched(file, job, fileSize, linesChan)
+				pp.readChunkBatched(file, job, fileSize, linesChan, &readErr)
 			}
 		}()
 	}
@@ -593,6 +613,16 @@ func (pp *Parser) parseFileConcurrentIOChunked(file *os.File, fileSize int64, ch
 	close(resultsChan)
 	collectorWG.Wait()
 
+	// Surface any chunk-read I/O error (parity with the streaming path's
+	// scanner.Err() check). A failed read previously left a truncated result with
+	// a nil error (silent under-banning); now ParseFile returns a non-nil error and
+	// analysis.Static fails loud. The full shutdown sequence above already ran, so
+	// no goroutine leaks — only the return value changes. A partial result must not
+	// be published, so return nil on error.
+	if err := readErr.load(); err != nil {
+		return nil, err
+	}
+
 	return results, nil
 }
 
@@ -601,6 +631,34 @@ type chunkJob struct {
 	start int64
 	end   int64
 	index int
+}
+
+// chunkErrCapture is the store-once first-error seam shared by the chunk-reader
+// goroutines of the concurrent (chunked, >=500MB) parse paths. A non-EOF ReadAt
+// failure in readChunkBatched / recoverLongLine records the FIRST such error
+// here (sync.Once, so concurrent failing readers are race-free and first-wins),
+// instead of printing-and-returning and silently truncating the result.
+//
+// Cost on the success path is zero: record is only ever called on a failed
+// ReadAt, never per line/byte. The orchestrator checks load() once after its
+// chunk readers join (post wg.Wait()), mirroring the streaming path's
+// scanner.Err() check, and returns the error so ParseFile* surface a non-nil
+// error (parity with streaming) instead of a short result + nil error.
+type chunkErrCapture struct {
+	once sync.Once
+	err  error
+}
+
+// record stores err as the first error iff none has been recorded yet. Safe to
+// call from multiple chunk-reader goroutines concurrently.
+func (c *chunkErrCapture) record(err error) {
+	c.once.Do(func() { c.err = err })
+}
+
+// load returns the first recorded error (nil if none). Read only after the
+// chunk-reader goroutines have joined, which provides the happens-before edge.
+func (c *chunkErrCapture) load() error {
+	return c.err
 }
 
 // readChunkBatched reads a file chunk using ReadAt and sends batched line slices.
@@ -615,7 +673,17 @@ type chunkJob struct {
 // as unsafe.String views aliasing the line bytes; those strings keep `buffer`
 // reachable so the GC retains it as long as any Request lives. In IP-only mode
 // nothing aliases the bytes, so the buffer is freed once the chunk is parsed.
-func (pp *Parser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, linesChan chan<- [][]byte) {
+//
+// errCap is the shared store-once error seam: on a non-EOF ReadAt failure the
+// chunk's lines are dropped (as before) but the error is recorded so the
+// orchestrator can surface it after the readers join, instead of silently
+// truncating the result. io.EOF stays a normal (success) terminator.
+//
+// The read source is typed as io.ReaderAt (only ReadAt is used here) so a test
+// can inject a failing reader without a >=500MB file; *os.File already satisfies
+// io.ReaderAt and ReadAt is called once per chunk (cold I/O stage), never per
+// line, so the interface dispatch is off the per-line hot path.
+func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int64, linesChan chan<- [][]byte, errCap *chunkErrCapture) {
 	chunkLen := job.end - job.start
 	if chunkLen <= 0 {
 		return
@@ -646,7 +714,11 @@ func (pp *Parser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, 
 	buffer := make([]byte, readSize)
 	n, err := file.ReadAt(buffer, readStart)
 	if err != nil && err != io.EOF {
-		fmt.Fprintf(os.Stderr, "readChunkBatched: ReadAt offset %d: %v\n", readStart, err)
+		// Record the error (store-once) instead of swallowing it; the orchestrator
+		// surfaces it after the readers join so ParseFile* return a non-nil error
+		// rather than a silently truncated result. io.EOF is the normal terminator
+		// and is excluded above.
+		errCap.record(fmt.Errorf("readChunkBatched: ReadAt offset %d: %w", readStart, err))
 		return
 	}
 	buffer = buffer[:n]
@@ -760,7 +832,7 @@ func (pp *Parser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, 
 	// false and the hot path does ZERO extra work / allocations. Lines shorter
 	// than the 8192 overlap can never reach here.
 	if readEnd != fileSize && start < chunkEnd && start < len(buffer) {
-		if recovered, ok := pp.recoverLongLine(file, readStart+int64(start), fileSize); ok {
+		if recovered, ok := pp.recoverLongLine(file, readStart+int64(start), fileSize, errCap); ok {
 			batch = append(batch, recovered)
 		}
 	}
@@ -786,10 +858,12 @@ func (pp *Parser) readChunkBatched(file *os.File, job chunkJob, fileSize int64, 
 //   - Chunked: recoverLongLine drops only that one over-long line (ok=false) and
 //     the parse continues, returning the remaining lines with a nil error.
 //
-// Surfacing the streaming abort on the chunked path would require an error channel
-// through both concurrent orchestrators (they run readChunkBatched in goroutines
-// and cannot return an error), which this fix deliberately does not add. A
-// >=2MB-line log is pathological; the documented divergence is the contract.
+// Genuine I/O failures during recovery ARE surfaced: a non-EOF ReadAt error is
+// recorded via the shared errCap seam through the concurrent orchestrators, so a
+// real read failure fails the parse loud. The too-long-line DROP is deliberately
+// NOT surfaced — a >=2MB line is pathological and we do not abort the whole chunked
+// parse over one such line. That single divergence from streaming's whole-parse
+// abort is the documented contract.
 const maxRecoverLineLen = 2 * 1024 * 1024
 
 // recoverLongLine re-reads, starting at the absolute file offset `lineStart` of an
@@ -805,12 +879,18 @@ const maxRecoverLineLen = 2 * 1024 * 1024
 // the zero-copy unsafe.String lifetime invariant documented on readChunkBatched
 // still holds (the recovery buffer is never reused or mutated after this read).
 //
-// Lines at/above maxRecoverLineLen are dropped (return ok=false). NOTE this is NOT
+// Lines at/above maxRecoverLineLen are dropped (return ok=false). This is NOT
 // byte-identical to streaming at the cap: streaming raises bufio.ErrTooLong and
 // aborts the whole parse, whereas this drops only the one over-long line and
-// continues. See maxRecoverLineLen for the precise (and deliberately divergent)
-// parity scope.
-func (pp *Parser) recoverLongLine(file *os.File, lineStart, fileSize int64) ([]byte, bool) {
+// continues (see maxRecoverLineLen for the precise, deliberately divergent scope).
+//
+// errCap is the shared store-once error seam: a genuine non-EOF ReadAt failure
+// here records the error (so the orchestrator surfaces it) AND returns ok=false.
+// The too-long-line drop above is a DIFFERENT ok=false reason and deliberately does
+// NOT record an error — that divergence from streaming's abort is the documented
+// contract, not an I/O failure. The read source is io.ReaderAt for the same
+// test-injection reason as readChunkBatched (cold path, one ReadAt per grow step).
+func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, errCap *chunkErrCapture) ([]byte, bool) {
 	window := int64(8192) // current overlap; double until '\n' found or capped
 	for {
 		window *= 2
@@ -831,7 +911,10 @@ func (pp *Parser) recoverLongLine(file *os.File, lineStart, fileSize int64) ([]b
 		buf := make([]byte, readSize)
 		n, err := file.ReadAt(buf, lineStart)
 		if err != nil && err != io.EOF {
-			fmt.Fprintf(os.Stderr, "recoverLongLine: ReadAt offset %d: %v\n", lineStart, err)
+			// Genuine I/O failure (distinct from the too-long-line drop below):
+			// record it (store-once) so the orchestrator surfaces a non-nil error,
+			// then drop this line. io.EOF is normal end-of-file and excluded above.
+			errCap.record(fmt.Errorf("recoverLongLine: ReadAt offset %d: %w", lineStart, err))
 			return nil, false
 		}
 		buf = buf[:n]
