@@ -622,10 +622,31 @@ func parseTrieConfig(m map[string]any) (*TrieConfig, error) {
 			if !ok {
 				return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
 			}
+			if err := validateCIDRRangeEntry("cidrRanges", i, str); err != nil {
+				return nil, err
+			}
 			tc.CIDRRanges = append(tc.CIDRRanges, str)
 		}
 	}
 	return tc, nil
+}
+
+// validateCIDRRangeEntry rejects a cidrRanges entry that is malformed or not
+// IPv4 (IPv4-only tool). It mirrors the loadCIDRFile gate (config.go) and the
+// CLI flag path so config mode and the CLI reject IPv6 identically: gate on
+// mask length, not To4(), so IPv4-mapped IPv6 (::ffff:a.b.c.d/120, non-nil
+// To4() but 16-byte mask) is rejected while plain IPv4 CIDRs pass. An IPv6
+// entry would otherwise reach trie.CountInRange and either silently mis-count
+// (mask <=32) or panic on a negative shift (mask >32).
+func validateCIDRRangeEntry(field string, i int, str string) error {
+	_, ipNet, err := net.ParseCIDR(str)
+	if err != nil {
+		return fmt.Errorf("invalid %s[%d] %q: %w", field, i, str, err)
+	}
+	if len(ipNet.Mask) != 4 {
+		return fmt.Errorf("IPv6 CIDR not supported (IPv4-only tool) in %s[%d]: %s", field, i, str)
+	}
+	return nil
 }
 
 func parseSlidingTrieConfig(m map[string]any) (*SlidingTrieConfig, error) {
@@ -680,6 +701,28 @@ func parseSlidingTrieConfig(m map[string]any) (*SlidingTrieConfig, error) {
 			return nil, fmt.Errorf("sleepBetweenIterations must be an integer, got %T", v)
 		}
 		stc.SleepBetweenIterations = int(n)
+	}
+	// cidrRanges is accepted (parity with the static trie key surface) but not
+	// consumed by sliding tries (SlidingTrieConfig has no CIDRRanges field, so a
+	// live config never reaches trie.CountInRange). We still validate-and-discard
+	// each entry so IPv6 fails loud at load identically to static mode. NOTE:
+	// this is a deliberate strictness increase — a live config that previously
+	// set an IPv6 cidrRanges value was tolerated (ignored) and now fails load;
+	// IPv4 cidrRanges remain tolerated-and-ignored exactly as before.
+	if v, present := m["cidrRanges"]; present {
+		arr, ok := v.([]any)
+		if !ok {
+			return nil, fmt.Errorf("cidrRanges must be an array of strings, got %T", v)
+		}
+		for i, item := range arr {
+			str, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
+			}
+			if err := validateCIDRRangeEntry("cidrRanges", i, str); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return stc, nil
 }

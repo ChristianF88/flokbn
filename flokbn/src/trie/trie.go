@@ -322,7 +322,21 @@ func (t *Trie) CountInRangeIPNet(ipNet *net.IPNet) uint32 {
 		// /0 spans the whole address space; CountAll sums the children
 		// correctly and avoids the undefined uint32(1)<<32 shift plus the
 		// Root.Count==0 trap in the full-containment branch.
+		// NOTE: keep this /0 special-case ABOVE the IPv4-only guard so a
+		// genuine IPv4 "0.0.0.0/0" (4-byte mask, maskBits 0) still routes to
+		// CountAll. An IPv6 "::/0" also lands here harmlessly (CountAll of an
+		// IPv4 trie); IPv6 with maskBits>0 is rejected by the guard below.
 		return t.CountAll()
+	}
+	// IPv4-only tool: reject any non-IPv4 range up front (defense-in-depth).
+	// A 4-byte mask is IPv4-notation only; IPv6 (incl. IPv4-mapped /120, whose
+	// mask is 16 bytes) has len != 4. This also implies maskBits <= 32, so the
+	// `uint32(1) << (32 - maskBits)` shift below can never go negative (an IPv6
+	// prefix >32 previously panicked with "negative shift amount"). This is a
+	// one-time check per range/cluster CIDR, not on the per-IP countInRange
+	// recursion, so there is no hot-path cost.
+	if len(ipNet.Mask) != 4 {
+		return 0
 	}
 	rangeStart := iputils.IPToUint32(ipNet.IP)
 
