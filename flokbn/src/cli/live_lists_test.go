@@ -486,6 +486,89 @@ func TestRunLiveLoop_UAListLoadFailureFailsLoud(t *testing.T) {
 	}
 }
 
+// TestRunLiveLoop_IdleHeartbeatExpiresUAWhitelist is the AUDIT-10 regression:
+// a UA-whitelisted /32 must expire on the idle path exactly as it does on the
+// batch path. A jailed IP that is later seen with a whitelisted UA gets its
+// active ban suppressed at publish time; once traffic goes idle the stale /32
+// whitelist entry must expire after maxWindowTime so the ban re-appears in the
+// published ban file (before the fix it never re-appeared until traffic
+// resumed, because purgeExpired ran only in the batch branch).
+func TestRunLiveLoop_IdleHeartbeatExpiresUAWhitelist(t *testing.T) {
+	now := time.Now()
+
+	// 198.51.100.7 is already jailed and active (cell 0, 10min duration,
+	// ban started just now so it stays active for the whole test).
+	const targetCIDR = "198.51.100.7/32"
+	const targetIP = "198.51.100.7"
+
+	// One batch: the jailed IP sends a single request with a whitelisted UA.
+	// That request never enters a window (whitelisted-UA exclusion) and only
+	// records uaWhitelistIPs[X]=now, suppressing the active ban at publish.
+	good := mkRequest(198, 51, 100, 7, now, "/health")
+	good.UserAgent = "GoodBot/1.0"
+	batch := append(noiseRequests(now, "/api/item"), good)
+
+	// closeAfterDrain:false -> after the one batch the ingestor stays open and
+	// returns empty batches, so the loop runs idle heartbeats.
+	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}}
+
+	// Tiny window time => maxWindowTime is ~1ms, so the whitelist /32 (last
+	// seen at iteration time) is already past its cutoff by the first
+	// heartbeat (heartbeats fire >=1s apart, floored by liveHeartbeatFloor).
+	cfg := newLiveConfigWithUALists(t, map[string]*config.SlidingTrieConfig{
+		"w": newWindowConfigSized(t, "", true, time.Millisecond, 100000),
+	}, nil, nil, []string{"GoodBot/1.0"}, nil)
+
+	// Seed the jail with the active /32 ban.
+	seeded := jail.NewJail()
+	seeded.Cells[0].Prisoners = append(seeded.Cells[0].Prisoners, jail.Prisoner{
+		CIDR:      targetCIDR,
+		BanStart:  now,
+		BanActive: true,
+	})
+	seeded.AllCIDRs = append(seeded.AllCIDRs, targetCIDR)
+	if err := jail.JailToFile(seeded, cfg.GetJailFile()); err != nil {
+		t.Fatalf("seeding jail file: %v", err)
+	}
+
+	h := startLoop(t, fake, cfg)
+
+	// The iteration processes the batch: the UA-whitelisted /32 suppresses the
+	// active ban at publish time, so the published ban file must NOT cover the
+	// target IP (active_bans in the iteration log counts published bans, i.e.
+	// post-whitelist, so it is 0 here), while the jail still holds it active.
+	h.nextIteration()
+	assertNoBanCovers(t, banCIDRs(t, cfg.GetBanFile()), targetIP)
+	if _, active, found := findPrisoner(t, cfg.GetJailFile(), targetCIDR); !found || !active {
+		t.Fatalf("after iteration prisoner %s found=%v active=%v, want jailed and active (only the publish-time whitelist suppresses it)", targetCIDR, found, active)
+	}
+
+	// Drive idle heartbeats until the stale UA whitelist /32 expires and the
+	// ban re-appears. The deadline is a failure bound, not a sleep.
+	deadline := time.Now().Add(10 * time.Second)
+	reappeared := false
+	for time.Now().Before(deadline) {
+		h.nextHeartbeat()
+		banned := map[string]bool{}
+		for _, c := range banCIDRs(t, cfg.GetBanFile()) {
+			banned[c] = true
+		}
+		if banned[targetCIDR] {
+			reappeared = true
+			break
+		}
+	}
+	if !reappeared {
+		t.Errorf("ban %s never re-appeared after idle heartbeats; UA whitelist /32 did not expire on the idle path", targetCIDR)
+	}
+
+	// The jailed ban must still be active (its 10min cell has not elapsed):
+	// the re-appearance is the whitelist expiring, not the ban expiring.
+	if _, active, found := findPrisoner(t, cfg.GetJailFile(), targetCIDR); !found || !active {
+		t.Errorf("prisoner %s found=%v active=%v, want still jailed and active", targetCIDR, found, active)
+	}
+}
+
 func TestPurgeExpired(t *testing.T) {
 	now := time.Now()
 	m := map[uint32]time.Time{

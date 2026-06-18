@@ -419,6 +419,17 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			}
 			sleepOrDone(ctx, liveIdlePoll)
 			if time.Since(lastTick) >= heartbeatInterval {
+				// Window-aligned expiry must run on the idle path too, before
+				// runHeartbeat composes whitelists: otherwise a stale UA-
+				// whitelisted /32 keeps suppressing an active jail ban for the
+				// whole idle stretch (it never re-appears until traffic
+				// resumes). Mirrors the batch branch exactly; maps are shared
+				// by reference, so this mutates what runHeartbeat reads.
+				if uaMatcher != nil {
+					cutoff := time.Now().Add(-maxWindowTime)
+					purgeExpired(uaWhitelistIPs, cutoff)
+					purgeExpired(uaBlacklistIPs, cutoff)
+				}
 				runHeartbeat(&jailInstance, cfg, logger, stats, statsState, ing,
 					windows, lastWinClusterStats, whitelistCIDRs, uaWhitelistIPs,
 					blacklistCIDRs, &lastBanKey, &banKeyValid, &blacklistWarned,
