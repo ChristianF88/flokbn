@@ -68,17 +68,20 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 	if cfg.Static == nil || cfg.Static.PlotPath == "" {
 		result, err := analysis.Static(cfg)
 		if err != nil {
-			outputResult(result, outputConfig) // Output with errors
+			// Analysis error dominates exit status; the marshal return here is
+			// secondary (the partial result is still surfaced to the user).
+			_ = outputResult(result, outputConfig) // Output with errors
 			return fmt.Errorf("static analysis: %w", err)
 		}
-		outputResult(result, outputConfig)
-		return nil
+		return outputResult(result, outputConfig)
 	}
 
 	// Heatmap requested: keep the full path so we can reuse the parsed requests.
 	result, requests, err := analysis.StaticWithRequests(cfg)
 	if err != nil {
-		outputResult(result, outputConfig) // Output with errors
+		// Analysis error dominates exit status; the marshal return here is
+		// secondary (the partial result is still surfaced to the user).
+		_ = outputResult(result, outputConfig) // Output with errors
 		return fmt.Errorf("static analysis: %w", err)
 	}
 
@@ -93,8 +96,7 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 		}
 	}
 
-	outputResult(result, outputConfig)
-	return nil
+	return outputResult(result, outputConfig)
 }
 
 // executeTUI runs TUI mode - works for both CLI and config file inputs
@@ -171,7 +173,7 @@ type slidingWindowInstance struct {
 // executeLiveAnalysis runs live mode analysis - works for both CLI and config file inputs
 func executeLiveAnalysis(cfg *config.Config) error {
 	if len(cfg.LiveTries) == 0 {
-		return fmt.Errorf("no LiveTries configurations found")
+		return fmt.Errorf("at least one sliding window is required in live mode (e.g. [live.<name>])")
 	}
 
 	logger := slog.Default()
@@ -284,7 +286,7 @@ func sleepOrDone(ctx context.Context, d time.Duration) {
 // to it after each full iteration (nil = feature off, zero extra work).
 func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config, logger *slog.Logger, stats *statsServer) error {
 	if len(cfg.LiveTries) == 0 {
-		return fmt.Errorf("no LiveTries configurations found")
+		return fmt.Errorf("at least one sliding window is required in live mode (e.g. [live.<name>])")
 	}
 
 	// Create sliding window instances - one per LiveTries entry
@@ -790,11 +792,14 @@ func runHeartbeat(
 // OUTPUT FUNCTIONS - Unified output handling (static mode)
 // ============================================================================
 
-// outputResult is the unified output function that handles all output formats
-func outputResult(jsonOutput *output.JSONOutput, outputConfig OutputConfig) {
+// outputResult is the unified output function that handles all output formats.
+// A JSON marshal failure is reported to stderr AND returned so the caller can
+// propagate a non-zero exit: a silent return would otherwise produce no output
+// while exiting 0, masking the failure.
+func outputResult(jsonOutput *output.JSONOutput, outputConfig OutputConfig) error {
 	if outputConfig.Plain {
 		outputPlain(jsonOutput)
-		return
+		return nil
 	}
 
 	var jsonBytes []byte
@@ -807,10 +812,11 @@ func outputResult(jsonOutput *output.JSONOutput, outputConfig OutputConfig) {
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to marshal JSON output: %v\n", err)
-		return
+		fmt.Fprintf(os.Stderr, "cannot marshal JSON output: %v\n", err)
+		return fmt.Errorf("cannot marshal JSON output: %w", err)
 	}
 	fmt.Println(string(jsonBytes))
+	return nil
 }
 
 // outputPlain formats the JSON output as human-readable plain text

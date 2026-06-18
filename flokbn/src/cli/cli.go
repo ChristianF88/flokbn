@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ChristianF88/flokbn/config"
@@ -164,19 +165,41 @@ func validateConfigModeFlags(c *cli.Context, allowedFlags []string) error {
 		"clusterArgSets", "tui", "compact", "plain", "logLevel",
 	}
 
+	// Accumulate every disallowed flag the user actually set (deterministic
+	// order: flagsToCheck is a fixed slice) so the message names the offenders
+	// AND lists the allowed set, instead of leaking a raw Go slice.
+	var offenders []string
 	for _, flag := range flagsToCheck {
 		if c.IsSet(flag) && !allowed[flag] {
-			return fmt.Errorf("when using --config, only %v flags are allowed", allowedFlags)
+			offenders = append(offenders, flag)
 		}
 	}
+	if len(offenders) > 0 {
+		return fmt.Errorf("--config cannot be combined with %s; with --config only these flags are allowed: %s",
+			joinFlags(offenders), joinFlags(allowedFlags))
+	}
 	return nil
+}
+
+// joinFlags renders flag names as a comma-separated list of quoted --flag
+// tokens (e.g. `"--tui", "--compact"`), so validation errors name flags in the
+// house location grammar rather than leaking a raw Go slice via %v.
+func joinFlags(names []string) string {
+	if len(names) == 0 {
+		return "(none)"
+	}
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = fmt.Sprintf("%q", "--"+n)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func validateCIDRRanges(c *cli.Context) error {
 	if rangesCidr := c.StringSlice("rangesCidr"); len(rangesCidr) > 0 {
 		for _, cidr := range rangesCidr {
 			if !iputils.IsValidCidrOrIP(cidr) {
-				return fmt.Errorf("invalid CIDR range: %s", cidr)
+				return fmt.Errorf("invalid CIDR range %q", cidr)
 			}
 		}
 	}
@@ -194,18 +217,22 @@ func validatePlotPath(plotPath string) error {
 			}
 		}
 		if _, err := os.Stat(plotDir); os.IsNotExist(err) {
-			return fmt.Errorf("plot directory does not exist: %s", plotDir)
+			return fmt.Errorf("plot directory %q does not exist", plotDir)
 		}
 	}
 	return nil
 }
 
-func validateLogFileExists(logfilePath string) error {
+// validateLogFileExists checks that the log file path is set and present on
+// disk. It is shared by static config mode (the user-facing key is the TOML
+// `logFile`) and static flags mode (the user-facing flag is `--logfile`), so
+// the caller supplies fieldLabel to name the offending key/flag in the message.
+func validateLogFileExists(fieldLabel, logfilePath string) error {
 	if logfilePath == "" {
-		return fmt.Errorf("logFile is required")
+		return fmt.Errorf("%s is required", fieldLabel)
 	}
 	if _, err := os.Stat(logfilePath); os.IsNotExist(err) {
-		return fmt.Errorf("logfile does not exist: %s", logfilePath)
+		return fmt.Errorf("%s %q does not exist", fieldLabel, logfilePath)
 	}
 	return nil
 }
@@ -239,7 +266,7 @@ func parseFlexibleTime(input string) (t time.Time, hasOffset bool, err error) {
 		}
 	}
 
-	return time.Time{}, false, fmt.Errorf("invalid time format: %s", input)
+	return time.Time{}, false, fmt.Errorf("invalid time format %q (want YYYY-MM-DD, \"YYYY-MM-DD HH\", or \"YYYY-MM-DD HH:MM\", each optionally with \" ±HHMM\")", input)
 }
 
 // Command handler functions to reduce deep nesting
@@ -263,12 +290,12 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 	// Load and validate config
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return fmt.Errorf("cannot load config %q: %w", configPath, err)
 	}
 
 	// Validate live mode configuration
 	if err := cfg.ValidateLive(); err != nil {
-		return fmt.Errorf("invalid live configuration: %w", err)
+		return fmt.Errorf("invalid live config: %w", err)
 	}
 
 	// Install the process-wide logger; --logLevel overrides [log] level.
@@ -290,7 +317,7 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 // identically whether the user provides a config file or CLI flags.
 func handleLiveFlagsMode(c *cli.Context) error {
 	if !c.IsSet("port") || !c.IsSet("jailFile") || !c.IsSet("banFile") {
-		return fmt.Errorf("port, jailFile, and banFile are required when not using --config")
+		return fmt.Errorf("--port, --jailFile, and --banFile are required when not using --config")
 	}
 
 	// Install the process-wide logger (no config file: defaults + --logLevel).
@@ -365,11 +392,11 @@ func handleStaticConfigMode(c *cli.Context, configPath string) error {
 	// Load and validate config
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return fmt.Errorf("cannot load config %q: %w", configPath, err)
 	}
 
-	// Validate logfile exists
-	if err := validateLogFileExists(cfg.Static.LogFile); err != nil {
+	// Validate logfile exists (config mode: name the TOML key `logFile`)
+	if err := validateLogFileExists("logFile", cfg.Static.LogFile); err != nil {
 		return err
 	}
 
@@ -388,10 +415,10 @@ func handleStaticConfigMode(c *cli.Context, configPath string) error {
 // work identically whether the user provides a config file or CLI flags.
 func handleStaticFlagsMode(c *cli.Context) error {
 	if !c.IsSet("logfile") {
-		return fmt.Errorf("logfile is required when not using --config")
+		return fmt.Errorf("--logfile is required when not using --config")
 	}
 
-	if err := validateLogFileExists(c.String("logfile")); err != nil {
+	if err := validateLogFileExists("--logfile", c.String("logfile")); err != nil {
 		return err
 	}
 
@@ -427,7 +454,7 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	if start := c.String("startTime"); start != "" {
 		st, hasOffset, err := parseFlexibleTime(start)
 		if err != nil {
-			return fmt.Errorf("error parsing start time: %w", err)
+			return fmt.Errorf("parsing --startTime: %w", err)
 		}
 		trieConfig.StartTime = &st
 		trieConfig.StartTimeHasOffset = hasOffset
@@ -435,7 +462,7 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	if end := c.String("endTime"); end != "" {
 		et, hasOffset, err := parseFlexibleTime(end)
 		if err != nil {
-			return fmt.Errorf("error parsing end time: %w", err)
+			return fmt.Errorf("parsing --endTime: %w", err)
 		}
 		trieConfig.EndTime = &et
 		trieConfig.EndTimeHasOffset = hasOffset

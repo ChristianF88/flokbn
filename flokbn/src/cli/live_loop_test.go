@@ -850,8 +850,8 @@ func TestRunLiveLoop_NoLiveTriesErrors(t *testing.T) {
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{})
 
 	err := runLiveLoop(context.Background(), fake, cfg, discardLogger(t), nil)
-	if err == nil || !strings.Contains(err.Error(), "no LiveTries configurations found") {
-		t.Fatalf("err = %v, want 'no LiveTries configurations found'", err)
+	if err == nil || !strings.Contains(err.Error(), "at least one sliding window is required in live mode") {
+		t.Fatalf("err = %v, want 'at least one sliding window is required in live mode'", err)
 	}
 	if got := fake.acceptCallCount(); got != 0 {
 		t.Errorf("Accept calls = %d, want 0", got)

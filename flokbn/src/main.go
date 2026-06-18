@@ -9,7 +9,7 @@ import (
 
 func main() {
 	if err := cli.App.Run(os.Args); err != nil {
-		fmt.Println("Error running CLI app:", err)
+		fmt.Fprintln(os.Stderr, "flokbn:", err)
 		os.Exit(1)
 	}
 }

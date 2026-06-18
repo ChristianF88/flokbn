@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ChristianF88/flokbn/iputils"
+	"github.com/ChristianF88/flokbn/output"
 	"github.com/ChristianF88/flokbn/version"
 	cli "github.com/urfave/cli/v2"
 )
@@ -91,6 +92,98 @@ func TestParseFlexibleTime(t *testing.T) {
 			if _, off := got.Zone(); off != tt.wantOffsetSec {
 				t.Errorf("parseFlexibleTime(%q) zone offset = %d, want %d", tt.input, off, tt.wantOffsetSec)
 			}
+		}
+	}
+}
+
+// TestParseFlexibleTimeErrorIsActionable proves the invalid-time-format error
+// echoes the offending value with %q AND names the accepted layouts, so the
+// user can fix it without consulting docs (guiding principle: fail with a
+// helpful, actionable message that states what valid looks like).
+func TestParseFlexibleTimeErrorIsActionable(t *testing.T) {
+	_, _, err := parseFlexibleTime("2024/06/01")
+	if err == nil {
+		t.Fatal("expected error for bad time format, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"2024/06/01"`) {
+		t.Errorf("error should quote the offending value, got: %q", msg)
+	}
+	for _, want := range []string{"YYYY-MM-DD", "YYYY-MM-DD HH", "YYYY-MM-DD HH:MM", "±HHMM"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error should name accepted layout %q, got: %q", want, msg)
+		}
+	}
+}
+
+// TestValidateConfigModeFlagsNamesOffenders proves that combining --config with
+// a disallowed flag fails immediately with a message that names BOTH the
+// offending flag(s) the user set AND the allowed set, with no leaked Go slice.
+func TestValidateConfigModeFlagsNamesOffenders(t *testing.T) {
+	// static config mode allows only tui/compact/plain; --logfile and --port are
+	// disallowed and should be reported as offenders.
+	app := &cli.App{
+		Commands: []*cli.Command{
+			{
+				Name: "static",
+				Flags: []cli.Flag{
+					configFlag, tuiFlag, compactFlag, plainFlag,
+					logfileFlag, portFlag,
+				},
+				Action: func(c *cli.Context) error {
+					return validateConfigModeFlags(c, []string{"tui", "compact", "plain"})
+				},
+			},
+		},
+	}
+	err := app.Run([]string{"flokbn", "static", "--config", "x.toml", "--logfile", "a.log", "--port", "9000"})
+	if err == nil {
+		t.Fatal("expected error for disallowed flags in config mode, got nil")
+	}
+	msg := err.Error()
+	// Offenders are named (deterministic flagsToCheck order: port before logfile).
+	for _, want := range []string{`"--port"`, `"--logfile"`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error should name offender %s, got: %q", want, msg)
+		}
+	}
+	// Allowed set is listed.
+	for _, want := range []string{`"--tui"`, `"--compact"`, `"--plain"`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error should list allowed flag %s, got: %q", want, msg)
+		}
+	}
+	// No leaked Go slice formatting.
+	if strings.Contains(msg, "[") || strings.Contains(msg, "]") {
+		t.Errorf("error should not leak a Go slice literal, got: %q", msg)
+	}
+}
+
+// TestOutputResultSuccess proves outputResult now returns an error value (nil on
+// the happy path) so callers can propagate a non-zero exit on marshal failure
+// (MSG-03 item 4). The plain path has no marshal step and must return nil too.
+func TestOutputResultSuccess(t *testing.T) {
+	out := &output.JSONOutput{}
+	for _, oc := range []OutputConfig{
+		{},              // pretty JSON
+		{Compact: true}, // compact JSON
+		{Plain: true},   // plain text (no marshal)
+	} {
+		// Discard stdout to keep test output clean.
+		oldStdout := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+		done := make(chan struct{})
+		go func() { io.Copy(io.Discard, r); close(done) }()
+
+		err := outputResult(out, oc)
+
+		w.Close()
+		os.Stdout = oldStdout
+		<-done
+
+		if err != nil {
+			t.Errorf("outputResult(%+v) = %v, want nil", oc, err)
 		}
 	}
 }
@@ -278,16 +371,33 @@ func TestStaticCommandValidation(t *testing.T) {
 // cfg.Static.LogFile == "". An empty logFile must now report "logFile is
 // required" and must not fall through to the os.Stat "does not exist" path.
 func TestValidateLogFileExistsEmpty(t *testing.T) {
-	err := validateLogFileExists("")
-	if err == nil {
-		t.Fatal("expected error for empty logFile, got nil")
-	}
-	if !strings.Contains(err.Error(), "logFile is required") {
-		t.Errorf("expected error to contain 'logFile is required', got: %v", err)
-	}
-	if strings.Contains(err.Error(), "does not exist") {
-		t.Errorf("empty logFile must not produce a 'does not exist' error, got: %v", err)
-	}
+	// Config mode surfaces the TOML key `logFile`; flags mode surfaces the CLI
+	// `--logfile`. The shared validator takes the field label so the empty-path
+	// message names the offending key/flag exactly.
+	t.Run("config mode names logFile", func(t *testing.T) {
+		err := validateLogFileExists("logFile", "")
+		if err == nil {
+			t.Fatal("expected error for empty logFile, got nil")
+		}
+		if !strings.Contains(err.Error(), "logFile is required") {
+			t.Errorf("expected error to contain 'logFile is required', got: %v", err)
+		}
+		if strings.Contains(err.Error(), "does not exist") {
+			t.Errorf("empty logFile must not produce a 'does not exist' error, got: %v", err)
+		}
+	})
+	t.Run("flags mode names --logfile", func(t *testing.T) {
+		err := validateLogFileExists("--logfile", "")
+		if err == nil {
+			t.Fatal("expected error for empty --logfile, got nil")
+		}
+		if !strings.Contains(err.Error(), "--logfile is required") {
+			t.Errorf("expected error to contain '--logfile is required', got: %v", err)
+		}
+		if strings.Contains(err.Error(), "does not exist") {
+			t.Errorf("empty --logfile must not produce a 'does not exist' error, got: %v", err)
+		}
+	})
 }
 
 func TestCLIFlags(t *testing.T) {
