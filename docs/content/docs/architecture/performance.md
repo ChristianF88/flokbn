@@ -124,7 +124,7 @@ If memory usage is higher than expected (the usual causes are very many unique I
 1. Use live mode with sliding windows instead of static mode
 2. Split files and analyze time ranges separately
 3. Increase `minSize` to reduce tracked IPs
-4. Use whitelists to exclude traffic early
+4. Use User-Agent whitelists to exclude traffic early (the IP whitelist does not reduce analysis load — it acts only on the jail/ban pipeline)
 
 Live mode memory is bounded by `slidingWindowMaxSize` (~50MB per window at 50,000 requests).
 

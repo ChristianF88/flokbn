@@ -33,13 +33,17 @@ type JSONOutput struct {
 }
 
 // GlobalFilters records how many entries each globally-configured whitelist
-// holds. These whitelists drop requests from every trie regardless of the
-// per-trie TrieParameters, so they must be surfaced as active filters even on a
-// baseline trie that has no per-trie filters of its own. Only counts are kept
-// here (not the entries themselves) — the renderers report TYPE + COUNT.
+// holds. Only counts are kept here (not the entries themselves).
 //
-// Blacklists are intentionally excluded: they do not filter trie membership
-// (they only affect the published ban list), so they are not "active filters".
+// Only the UA whitelist actually drops requests from every trie, so it is the
+// only global list the renderers surface as an active filter. The IP whitelist
+// acts solely in the jail/ban publish pipeline (ProcessJailWithWhitelist /
+// ComposeBanLists): whitelisted traffic still enters every trie and is fully
+// counted in the statistics and threat percentages, so listing it as a filter
+// would be misleading. Its count is recorded for the JSON output only.
+//
+// Blacklists are intentionally excluded for the same reason: they do not filter
+// trie membership (they only affect the published ban list).
 type GlobalFilters struct {
 	IPWhitelistCIDRs    int `json:"ip_whitelist_cidrs"`
 	UAWhitelistPatterns int `json:"ua_whitelist_patterns"`
@@ -236,12 +240,12 @@ func (j *JSONOutput) UpdateDuration(startTime time.Time) {
 // renderer (CLI plain output and the TUI summary) so the two never drift.
 //
 // The per-trie filters (User-Agent regex, endpoint regex, time range) come from
-// params; the global whitelists come from gf. The global whitelist entries are
-// appended AFTER the per-trie entries, and only when their count is > 0 — so a
-// baseline trie with no per-trie filters still reports the active IP/UA
-// whitelists instead of "None". Callers should print "None" only when the
-// returned slice is empty (i.e. zero per-trie filters AND both whitelist counts
-// are zero).
+// params; the global UA whitelist comes from gf and is appended AFTER the
+// per-trie entries, and only when its count is > 0 — so a baseline trie with no
+// per-trie filters still reports the active UA whitelist instead of "None".
+// The IP whitelist is deliberately NOT listed: it never drops requests from a
+// trie — it acts only in the jail/ban publish pipeline (see GlobalFilters).
+// Callers should print "None" only when the returned slice is empty.
 func ActiveFilters(params TrieParameters, gf GlobalFilters) []string {
 	var filters []string
 
@@ -273,11 +277,10 @@ func ActiveFilters(params TrieParameters, gf GlobalFilters) []string {
 
 	// Note: CIDRRanges are not filters - they are analysis targets, so we don't include them.
 
-	// Global whitelists drop requests from every trie; report TYPE + COUNT
-	// (never the entries themselves), appended after the per-trie filters.
-	if gf.IPWhitelistCIDRs > 0 {
-		filters = append(filters, fmt.Sprintf("IP whitelist (%d CIDRs)", gf.IPWhitelistCIDRs))
-	}
+	// The global UA whitelist drops requests from every trie; report TYPE +
+	// COUNT (never the entries themselves), appended after the per-trie
+	// filters. The IP whitelist is not listed: it filters nothing here (see
+	// GlobalFilters).
 	if gf.UAWhitelistPatterns > 0 {
 		filters = append(filters, fmt.Sprintf("UA whitelist (%d patterns)", gf.UAWhitelistPatterns))
 	}

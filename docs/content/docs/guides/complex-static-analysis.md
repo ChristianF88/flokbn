@@ -80,9 +80,10 @@ directory. The jail file persists across runs — delete it (together with
 
 The `[global]` section wires all four list files:
 
-- `whitelist` / `blacklist` — CIDRs never/always to ban. The examples hold
-  private ranges plus public DNS, and TEST-NET-2 respectively; neither
-  overlaps the hotspot ranges, so detection is unaffected.
+- `whitelist` / `blacklist` — CIDRs never/always to ban. These act only on
+  the jail/ban pipeline — they never remove requests from the analysis, so
+  detection, statistics, and percentages are unaffected by them. The examples
+  hold private ranges plus public DNS, and TEST-NET-2 respectively.
 - `userAgentWhitelist` / `userAgentBlacklist` — **exact** User-Agent string
   matches. Not substrings, not regexes: the full User-Agent header must
   equal a line in the file.
@@ -91,9 +92,11 @@ A whitelisted User-Agent removes the request from **every** trie and
 shields its IP from jailing. A blacklisted User-Agent jails its IP
 immediately as a `/32`.
 
-The global lists are reported as **Active Filters** on every trie. With the
-demo's list files this shows as `IP whitelist (8 CIDRs), UA whitelist (58
-patterns)`, in addition to whatever per-trie filters that trie carries.
+The global UA whitelist is reported under **Active Filters** on every trie.
+With the demo's list files this shows as `UA whitelist (58 patterns)`, in
+addition to whatever per-trie filters that trie carries. The IP lists are
+deliberately not listed there: they act only on the jail/ban pipeline and
+never drop requests from a trie.
 
 The example deliberately demonstrates whitelist precedence:
 `ua_whitelist.txt` contains the exact Googlebot and bingbot strings present
@@ -206,7 +209,7 @@ Requests After Filtering: 895,978
 Excluded (UA whitelist): 104,022
 Unique IPs:              884,202
 Trie Build Time:         1364 ms
-Active Filters:          IP whitelist (8 CIDRs), UA whitelist (58 patterns)
+Active Filters:          UA whitelist (58 patterns)
 
 📍 CIDR RANGE ANALYSIS
   23.0.0.0/8                21,316 requests  (  2.38%)
@@ -231,14 +234,14 @@ Active Filters:          IP whitelist (8 CIDRs), UA whitelist (58 patterns)
 ────────────────────────────────────────────────────────────
 Requests After Filtering: 195,509
 Active Filters:          User-Agent: Googlebot|bingbot|python-requests|curl|Anubis,
-                         IP whitelist (8 CIDRs), UA whitelist (58 patterns)
+                         UA whitelist (58 patterns)
   ...
 
 🎯 TRIE: t3_hot_endpoints
 ────────────────────────────────────────────────────────────
 Requests After Filtering: 545,070
 Active Filters:          Endpoint: ^/fake-endpoint-[1-9]$,
-                         IP whitelist (8 CIDRs), UA whitelist (58 patterns)
+                         UA whitelist (58 patterns)
   ...
 
 🎯 TRIE: t4_targeted_window
@@ -247,7 +250,7 @@ Requests After Filtering: 39,399
 Active Filters:          User-Agent: python-requests|curl|Anubis,
                          Endpoint: ^/fake-endpoint-[1-9]$,
                          Time: 2026-02-04 12:00 → 2026-02-05 12:00,
-                         IP whitelist (8 CIDRs), UA whitelist (58 patterns)
+                         UA whitelist (58 patterns)
 
 🔍 CLUSTERING RESULTS (3 sets)
   Set 1: min_size=300, depth=12-16, threshold=0.20

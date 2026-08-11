@@ -6,7 +6,7 @@ This directory contains example configuration files for the flokbn threat detect
 
 flokbn uses various filtering mechanisms to identify and block malicious traffic:
 
-1. **IP-based filtering** - Whitelist/blacklist specific IP addresses and CIDR ranges
+1. **IP-based ban control** - Whitelist/blacklist specific IP addresses and CIDR ranges in the jail/ban pipeline (analysis output is not filtered by these lists)
 2. **User-Agent filtering** - Whitelist/blacklist based on exact User-Agent strings
 3. **Clustering analysis** - Detect threat patterns through IP clustering
 4. **Jail system** - Persistent ban management
@@ -36,7 +36,9 @@ all four list files) with `flokbn generate static-demo --out ./demo`, then
 "Complex Static Analysis" guide in the documentation for a full walkthrough.
 
 ### whitelist.txt
-Contains IP addresses and CIDR ranges that should **never** be banned:
+Contains IP addresses and CIDR ranges that should **never** be banned. These
+ranges are protected from jail/ban only — their traffic still appears in
+analysis results and statistics:
 - Internal networks (192.168.0.0/16, 10.0.0.0/8)
 - Essential services (DNS servers, CDNs)
 - Monitoring and health check services
@@ -119,7 +121,7 @@ flokbn processes filtering in this order:
 3. **Check User-Agent whitelist** - exclude matching IPs from analysis
 4. **Check User-Agent blacklist** - mark matching IPs for immediate banning
 5. **Perform clustering analysis** on remaining IPs
-6. **Apply IP whitelist** - remove whitelisted IPs from jail candidates
+6. **Apply IP whitelist** - drop detected ranges fully covered by a single whitelist entry before the jail, and subtract the whitelist from the published ban file (whitelisted traffic still appears in the analysis output)
 7. **Update jail file** with new detections
 8. **Generate ban file** with active bans + IP blacklist
 

@@ -211,9 +211,11 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	// Add results to output
 	jsonOutput.Tries = trieResults
 
-	// Record the global whitelist entry counts so the renderers can list them as
-	// active filters (they drop requests from every trie regardless of per-trie
-	// params). Lists are tiny and loaded once here; never in the hot loop.
+	// Record the global whitelist entry counts. Only the UA whitelist is a real
+	// request filter (it drops requests from every trie) and is listed under
+	// Active Filters; the IP whitelist count is informational only — it filters
+	// nothing here (jail/ban publish pipeline only). Lists are tiny and loaded
+	// once here; never in the hot loop.
 	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
 
 	// Set General.UniqueIPs to the max across all tries
@@ -248,8 +250,10 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 }
 
 // computeGlobalFilters loads the globally-configured whitelists and records
-// their entry counts. The whitelists drop requests from every trie regardless
-// of per-trie params, so the renderers list them as active filters. Only counts
+// their entry counts. Only the UA whitelist drops requests from every trie
+// (and is rendered as an active filter); the IP whitelist acts solely in the
+// jail/ban publish pipeline, so its count is surfaced in the JSON output only
+// (see output.GlobalFilters). Only counts
 // are needed (not the entries), and the files are tiny — loaded once per
 // analysis here, never in the per-request hot loop. A loader error yields a
 // zero count for that summary line. CFG-02: this is now strictly DOWNSTREAM of
@@ -640,10 +644,10 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 
 	jsonOutput.Tries = trieResults
 
-	// Record the global whitelist entry counts (same as the full path). Even
-	// though this fast path runs only when no per-trie filter forces string
-	// fields, a global IP/UA whitelist may still be configured and dropping
-	// requests, so it must be surfaced as an active filter.
+	// Record the global whitelist entry counts (same as the full path). Only
+	// the IP whitelist can be configured here — any UA list forces the full
+	// path (needsNonIPFields above) — and it drops nothing from the analysis,
+	// so this only feeds the informational JSON count, never an active filter.
 	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
 
 	// Set General.UniqueIPs to the max across all tries.

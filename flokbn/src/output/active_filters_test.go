@@ -19,26 +19,41 @@ func hasEntry(filters []string, want string) bool {
 	return false
 }
 
-// TestActiveFilters_WhitelistsOnly is the regression guard for the bug: a
-// baseline trie with no per-trie filters but with active global whitelists must
-// still list those whitelists (TYPE + COUNT), not report "None".
-func TestActiveFilters_WhitelistsOnly(t *testing.T) {
+// TestActiveFilters_UAWhitelistOnly is the regression guard: a baseline trie
+// with no per-trie filters but an active global UA whitelist must still list it
+// (TYPE + COUNT), not report "None".
+func TestActiveFilters_UAWhitelistOnly(t *testing.T) {
 	gf := GlobalFilters{IPWhitelistCIDRs: 3, UAWhitelistPatterns: 5}
 	filters := ActiveFilters(TrieParameters{}, gf)
 
 	if len(filters) == 0 {
-		t.Fatalf("expected non-empty filters for active whitelists, got empty (renderer would print None)")
-	}
-	if !hasEntry(filters, "IP whitelist (3 CIDRs)") {
-		t.Errorf("missing IP whitelist entry, got %v", filters)
+		t.Fatalf("expected non-empty filters for active UA whitelist, got empty (renderer would print None)")
 	}
 	if !hasEntry(filters, "UA whitelist (5 patterns)") {
 		t.Errorf("missing UA whitelist entry, got %v", filters)
 	}
 }
 
-// TestActiveFilters_TrulyNone verifies that with no per-trie filters AND zero
-// whitelist counts the result is empty, so the renderer prints "None".
+// TestActiveFilters_IPWhitelistNeverListed guards the fix for the misleading
+// display: the IP whitelist does not drop requests from any trie (it acts only
+// in the jail/ban publish pipeline), so it must never appear as an active
+// filter — an IP-whitelist-only config renders "None".
+func TestActiveFilters_IPWhitelistNeverListed(t *testing.T) {
+	onlyIP := ActiveFilters(TrieParameters{}, GlobalFilters{IPWhitelistCIDRs: 4})
+	if len(onlyIP) != 0 {
+		t.Fatalf("expected empty filters for IP-whitelist-only config (=> None), got %v", onlyIP)
+	}
+
+	both := ActiveFilters(TrieParameters{}, GlobalFilters{IPWhitelistCIDRs: 4, UAWhitelistPatterns: 7})
+	for _, f := range both {
+		if strings.Contains(f, "IP whitelist") {
+			t.Errorf("IP whitelist must never be listed as an active filter, got %v", both)
+		}
+	}
+}
+
+// TestActiveFilters_TrulyNone verifies that with no per-trie filters AND a zero
+// UA whitelist count the result is empty, so the renderer prints "None".
 func TestActiveFilters_TrulyNone(t *testing.T) {
 	filters := ActiveFilters(TrieParameters{}, GlobalFilters{})
 	if len(filters) != 0 {
@@ -46,10 +61,10 @@ func TestActiveFilters_TrulyNone(t *testing.T) {
 	}
 }
 
-// TestActiveFilters_PerTrieAndWhitelist verifies per-trie filters and global
-// whitelists coexist, with the whitelist entries appended AFTER the per-trie
-// entries.
-func TestActiveFilters_PerTrieAndWhitelist(t *testing.T) {
+// TestActiveFilters_PerTrieAndUAWhitelist verifies per-trie filters and the
+// global UA whitelist coexist, with the UA whitelist entry appended AFTER the
+// per-trie entries.
+func TestActiveFilters_PerTrieAndUAWhitelist(t *testing.T) {
 	params := TrieParameters{UserAgentRegex: strPtr("badbot")}
 	gf := GlobalFilters{IPWhitelistCIDRs: 2, UAWhitelistPatterns: 1}
 	filters := ActiveFilters(params, gf)
@@ -57,33 +72,22 @@ func TestActiveFilters_PerTrieAndWhitelist(t *testing.T) {
 	if !hasEntry(filters, "User-Agent: badbot") {
 		t.Errorf("missing per-trie User-Agent regex entry, got %v", filters)
 	}
-	if !hasEntry(filters, "IP whitelist (2 CIDRs)") {
-		t.Errorf("missing IP whitelist entry, got %v", filters)
-	}
 	if !hasEntry(filters, "UA whitelist (1 patterns)") {
 		t.Errorf("missing UA whitelist entry, got %v", filters)
 	}
 
-	// Whitelist entries must come after the per-trie ones.
+	// The UA whitelist entry must come after the per-trie ones.
 	joined := strings.Join(filters, "|")
 	uaRegexIdx := strings.Index(joined, "User-Agent: badbot")
-	ipWLIdx := strings.Index(joined, "IP whitelist")
-	if uaRegexIdx < 0 || ipWLIdx < 0 || ipWLIdx < uaRegexIdx {
-		t.Errorf("expected whitelist entries appended after per-trie entries, got %v", filters)
+	uaWLIdx := strings.Index(joined, "UA whitelist")
+	if uaRegexIdx < 0 || uaWLIdx < 0 || uaWLIdx < uaRegexIdx {
+		t.Errorf("expected UA whitelist entry appended after per-trie entries, got %v", filters)
 	}
 }
 
-// TestActiveFilters_OnlyNonzeroWhitelistsListed verifies each whitelist is
-// listed independently and only when its count > 0.
-func TestActiveFilters_OnlyNonzeroWhitelistsListed(t *testing.T) {
-	onlyIP := ActiveFilters(TrieParameters{}, GlobalFilters{IPWhitelistCIDRs: 4})
-	if !hasEntry(onlyIP, "IP whitelist (4 CIDRs)") {
-		t.Errorf("expected IP whitelist entry, got %v", onlyIP)
-	}
-	if hasEntry(onlyIP, "UA whitelist (0 patterns)") || len(onlyIP) != 1 {
-		t.Errorf("expected only the IP whitelist entry, got %v", onlyIP)
-	}
-
+// TestActiveFilters_OnlyNonzeroUAWhitelistListed verifies the UA whitelist is
+// listed only when its count > 0.
+func TestActiveFilters_OnlyNonzeroUAWhitelistListed(t *testing.T) {
 	onlyUA := ActiveFilters(TrieParameters{}, GlobalFilters{UAWhitelistPatterns: 7})
 	if !hasEntry(onlyUA, "UA whitelist (7 patterns)") {
 		t.Errorf("expected UA whitelist entry, got %v", onlyUA)

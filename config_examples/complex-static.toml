@@ -35,9 +35,10 @@
 jailFile = "flokbn_jail.json"
 banFile  = "flokbn_ban.txt"
 
-# IP lists: CIDRs never to ban / always to ban. The example whitelist holds
-# private ranges and public DNS; the blacklist holds TEST-NET-2 — neither
-# overlaps the hotspot ranges in the fake data, so detection is unaffected.
+# IP lists: CIDRs never to ban / always to ban. They act on the jail/ban
+# pipeline only and never drop requests from the analysis — detection,
+# statistics, and percentages are unaffected by them. The example whitelist
+# holds private ranges and public DNS; the blacklist holds TEST-NET-2.
 whitelist = "../../config_examples/whitelist.txt"
 blacklist = "../../config_examples/blacklist.txt"
 
