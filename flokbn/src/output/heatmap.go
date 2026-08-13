@@ -120,7 +120,12 @@ func PlotHeatmap(requests []ingestor.Request, filename string) error {
 		return fmt.Errorf("closing heatmap file %s: %w", filename, cerr)
 	}
 
-	fmt.Printf("Heatmap saved to %s\n", filename)
+	// Progress notice goes to STDERR, never stdout: stdout carries the
+	// machine-readable document in the default and --compact JSON modes, and a
+	// stray line there makes the whole output unparseable
+	// (jq: "Invalid numeric literal at line 1, column 8"). The same fact is also
+	// recorded as an "info" warning in the JSON itself (see executeStaticAnalysis).
+	fmt.Fprintf(os.Stderr, "Heatmap saved to %s\n", filename)
 	return nil
 }
 

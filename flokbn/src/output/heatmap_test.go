@@ -1,6 +1,7 @@
 package output
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,6 +37,47 @@ func TestPlotHeatmap_HappyPath(t *testing.T) {
 	}
 	if fi.Size() == 0 {
 		t.Error("heatmap file is empty, want a rendered (non-empty) file")
+	}
+}
+
+// TestPlotHeatmap_StdoutStaysClean is the regression guard for the "Heatmap
+// saved to ..." notice: it must go to stderr, never stdout. stdout carries the
+// JSON document in the default and --compact static modes, so a single stray
+// line there makes the entire output unparseable
+// (jq: "Invalid numeric literal at line 1, column 8").
+func TestPlotHeatmap_StdoutStaysClean(t *testing.T) {
+	requests := []ingestor.Request{
+		ipv4Request(10, 5, 5, 1),
+		ipv4Request(192, 168, 0, 3),
+	}
+	out := filepath.Join(t.TempDir(), "heatmap.html")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+
+	plotErr := PlotHeatmap(requests, out)
+
+	os.Stdout = orig
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatalf("closing pipe writer: %v", closeErr)
+	}
+	captured, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("reading captured stdout: %v", readErr)
+	}
+	if closeErr := r.Close(); closeErr != nil {
+		t.Fatalf("closing pipe reader: %v", closeErr)
+	}
+
+	if plotErr != nil {
+		t.Fatalf("PlotHeatmap returned error: %v", plotErr)
+	}
+	if len(captured) != 0 {
+		t.Errorf("PlotHeatmap wrote %q to stdout, want nothing (notice belongs on stderr)", captured)
 	}
 }
 
