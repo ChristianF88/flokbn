@@ -6,19 +6,17 @@
   flokbn
 </h1>
 
+[![tests](https://img.shields.io/github/actions/workflow/status/ChristianF88/flokbn/ci.yml?branch=main&label=tests)](https://github.com/ChristianF88/flokbn/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/ChristianF88/flokbn)](https://github.com/ChristianF88/flokbn/releases/latest)
+[![license](https://img.shields.io/github/license/ChristianF88/flokbn)](LICENSE)
+
 **A million IPs. A handful of ranges.**
+
+Say it "flok ban" - a *flock* of IPs, banned as one. Bots don't arrive alone; flokbn treats the flock as the unit.
 
 flokbn is a Go CLI that clusters the IPs in your access logs into CIDR ranges. A binary trie does the heavy lifting - a 2-million-line log takes about a second on an ordinary workstation. Use it for botnet detection, abuse analysis, or building ban lists.
 
 [Documentation](https://christianf88.github.io/flokbn/) · [Quick start](https://christianf88.github.io/flokbn/docs/getting-started/quick-start/) · [CLI reference](https://christianf88.github.io/flokbn/docs/reference/cli-flags/)
-
-<!-- DEMO:STATIC - replace this whole comment with the static-mode recording.
-     Recommended (mp4): edit README on github.com, drag the .mp4 into the editor,
-     and keep the generated https://github.com/user-attachments/assets/... URL
-     on its own line with a blank line above and below (no markdown around it).
-     Fallback (gif): commit to .github/assets/demo-static.gif and use:
-     ![flokbn static mode: clustering a 2M-line access log](.github/assets/demo-static.gif)
--->
 
 ## Quick start
 
@@ -75,14 +73,6 @@ Each `--clusterArgSets` is `minSize,minDepth,maxDepth,threshold`: a minimum requ
 **`flokbn static`** analyzes historical log files: multi-tier detection in one pass, time-window slices for forensics, and JSON, compact JSON, plain-text, or interactive TUI output.
 
 **`flokbn live`** monitors continuously, ingesting over the Lumberjack protocol (Filebeat-compatible). Sliding windows watch recent traffic; detected ranges go into a persistent jail with escalating ban stages. HTTP endpoints expose `/stats`, `/bans`, and Prometheus `/metrics`. A Docker demo stack wires it into closed-loop deny enforcement with a Grafana dashboard.
-
-<!-- DEMO:LIVE - replace this whole comment with the live-mode recording.
-     Recommended (mp4): edit README on github.com, drag the .mp4 into the editor,
-     and keep the generated https://github.com/user-attachments/assets/... URL
-     on its own line with a blank line above and below (no markdown around it).
-     Fallback (gif): commit to .github/assets/demo-live.gif and use:
-     ![flokbn live mode: sliding-window detection and automatic banning](.github/assets/demo-live.gif)
--->
 
 ## Performance
 
