@@ -882,7 +882,7 @@ func TestRunLiveLoop_ReadBatchErrorPropagates(t *testing.T) {
 }
 
 // TestRunLiveLoop_HeartbeatAdvancesSnapshotWhenIdle: with zero traffic the
-// loop must keep publishing snapshots via heartbeats — time advances, no
+// loop must keep publishing snapshots via heartbeats - time advances, no
 // iteration ever runs, and the heartbeat counter grows. Exact heartbeat
 // counts are timing-dependent and deliberately not asserted.
 func TestRunLiveLoop_HeartbeatAdvancesSnapshotWhenIdle(t *testing.T) {
@@ -926,7 +926,7 @@ func TestRunLiveLoop_HeartbeatExpiresBansWithZeroTraffic(t *testing.T) {
 	})
 
 	// Seed the jail: 10.5.5.0/24 in cell 1 (10min duration) with a ban that
-	// started 1h ago — already overdue for expiry.
+	// started 1h ago - already overdue for expiry.
 	seeded := jail.NewJail()
 	seeded.Cells[0].Prisoners = append(seeded.Cells[0].Prisoners, jail.Prisoner{
 		CIDR:      "10.5.5.0/24",

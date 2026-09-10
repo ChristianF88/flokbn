@@ -95,7 +95,7 @@ func TestDisplayCachedResultsHitWinsOverRebuild(t *testing.T) {
 }
 
 // TestFastAndCachedPathsAgree verifies displayResultsFromTrieCache and
-// displayCachedResults render identical texts for every trie — the
+// displayCachedResults render identical texts for every trie - the
 // regression test for the former divergent dual-cache design.
 func TestFastAndCachedPathsAgree(t *testing.T) {
 	a := newCacheTestApp(t)

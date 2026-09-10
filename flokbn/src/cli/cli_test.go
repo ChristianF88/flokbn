@@ -288,7 +288,7 @@ func TestStaticCommandValidation(t *testing.T) {
 			expectError: false,
 		},
 		// CFG-02: the "Invalid CIDR range" and "Missing log file" cases moved to
-		// SUBPROCESS execution (TestStaticCommandValidation_BarrierRouted) — they
+		// SUBPROCESS execution (TestStaticCommandValidation_BarrierRouted) - they
 		// now route through the pre-work barrier whose cli.Exit("",1) fires
 		// os.Exit(1) INSIDE App.Run, which would kill this in-process test binary.
 		// Only the TIER-1 hard-return case (clusterArgSets arity) and the valid
@@ -460,7 +460,7 @@ func TestEnhancedCLIArguments(t *testing.T) {
 		},
 		// CFG-02: the "Invalid user agent regex" and "Invalid endpoint regex"
 		// cases moved to SUBPROCESS execution
-		// (TestStaticCommandValidation_BarrierRouted) — a bad regex now routes
+		// (TestStaticCommandValidation_BarrierRouted) - a bad regex now routes
 		// into cfg.diags and aborts at the barrier (os.Exit(1) inside App.Run),
 		// which would kill this in-process test binary.
 		{

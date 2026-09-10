@@ -10,7 +10,7 @@
 // so the gate `pf.MightMatch(s) && regex.MatchString(s)` is identical to
 // `regex.MatchString(s)` for every input. The prefilter may report a false
 // positive (MightMatch true while the regex does not match); the authoritative
-// regex then rejects it. The prefilter MUST NOT report a false negative — that
+// regex then rejects it. The prefilter MUST NOT report a false negative - that
 // would silently drop a matching request, which is data corruption.
 //
 // When a pattern is provably equivalent to "the input contains one of these
@@ -77,7 +77,7 @@ func Build(pattern string) *Prefilter {
 	}
 
 	// Drop literals shorter than minLiteralLen (measured in bytes). If nothing
-	// long enough survives, the screen would be too weak / unsafe — bail.
+	// long enough survives, the screen would be too weak / unsafe - bail.
 	kept := lits[:0]
 	for _, l := range lits {
 		if len(l) >= minLiteralLen {
@@ -102,7 +102,7 @@ func Build(pattern string) *Prefilter {
 
 	// The pattern is provably equivalent to "contains one of {literals}" under
 	// unanchored MatchString exactly when the top-level node matches its whole
-	// span as one of the literals (full) — i.e. there is no anchor, repetition,
+	// span as one of the literals (full) - i.e. there is no anchor, repetition,
 	// or surrounding structure that MightMatch would ignore. Because Build bails
 	// when any required literal is shorter than the threshold, reaching this
 	// point guarantees no needle was dropped, so full => exact is sound.
@@ -111,7 +111,7 @@ func Build(pattern string) *Prefilter {
 	// Heterogeneous-fold guard (AUDIT-01): when the tree folds some members
 	// (fold==true => the WHOLE OR-set is lowercased and matched case-
 	// insensitively) but also contains a member with a case-SENSITIVE ASCII
-	// letter, the screen matches that letter case-insensitively too — strictly
+	// letter, the screen matches that letter case-insensitively too - strictly
 	// over-permissive vs. the regex. The OR-set is still a valid NECESSARY
 	// condition (no false negative), but it is no longer EXACT, so the
 	// authoritative regex must decide. Refuse to mark such a tree exact.
@@ -150,7 +150,7 @@ const maxCrossProduct = 64
 
 // litResult is the internal extractor result for a node.
 //
-//	set  : an OR-set of literals. Necessity invariant — if the node matches a
+//	set  : an OR-set of literals. Necessity invariant - if the node matches a
 //	       span, that span contains at least one member of set as a substring.
 //	full : true iff the node matches EXACTLY one of the members of set and
 //	       nothing else (i.e. the node's whole matched text is a member). This
@@ -161,7 +161,7 @@ const maxCrossProduct = 64
 //	       case-folded (a case-SENSITIVE letter). If the tree also folds some
 //	       member (fold==true), the prefilter lowercases the WHOLE OR-set under
 //	       one global foldCase, which then matches this case-sensitive letter
-//	       case-insensitively too — over-permissive vs. the regex. Such a
+//	       case-insensitively too - over-permissive vs. the regex. Such a
 //	       heterogeneous-fold tree must NOT be marked full/exact; see Build.
 //	ok   : false means "no required literal" (fail closed).
 type litResult struct {
@@ -203,7 +203,7 @@ func extract(re *syntax.Regexp) litResult {
 			return litResult{set: []string{l}, full: true, fold: f, csLetter: cs, ok: true}
 		}
 		// Multi-rune class: no required literal, but it is a "matched span" of
-		// some single character — represented as not-ok (contributes nothing).
+		// some single character - represented as not-ok (contributes nothing).
 		return failClosed()
 
 	case syntax.OpPlus:
@@ -280,7 +280,7 @@ func extract(re *syntax.Regexp) litResult {
 // a contiguous substring) built from adjacent FULL children by cross product.
 // When a child breaks the run (it is not ok, or not full), the run is closed
 // off as a completed candidate and a new run begins after it. At the end the
-// best completed run (the one whose SHORTEST member is longest — strongest
+// best completed run (the one whose SHORTEST member is longest - strongest
 // rejection) becomes the result. The whole concat is "full" only if it reduced
 // to a single uninterrupted run spanning every child.
 func extractConcat(subs []*syntax.Regexp) litResult {
@@ -418,7 +418,7 @@ func literalFromRunes(runes []rune, flags syntax.Flags) (lit string, fold, csLet
 			} else {
 				// An ASCII letter that is matched case-SENSITIVELY. If this
 				// literal's tree also folds elsewhere, the whole OR-set is
-				// lowercased uniformly, which would fold this letter too —
+				// lowercased uniformly, which would fold this letter too -
 				// over-permissive vs. the regex. Build uses csLetter+fold to
 				// refuse exactness for such heterogeneous-fold trees.
 				csLetter = true

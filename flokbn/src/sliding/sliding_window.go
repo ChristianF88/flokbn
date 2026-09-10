@@ -57,7 +57,7 @@ func NewSlidingWindowTrie(window time.Duration, maxEntries int) *SlidingWindow {
 // rebuildTrie reconstructs the window trie from scratch on a fresh
 // SeqNodeAllocator using the SURVIVING IPQueue, then swaps it in. The previous
 // trie (and its allocator chunks) becomes unreferenced so the GC reclaims the
-// entire prior generation — this is what keeps RSS tracking window size rather
+// entire prior generation - this is what keeps RSS tracking window size rather
 // than distinct-IPs-ever-seen. Uses the same RadixSort + BuildSorted fast path
 // as the static build, and excludes the 0 uint32 failed-parse sentinel exactly
 // as the static path does (IPv4-only).

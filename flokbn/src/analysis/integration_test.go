@@ -635,7 +635,7 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 		t.Fatal(err)
 	}
 
-	// CFG-02: the TOML path is now collect-all — LoadConfig succeeds and the
+	// CFG-02: the TOML path is now collect-all - LoadConfig succeeds and the
 	// invalid regex surfaces through Validate(StaticMode).Report(). MSG preserved.
 	cfg, tomlErr := config.LoadConfig(configPath)
 	if tomlErr != nil {
@@ -687,7 +687,7 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 		t.Fatal(err)
 	}
 
-	// CFG-02: collect-all — surfaces via Validate(StaticMode).Report().
+	// CFG-02: collect-all - surfaces via Validate(StaticMode).Report().
 	cfg, tomlErr := config.LoadConfig(configPath)
 	if tomlErr != nil {
 		t.Fatalf("LoadConfig should succeed (regex surfaces via Validate now): %v", tomlErr)

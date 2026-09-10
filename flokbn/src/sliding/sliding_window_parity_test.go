@@ -15,9 +15,9 @@ import (
 // Trie.InsertUint32 / Trie.DeleteUint32 and uint32-keyed IPStats) produces
 // state that is byte-identical to what the prior net.IP path would have
 // produced. It drives a representative MIXED event stream through the live
-// window — many inserts, time-based eviction, max-entries eviction, repeated
+// window - many inserts, time-based eviction, max-entries eviction, repeated
 // IPs (count accumulation), and enough churn to trigger the periodic trie
-// rebuild — then asserts three things against an INDEPENDENT oracle built from
+// rebuild - then asserts three things against an INDEPENDENT oracle built from
 // the surviving entries via the net.IP entry points (Insert(net.IP) /
 // IPToUint32):
 //
@@ -26,7 +26,7 @@ import (
 //     adds/removes over net.IP-derived keys.
 //  3. The window trie's clusters (CollectCIDRsNumeric AND CollectCIDRs) are
 //     identical to a reference trie built the OLD way: Insert(net.IP) over the
-//     same surviving IPs. This is the hard correctness invariant — clustering
+//     same surviving IPs. This is the hard correctness invariant - clustering
 //     output must not drift.
 func TestSlidingWindow_Uint32Parity(t *testing.T) {
 	// Small maxEntries + many distinct IPs across cycles forces size eviction
@@ -181,8 +181,8 @@ func TestSlidingWindow_Uint32Parity(t *testing.T) {
 // TestTrie_DeleteUint32_ParityWithDelete proves the new Trie.DeleteUint32 entry
 // point is byte-identical to Delete(net.IP) for IPv4: it deletes the same nodes,
 // applies the same underflow guard, and prunes the same subtrees. Two tries are
-// driven through an identical insert/delete script — one via the net.IP API, one
-// via the uint32 API — and must end in identical CountAll and identical clusters
+// driven through an identical insert/delete script - one via the net.IP API, one
+// via the uint32 API - and must end in identical CountAll and identical clusters
 // across several tiers, including over-delete (underflow) and prune-from-deepest
 // cases.
 func TestTrie_DeleteUint32_ParityWithDelete(t *testing.T) {

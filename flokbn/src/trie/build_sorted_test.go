@@ -133,7 +133,7 @@ func TestBuildSortedIdentity(t *testing.T) {
 	}
 
 	// CLUSTERED data: a handful of /16 and /24 bases with many hosts, plus
-	// repeated exact IPs — representative of bot traffic. 100k requests.
+	// repeated exact IPs - representative of bot traffic. 100k requests.
 	{
 		r := rand.New(rand.NewSource(0xF00D))
 		bases16 := []uint32{0x0EA90000, 0x0EBA0000, 0x0EBF0000, 0x71AC0000, 0x7B140000}

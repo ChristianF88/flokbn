@@ -116,7 +116,7 @@ func TestParseEvent_InvalidTimestamp(t *testing.T) {
 // TestParseEvent_RetainsTimezoneOffset documents the live side of the URGENT-09
 // timestamp-parity fix: the live ingestor parses the log offset (-0700/+0200)
 // and retains it on Request.Timestamp. The wall-clock digits are unchanged
-// (06:00 stays 06:00) and the absolute instant reflects the real offset — which
+// (06:00 stays 06:00) and the absolute instant reflects the real offset - which
 // is now exactly what the STATIC parser also produces for the same line, so live
 // and static agree (the previous 7h skew came from the static side discarding
 // the offset). A -0700 06:00 line is 13:00 UTC; a +0200 06:00 line is 04:00 UTC.
@@ -157,7 +157,7 @@ func TestParseEvent_RetainsTimezoneOffset(t *testing.T) {
 // bytes) was previously dropped by live (the offset-required layout failed →
 // ParseError) while static keeps it as UTC. After the fix the live ingestor
 // falls back to the zone-less layout: the event is accepted (err == nil), the
-// wall-clock digits are preserved, and the zone is UTC (offset 0) — matching the
+// wall-clock digits are preserved, and the zone is UTC (offset 0) - matching the
 // static parser exactly. Genuinely malformed brackets ([badtime]) still fail
 // both layouts (see TestParseEvent_InvalidTimestamp).
 func TestParseEvent_AcceptsOffsetlessTimestampAsUTC(t *testing.T) {
@@ -180,7 +180,7 @@ func TestParseEvent_AcceptsOffsetlessTimestampAsUTC(t *testing.T) {
 
 // TestParseEvent_DashStatusBytesAreZeroNotMalformed is the URGENT-09 repro: a
 // "-" (absent) status or bytes field must be treated as a silent zero, NOT
-// counted as malformed — parity with the static log parser. Previously
+// counted as malformed - parity with the static log parser. Previously
 // strconv.Atoi("-") errored and incremented malformed, systematically inflating
 // MalformedFieldsTotal (304s and many proxies log "-" for bytes routinely).
 func TestParseEvent_DashStatusBytesAreZeroNotMalformed(t *testing.T) {
@@ -433,7 +433,7 @@ func TestScanQuotedCloseStr(t *testing.T) {
 // Before the fix, live counted raw `"` bytes from index 0 and captured the wrong
 // substring as UserAgent; now the quoted fields are walked escape-aware so the
 // correct UA is extracted. Field content keeps its raw escape bytes (alignment
-// fix, not unescaping) — matching the static parser exactly.
+// fix, not unescaping) - matching the static parser exactly.
 func TestParseEvent_EscapedQuotesUserAgent(t *testing.T) {
 	cases := []struct {
 		name    string

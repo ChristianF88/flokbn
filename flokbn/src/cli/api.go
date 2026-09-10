@@ -59,7 +59,7 @@ func StaticFromConfig(cfg *config.Config, compact, plain, tui bool) error {
 // executeStaticAnalysis handles all static analysis - CLI or config file, doesn't matter
 func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error {
 	// THE pre-work barrier (CFG-01/CFG-02). This is the single choke point that
-	// TUI, plot, jail/ban, log parse and clustering all cross — placing it here
+	// TUI, plot, jail/ban, log parse and clustering all cross - placing it here
 	// (rather than in the CLI handlers) makes any future non-CLI caller of
 	// executeStaticAnalysis inherit the gate; a caller that bypasses this function
 	// inherits nothing, so do not add one. CFG-02 folded the logfile-exists /
@@ -214,7 +214,7 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	// UA list/jail load failures all return before runLiveLoop reaches Accept,
 	// which is where the cancellation watcher's Close lives). Close is
 	// idempotent via closeOnce and tolerates server==nil, so this collapses with
-	// the watcher's Close on the normal path — no double-close.
+	// the watcher's Close on the normal path - no double-close.
 	defer ing.Close()
 
 	totalClusterSets := 0
@@ -413,7 +413,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 
 	// Idle-heartbeat state. ReadBatch is non-blocking, so during zero-traffic
 	// stretches the loop must still expire jail bans, refresh the ban file,
-	// and publish snapshots — otherwise bans never lift (lockout feedback
+	// and publish snapshots - otherwise bans never lift (lockout feedback
 	// loop) and /stats freezes. lastTick is the last time either a full
 	// iteration or a heartbeat ran.
 	heartbeatInterval := time.Duration(maxSleepTime) * time.Second

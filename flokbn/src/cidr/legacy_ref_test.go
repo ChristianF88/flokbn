@@ -11,7 +11,7 @@ import (
 // This file holds package-local reference implementations of the four legacy
 // CIDR functions that used to live in cidr.go (IsWhitelisted, SubtractMultiple,
 // GenerateOptimal, GenerateOptimalNumeric). Those functions had zero production
-// callers and were deleted, but several tests still need them as ORACLES — most
+// callers and were deleted, but several tests still need them as ORACLES - most
 // importantly the differential test that compares the production
 // RemoveWhitelisted against the old algorithm. Keeping verbatim copies here
 // preserves that coverage without keeping dead code in the shipped package.

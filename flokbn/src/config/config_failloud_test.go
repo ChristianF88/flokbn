@@ -10,7 +10,7 @@ import (
 // URGENT-08: config parsing is fail-loud at load time. These tests lock in that
 // operator mistakes (wrong-typed scalars, malformed/under-specified/misordered
 // clusterArgSets, unknown keys, present-but-mismatched useForJail) are hard
-// errors at LoadConfig time instead of silent drops/defaults — and that
+// errors at LoadConfig time instead of silent drops/defaults - and that
 // legitimately omitted optional fields stay valid (do not over-fail).
 
 func loadConfigString(t *testing.T, content string) (*Config, error) {
@@ -101,7 +101,7 @@ useForJail = [true]
 }
 
 // OMITTED useForJail with non-empty clusterArgSets is the valid "cluster but
-// never jail" default — it must NOT over-fail.
+// never jail" default - it must NOT over-fail.
 func TestLoadConfig_OmittedUseForJailIsValid(t *testing.T) {
 	cfg, err := loadConfigString(t, `
 [static.trie_1]
@@ -123,7 +123,7 @@ clusterArgSets = [[1000, 24, 32, 0.1]]
 }
 
 // A trie with NO filter and NO clustering (everything omitted) is valid and
-// applies no filtering — must not over-fail.
+// applies no filtering - must not over-fail.
 func TestLoadConfig_FilterlessClusterlessTrieIsValid(t *testing.T) {
 	cfg, err := loadConfigString(t, `
 [static.trie_bare]
@@ -136,7 +136,7 @@ func TestLoadConfig_FilterlessClusterlessTrieIsValid(t *testing.T) {
 	}
 }
 
-// port = 8080 (an integer — a natural mistake) must error AT LOAD time, not
+// port = 8080 (an integer - a natural mistake) must error AT LOAD time, not
 // later as a misleading "port is required".
 func TestLoadConfig_PortIntegerErrorsAtLoad(t *testing.T) {
 	_, err := loadConfigString(t, `
@@ -170,7 +170,7 @@ topTalkers = "ten"
 }
 
 // AUDIT-06: a misspelled top-level SECTION header ([gloabl], [satic]) must fail
-// loud at load, naming the section — not be silently dropped (which would leave
+// loud at load, naming the section - not be silently dropped (which would leave
 // the intended section an empty struct and nullify e.g. whitelist/blacklist
 // filtering while the run reports success).
 func TestLoadConfig_UnknownTopLevelSectionErrors(t *testing.T) {
@@ -202,7 +202,7 @@ logfile = "/x/access.log"
 }
 
 // Both-ways regression: a config with some known sections PRESENT and other
-// optional sections OMITTED must load clean — omission != error. Locks in that
+// optional sections OMITTED must load clean - omission != error. Locks in that
 // the new default arm only rejects unknown/misspelled present sections.
 func TestLoadConfig_KnownSectionsPresentOptionalOmittedLoads(t *testing.T) {
 	cfg, err := loadConfigString(t, `

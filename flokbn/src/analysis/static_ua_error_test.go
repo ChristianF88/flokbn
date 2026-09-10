@@ -28,7 +28,7 @@ func writeBasicAccessLog(t *testing.T, dir string) string {
 // path of Static() must surface the matcher load error loudly (non-nil error +
 // "useragent_matcher_create" in the JSON output) rather than silently skipping
 // all UA filtering. No per-trie regex/time filter is set, so the fast path is
-// selected — this is exactly the buggy branch.
+// selected - this is exactly the buggy branch.
 func TestStaticUnreadableUAWhitelistFailsLoud(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root bypasses file-mode permissions; cannot force an open failure via chmod")
@@ -144,7 +144,7 @@ func TestStaticUnreadableUABlacklistFailsLoud(t *testing.T) {
 // regression (AUDIT-09 residual): StaticWithRequests (the path used by --plot and
 // --tui) previously handled a configured-but-unreadable UA whitelist by AddError +
 // continue, then still wrote a (wrong) ban file and exited 0. It must now fail loud
-// — return a non-nil error with "useragent_matcher_create" present — BEFORE any
+// - return a non-nil error with "useragent_matcher_create" present - BEFORE any
 // jail/ban-file side effects. We point Global.JailFile/BanFile at temp paths and
 // assert neither file is created, proving the early return precedes the disk writes.
 func TestStaticWithRequestsUnreadableUAWhitelistFailsLoud(t *testing.T) {

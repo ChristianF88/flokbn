@@ -129,7 +129,7 @@ func TestLiveLoop_EndToEnd_TwoBatchesAccumulate(t *testing.T) {
 
 	now := time.Now()
 
-	// Batch 1: 99 hot IPs — below MinClusterSize 100, so nothing detected.
+	// Batch 1: 99 hot IPs - below MinClusterSize 100, so nothing detected.
 	if _, err := client.Send(hotLogEvents(now, 0, 99)); err != nil {
 		t.Fatalf("first Send: %v", err)
 	}

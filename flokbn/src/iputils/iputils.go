@@ -18,7 +18,7 @@ import (
 // NOTE: this function rejects only via To4(). It does NOT by itself catch the
 // IPv4-mapped IPv6 form (::ffff:a.b.c.d), whose To4() is non-nil and which would
 // yield the embedded IPv4. Entry points that accept untrusted text must reject
-// that form earlier — by mask length (cidr/config use len(Mask)!=4) or by
+// that form earlier - by mask length (cidr/config use len(Mask)!=4) or by
 // rejecting any colon-bearing token (ingestor, iputils.IsValidCidrOrIP).
 func IPToUint32(ip net.IP) uint32 {
 	ipv4 := ip.To4()

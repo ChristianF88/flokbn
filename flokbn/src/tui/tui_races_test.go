@@ -107,7 +107,7 @@ func TestConcurrentTrieSwitchingNoRace(t *testing.T) {
 
 // TestSetRequestDataVizPathNoRace is the AUDIT-02 regression test for the
 // visualization data races (findings #1 + #2 + #3). It drives the REAL ordering
-// the CLI layer uses — SetAnalysisResults then SetRequestData — on a live tview
+// the CLI layer uses - SetAnalysisResults then SetRequestData - on a live tview
 // event loop (SimulationScreen), so the background visualization build/precache
 // runs concurrently with the trieCache precache and the UI render closures,
 // exactly as in production.
@@ -206,7 +206,7 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 // TestVizPrecacheNoConfigConcurrentNoRace covers the no-config (single-trie)
 // branch of the viz precache, which also writes cachedClusteredData via
 // generateRenderText. It builds the view off-thread (sole writer), precaches,
-// then renders — mirroring buildAndPrecacheVisualization's single-owner model —
+// then renders - mirroring buildAndPrecacheVisualization's single-owner model -
 // while a second goroutine reads the published view's render output, asserting
 // the map writes never overlap a reader. Run with `go test -race ./tui`.
 func TestVizPrecacheNoConfigConcurrentNoRace(t *testing.T) {
@@ -272,7 +272,7 @@ func TestUpdateVisualizationFromCacheResetsClusterSet(t *testing.T) {
 
 	// Simulate the user having navigated to cluster set 1 on trie-a. This index
 	// is also valid for trie-b (3 sets), so the bounds-check clamp will NOT reset
-	// it on the switch — only the explicit reset under test can.
+	// it on the switch - only the explicit reset under test can.
 	a.visualizationView.currentClusterSet = 1
 
 	// Switch to trie-b via the cache-hit fast path.

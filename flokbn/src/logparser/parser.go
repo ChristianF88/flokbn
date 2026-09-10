@@ -33,7 +33,7 @@ type CompiledFormat struct {
 	// arm must NOT overwrite Method (it only fills Method as a fallback when no
 	// standalone %m exists). Computed once at compile time so the per-line hot
 	// path pays a single bool check instead of treating the zero value (GET==0)
-	// as an "unset" sentinel — which silently clobbered a %m-parsed GET.
+	// as an "unset" sentinel - which silently clobbered a %m-parsed GET.
 	hasMethodField bool
 }
 
@@ -374,7 +374,7 @@ func (pp *Parser) parseFileIPsConcurrentIOChunked(file io.ReaderAt, name string,
 	// scanner.Err() check). A failed read previously left a truncated result with
 	// a nil error (silent under-banning); now ParseFileIPs returns a non-nil error
 	// and analysis.Static fails loud. The full shutdown sequence above already ran,
-	// so no goroutine leaks — only the return value changes. A partial result must
+	// so no goroutine leaks - only the return value changes. A partial result must
 	// not be published, so return nil on error.
 	if err := readErr.load(); err != nil {
 		return nil, 0, err
@@ -410,7 +410,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 		estimatedLines = 1000
 	}
 
-	// Batched channels — each send/receive moves parseBatchSize items at once,
+	// Batched channels - each send/receive moves parseBatchSize items at once,
 	// reducing channel operations from O(lines) to O(lines/batchSize).
 	linesChan := make(chan [][]byte, pp.workers*2)
 	resultsChan := make(chan *[]ingestor.Request, pp.workers*2)
@@ -421,7 +421,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 	skipStrings := pp.SkipStringFields
 	skipNonIP := pp.SkipNonIPFields
 
-	// Start parser workers — each reuses a single Request for parsing and fills a
+	// Start parser workers - each reuses a single Request for parsing and fills a
 	// pooled batch buffer, shipped to the collector which drains it and returns it
 	// to the pool (so the buffers cycle instead of being freshly allocated).
 	for i := 0; i < pp.workers; i++ {
@@ -462,7 +462,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 		}
 	}()
 
-	// I/O reader — accumulate lines into batches before sending
+	// I/O reader - accumulate lines into batches before sending
 	// Uses a slab allocator: one contiguous []byte per batch instead of one per line.
 	// Reduces allocations from O(lines) to O(lines/batchSize).
 	scanner := bufio.NewScanner(file)
@@ -550,7 +550,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 		estimatedLines = 1000
 	}
 
-	// Batched channels — same pattern as streaming path
+	// Batched channels - same pattern as streaming path
 	chunkJobs := make(chan chunkJob, numChunks)
 	linesChan := make(chan [][]byte, pp.workers*2)
 	resultsChan := make(chan []ingestor.Request, pp.workers*2)
@@ -558,7 +558,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 	readErr := chunkErrCapture{name: name}
 	var wg sync.WaitGroup
 
-	// Start chunk readers — use ReadAt (pread64) for thread-safe parallel reads
+	// Start chunk readers - use ReadAt (pread64) for thread-safe parallel reads
 	// on the same file descriptor. No file handle pool needed.
 	for i := 0; i < maxConcurrentChunks; i++ {
 		wg.Add(1)
@@ -570,7 +570,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 		}()
 	}
 
-	// Start parser workers — per-worker Request reuse (matches streaming path)
+	// Start parser workers - per-worker Request reuse (matches streaming path)
 	skipStrings := pp.SkipStringFields
 	skipNonIP := pp.SkipNonIPFields
 	var parserWG sync.WaitGroup
@@ -627,7 +627,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 	// scanner.Err() check). A failed read previously left a truncated result with
 	// a nil error (silent under-banning); now ParseFile returns a non-nil error and
 	// analysis.Static fails loud. The full shutdown sequence above already ran, so
-	// no goroutine leaks — only the return value changes. A partial result must not
+	// no goroutine leaks - only the return value changes. A partial result must not
 	// be published, so return nil on error.
 	if err := readErr.load(); err != nil {
 		return nil, err
@@ -751,7 +751,7 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 	//
 	// A line "starts" at file offset 0, or at the byte immediately following a
 	// newline. The line may extend (its terminating newline may fall) beyond
-	// job.end into the overlap region — we read `overlap` extra bytes precisely
+	// job.end into the overlap region - we read `overlap` extra bytes precisely
 	// so a boundary-straddling line owned by THIS chunk can be completed here.
 	//
 	// Disjointness: the line straddling the boundary (start < job.end <= newline)
@@ -764,7 +764,7 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 	//   - Chunk 0: pad == 0, start == 0 (== job.start).
 	//   - Later chunks: if the sentinel byte buffer[0] (== file byte job.start-1)
 	//     is a newline, a line begins exactly AT the boundary; that line's start
-	//     is in [job.start, job.end) so THIS chunk owns it — start = pad.
+	//     is in [job.start, job.end) so THIS chunk owns it - start = pad.
 	//     Otherwise the byte at job.start is mid-line (owned by the previous
 	//     chunk); skip to just after the first newline.
 	start := 0
@@ -871,14 +871,14 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 //
 //   - Streaming: bufio.Scanner.Scan returns false on the over-long line and
 //     scanner.Err returns bufio.ErrTooLong, so the streaming entry point returns
-//     (nil, err) — the WHOLE parse aborts and EVERY line is discarded.
+//     (nil, err) - the WHOLE parse aborts and EVERY line is discarded.
 //   - Chunked: recoverLongLine drops only that one over-long line (ok=false) and
 //     the parse continues, returning the remaining lines with a nil error.
 //
 // Genuine I/O failures during recovery ARE surfaced: a non-EOF ReadAt error is
 // recorded via the shared errCap seam through the concurrent orchestrators, so a
 // real read failure fails the parse loud. The too-long-line DROP is deliberately
-// NOT surfaced — a >=2MB line is pathological and we do not abort the whole chunked
+// NOT surfaced - a >=2MB line is pathological and we do not abort the whole chunked
 // parse over one such line. That single divergence from streaming's whole-parse
 // abort is the documented contract.
 const maxRecoverLineLen = 2 * 1024 * 1024
@@ -904,7 +904,7 @@ const maxRecoverLineLen = 2 * 1024 * 1024
 // errCap is the shared store-once error seam: a genuine non-EOF ReadAt failure
 // here records the error (so the orchestrator surfaces it) AND returns ok=false.
 // The too-long-line drop above is a DIFFERENT ok=false reason and deliberately does
-// NOT record an error — that divergence from streaming's abort is the documented
+// NOT record an error - that divergence from streaming's abort is the documented
 // contract, not an I/O failure. The read source is io.ReaderAt for the same
 // test-injection reason as readChunkBatched (cold path, one ReadAt per grow step).
 func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, errCap *chunkErrCapture) ([]byte, bool) {
@@ -965,7 +965,7 @@ func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, e
 			// Line exceeds the streaming path's 2MB token cap (no '\n' within the
 			// cap and not at EOF). Drop just this line and keep parsing. This is a
 			// DELIBERATE divergence from streaming, which instead raises
-			// bufio.ErrTooLong and aborts the entire parse — see maxRecoverLineLen.
+			// bufio.ErrTooLong and aborts the entire parse - see maxRecoverLineLen.
 			return nil, false
 		}
 		// Otherwise grow the window and re-read.
@@ -1001,7 +1001,7 @@ const DefaultLogFormat = `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
 // precondition for compileFormat/NewParser success: compileFormat returns an
 // error ONLY from validateFormat (its build loop merely `continue`s on unknown
 // codes and otherwise returns nil). So ValidateFormat(f)==nil is equivalent to
-// NewParser(f) succeeding w.r.t. the format string — config.Validate can gate a
+// NewParser(f) succeeding w.r.t. the format string - config.Validate can gate a
 // barrier-passed format and never have the downstream NewParser reject it.
 func ValidateFormat(format string) error {
 	return validateFormat(format)
@@ -1025,7 +1025,7 @@ func validateFormat(format string) error {
 				return fmt.Errorf("unsupported format code %%%c - supported codes are: %%h (IP), %%t (timestamp), %%r (request), %%m (method), %%s (status), %%b (bytes), %%U (URI), %%u (user-agent), %%^ (skip)", field)
 			}
 
-			// Count occurrences and reject duplicates — each non-skip field may
+			// Count occurrences and reject duplicates - each non-skip field may
 			// appear at most once.
 			fieldCounts[field]++
 			if fieldCounts[field] > 1 {
@@ -1294,7 +1294,7 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 // extractIPOnly walks the compiled extractors exactly like
 // parseUsingCompiledFormatOpt (same quoted/bracketed/delimited field
 // boundary handling) but performs NO field stores, builds NO Request, and
-// returns as soon as the IP field (FieldType==0) has been parsed — it never
+// returns as soon as the IP field (FieldType==0) has been parsed - it never
 // scans fields that come after the IP. It returns the same uint32 that
 // parseUsingCompiledFormatOpt would write to req.IPUint32 (0 on a failed or
 // missing IP parse).
@@ -1321,7 +1321,7 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 
 		start := pos
 
-		// Handle quoted/bracketed fields — identical boundary logic to
+		// Handle quoted/bracketed fields - identical boundary logic to
 		// parseUsingCompiledFormatOpt so that pos lands on the same offsets.
 		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
 			pos++ // skip opening quote
@@ -1364,7 +1364,7 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 			return 0
 		}
 
-		// Advance past closing quotes/brackets/delimiters — identical to
+		// Advance past closing quotes/brackets/delimiters - identical to
 		// parseUsingCompiledFormatOpt so subsequent field boundaries align.
 		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
 			pos++
@@ -1384,7 +1384,7 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 // `\` -> `\\`). Returns the index of the first unescaped quote at/after
 // firstQuote, or len(line). Only called when an escape candidate was seen,
 // so the no-escape common case never pays for this loop. The field content
-// keeps its raw escape bytes — this fixes field ALIGNMENT, not unescaping.
+// keeps its raw escape bytes - this fixes field ALIGNMENT, not unescaping.
 func scanQuotedClose(line []byte, contentStart, firstQuote int) int {
 	i := firstQuote
 	for {
@@ -1407,8 +1407,8 @@ func scanQuotedClose(line []byte, contentStart, firstQuote int) int {
 //
 // Safe because the backing buffer is never mutated for the lifetime of the
 // returned string. The streaming path (parseFileWithStreamingIO) sub-slices
-// each line out of a per-batch slab that is replaced — never overwritten in
-// place — once full. The concurrent path (readChunkBatched) sub-slices each
+// each line out of a per-batch slab that is replaced - never overwritten in
+// place - once full. The concurrent path (readChunkBatched) sub-slices each
 // line out of a per-chunk ReadAt buffer that is read once and never reused.
 // In both cases the returned string keeps its backing buffer reachable, so the
 // GC retains it as long as any aliasing Request lives.
@@ -1419,12 +1419,12 @@ func bytesToString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
-// parseIPv4ToUint32 extracts IPv4 address directly as uint32 — zero allocation
+// parseIPv4ToUint32 extracts IPv4 address directly as uint32 - zero allocation
 //
 // Performance optimizations:
 //   - Single-pass parsing with dot counting
 //   - Bit masking for digit extraction: (b & 0x0F) converts ASCII digit to int
-//   - Returns uint32 directly — NO net.IP heap allocation
+//   - Returns uint32 directly - NO net.IP heap allocation
 //   - Bounds checking for IPv4 format (7-15 characters)
 //
 // Input: line[start:end] should contain IPv4 like "192.168.1.1"
@@ -1568,7 +1568,7 @@ func parseTimestamp(line []byte, start, end int) time.Time {
 
 	// Retain the log's timezone offset when present (URGENT-09 parity). The
 	// offset suffix is " +HHMM"/" -HHMM": space at start+20, sign at start+21,
-	// four digits at start+22..25 — 6 bytes after the 20-byte core, so it is
+	// four digits at start+22..25 - 6 bytes after the 20-byte core, so it is
 	// in-bounds only when end-start >= 26. Shorter (20-byte EOL) fields keep the
 	// historical UTC behavior.
 	loc := time.UTC
@@ -1587,8 +1587,8 @@ func parseTimestamp(line []byte, start, end int) time.Time {
 var offsetCache sync.Map // map[[5]byte]*time.Location
 
 // offsetLocation returns a cached *time.Location for the "+HHMM"/"-HHMM" offset
-// bytes. "+0000" fast-paths to time.UTC (no map hit, no alloc) so UTC logs —
-// including the generated demo — see zero new allocations on the hot path. Any
+// bytes. "+0000" fast-paths to time.UTC (no map hit, no alloc) so UTC logs -
+// including the generated demo - see zero new allocations on the hot path. Any
 // malformed offset falls back to UTC, preserving the wall-clock digits.
 func offsetLocation(b []byte) *time.Location {
 	// b is exactly 5 bytes: sign + HHMM.
@@ -1658,7 +1658,7 @@ func parseMethod(line []byte, start, end int) ingestor.HTTPMethod {
 // parseBytes extracts numeric byte count from line[start:end].
 //
 // Returns (value, true) when every byte in the field is an ASCII digit, or
-// (0, false) when any non-digit appears — the field is then malformed and the
+// (0, false) when any non-digit appears - the field is then malformed and the
 // caller counts it. The single d<=9 unsigned-wraparound compare per byte keeps
 // the all-digit fast path branch-predictable and inlineable.
 //

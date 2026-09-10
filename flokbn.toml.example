@@ -32,7 +32,7 @@ userAgentWhitelist = "config_examples/ua_whitelist.txt"  # Optional: exact User-
 userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-Agent strings that blacklist IPs
 
 # WHITELIST/BLACKLIST BEHAVIOR:
-# 1. IP Whitelist: ban-pipeline only — detected ranges fully covered by a single
+# 1. IP Whitelist: ban-pipeline only - detected ranges fully covered by a single
 #    whitelist entry never enter the jail, and the whitelist is subtracted from
 #    everything published to the ban file. It does NOT filter the analysis:
 #    whitelisted traffic still appears in all statistics, clustering results,

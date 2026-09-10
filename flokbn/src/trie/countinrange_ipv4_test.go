@@ -54,7 +54,7 @@ func TestCountInRangeIPNet_RejectsIPv6NoPanic(t *testing.T) {
 	}
 }
 
-// IPv4 ranges must still count correctly — the guard must not change any
+// IPv4 ranges must still count correctly - the guard must not change any
 // legitimate IPv4 result.
 func TestCountInRangeIPNet_IPv4Unchanged(t *testing.T) {
 	tr := NewTrie()

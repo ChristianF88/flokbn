@@ -85,7 +85,7 @@ func TestParseTimestamp_EOLBounds(t *testing.T) {
 
 	// URGENT-09 (live<->static timestamp parity): the static parser must RETAIN
 	// the log's timezone offset instead of mislabeling the wall-clock as UTC.
-	// The wall-clock digits are unchanged (06:00 stays 06:00 — the OWNER
+	// The wall-clock digits are unchanged (06:00 stays 06:00 - the OWNER
 	// constraint), but the absolute instant now reflects the real offset, so the
 	// same line yields the same Request.Timestamp under both the live ingestor
 	// (already offset-aware) and the static parser. This case encodes the very
@@ -123,9 +123,9 @@ func TestParseTimestamp_EOLBounds(t *testing.T) {
 					tc.name, req.Timestamp.UTC(), wantInstant, -tc.offsetHrs)
 			}
 			// The +0200 instant must NOT equal the UTC wall-clock (it is 2h earlier
-			// as an instant) — proves the offset is no longer discarded.
+			// as an instant) - proves the offset is no longer discarded.
 			if tc.offsetHrs != 0 && req.Timestamp.Equal(wallClock) {
-				t.Errorf("%s: instant equals UTC wall-clock — offset was discarded", tc.name)
+				t.Errorf("%s: instant equals UTC wall-clock - offset was discarded", tc.name)
 			}
 		}
 	})
@@ -154,7 +154,7 @@ func TestParseStatus_Validation(t *testing.T) {
 		{"X00", 0, 1},
 		{"20", 0, 1},
 		{"2000", 0, 1},
-		// 999 is not a real HTTP status but is three digits — documented leniency.
+		// 999 is not a real HTTP status but is three digits - documented leniency.
 		{"999", 999, 0},
 		{"-", 0, 0}, // Apache convention for absent: silent zero, NOT counted
 	}
@@ -308,7 +308,7 @@ func TestQuotedField_EscapedQuotes(t *testing.T) {
 			// Parity contract: extractIPOnly must return the exact IP the full
 			// parser stored, for the same input bytes.
 			if got := p.compiled.extractIPOnly([]byte(tc.line)); got != req.IPUint32 {
-				t.Errorf("extractIPOnly = %d, full parse = %d — parity broken", got, req.IPUint32)
+				t.Errorf("extractIPOnly = %d, full parse = %d - parity broken", got, req.IPUint32)
 			}
 		})
 	}

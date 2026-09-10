@@ -460,7 +460,7 @@ clusterArgSets = [
 
 ### User-Agent Whitelist/Blacklist Files (Exact Match)
 
-User-Agent whitelist/blacklist files are matched by **case-insensitive full-string equality** (not substrings, not regex). Each line is a complete User-Agent header value. Comments start with `#`, on their own line or trailing a value, and a trailing `#...` is stripped from the value before matching. Because the first `#` ends the value, a User-Agent that itself contains a literal `#` cannot be listed here — match it with the per-trie `--useragentRegex` flag (or the `useragentRegex` config key) instead, which is the actual regex mechanism.
+User-Agent whitelist/blacklist files are matched by **case-insensitive full-string equality** (not substrings, not regex). Each line is a complete User-Agent header value. Comments start with `#`, on their own line or trailing a value, and a trailing `#...` is stripped from the value before matching. Because the first `#` ends the value, a User-Agent that itself contains a literal `#` cannot be listed here - match it with the per-trie `--useragentRegex` flag (or the `useragentRegex` config key) instead, which is the actual regex mechanism.
 
 ```
 # Legitimate crawlers (whitelist) - exact full User-Agent strings

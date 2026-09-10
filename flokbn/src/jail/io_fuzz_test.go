@@ -34,7 +34,7 @@ func FuzzJailLoadFromJSON(f *testing.F) {
 		if err := os.WriteFile(filename, data, 0644); err != nil {
 			return
 		}
-		// Should not panic — corrupt files should return errors
+		// Should not panic - corrupt files should return errors
 		FileToJail(filename)
 	})
 }

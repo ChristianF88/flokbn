@@ -1,4 +1,4 @@
-# Provisioned dashboard provider (FLOKBN-045) — loads every JSON dashboard
+# Provisioned dashboard provider (FLOKBN-045) - loads every JSON dashboard
 # from /var/lib/grafana/dashboards (mounted from grafana/dashboards/).
 apiVersion: 1
 

@@ -48,15 +48,15 @@ func TestRemoveWhitelisted_IPv6EntriesIgnored_IPv4StillApplies(t *testing.T) {
 	// Bans include addresses inside the bogus 0.0.0.0-31.255.255.255 window that
 	// "2000::/3" used to wipe, plus one that the real IPv4 whitelist covers.
 	blacklist := []string{
-		"5.5.5.0/24", // inside the old bogus window — must survive
-		"31.0.0.0/8", // inside the old bogus window — must survive
-		"10.0.0.0/8", // covered by the real IPv4 whitelist below — must drop
+		"5.5.5.0/24", // inside the old bogus window - must survive
+		"31.0.0.0/8", // inside the old bogus window - must survive
+		"10.0.0.0/8", // covered by the real IPv4 whitelist below - must drop
 		"203.0.113.0/24",
 	}
 	whitelist := []string{
-		"2000::/3",      // IPv6 — ignored
-		"10.0.0.0/8",    // real IPv4 — applies (drops the 10.0.0.0/8 ban)
-		"2001:db8::/32", // IPv6 — ignored
+		"2000::/3",      // IPv6 - ignored
+		"10.0.0.0/8",    // real IPv4 - applies (drops the 10.0.0.0/8 ban)
+		"2001:db8::/32", // IPv6 - ignored
 	}
 
 	got := RemoveWhitelisted(blacklist, whitelist)
@@ -142,11 +142,11 @@ func TestRemoveWhitelisted_IPv4PartialOverlapStillSubtracts(t *testing.T) {
 // would yield {0, 0xFFFFFFFF} and "2000::/3" would yield {0, 0x1FFFFFFF}.
 func TestParseWhitelistRanges_SkipsIPv6(t *testing.T) {
 	whitelist := []string{
-		"::/0",           // IPv6 catch-all — must be skipped
-		"10.0.0.0/8",     // IPv4 — kept
-		"2000::/3",       // IPv6 — must be skipped
-		"2001:db8::/32",  // IPv6 — must be skipped
-		"192.168.0.0/16", // IPv4 — kept
+		"::/0",           // IPv6 catch-all - must be skipped
+		"10.0.0.0/8",     // IPv4 - kept
+		"2000::/3",       // IPv6 - must be skipped
+		"2001:db8::/32",  // IPv6 - must be skipped
+		"192.168.0.0/16", // IPv4 - kept
 	}
 
 	ranges := parseWhitelistRanges(whitelist)
@@ -171,7 +171,7 @@ func TestParseWhitelistRanges_SkipsIPv6(t *testing.T) {
 	// what every IPv6 entry collapsed to via IPToUint32==0).
 	for _, r := range ranges {
 		if r.start == 0 {
-			t.Fatalf("found a range starting at 0 — IPv6 entry leaked into ranges: %+v", ranges)
+			t.Fatalf("found a range starting at 0 - IPv6 entry leaked into ranges: %+v", ranges)
 		}
 	}
 }
@@ -179,11 +179,11 @@ func TestParseWhitelistRanges_SkipsIPv6(t *testing.T) {
 // IPv4-mapped IPv6 (::ffff:a.b.c.d) is the residual hole the mask-length fix
 // closes. To4() is NON-nil for "::ffff:1.2.3.0/120", so the old To4()==nil guard
 // let it through, but net.ParseCIDR gives it a 16-byte mask, which
-// BigEndian.Uint32 misreads — corrupting the IPv4 range into a single IP and
+// BigEndian.Uint32 misreads - corrupting the IPv4 range into a single IP and
 // fragmenting the ban. The whitelist entry must be IGNORED and the ban survive.
 func TestRemoveWhitelisted_MappedIPv6WhitelistIgnored(t *testing.T) {
 	blacklist := []string{"1.2.3.0/24"}
-	whitelist := []string{"::ffff:1.2.3.0/120"} // IPv4-mapped IPv6 — must be skipped
+	whitelist := []string{"::ffff:1.2.3.0/120"} // IPv4-mapped IPv6 - must be skipped
 
 	got := RemoveWhitelisted(blacklist, whitelist)
 

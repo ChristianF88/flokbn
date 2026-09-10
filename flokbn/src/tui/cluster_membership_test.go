@@ -84,7 +84,7 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 		{
 			// The overflow guard's adjacency clause at cluster_membership.go:71
 			// (last.End != ^uint32(0) before computing last.End+1) is
-			// short-circuited by the overlap clause when last.End==0xFFFFFFFF —
+			// short-circuited by the overlap clause when last.End==0xFFFFFFFF -
 			// it is defensive and unreachable; this row covers the surrounding
 			// merge at the top of the space, not that branch.
 			name:      "top_of_space_overlapped",
@@ -200,7 +200,7 @@ func TestClusterIntervalsContainsNilAndEmpty(t *testing.T) {
 
 // TestMembershipEquivalenceLowPrefixDeterministic checks the fast interval
 // membership against net.Contains for explicit low-prefix (wide) cluster sets
-// at hand-picked boundary IPs — the cases a random corpus is least likely to
+// at hand-picked boundary IPs - the cases a random corpus is least likely to
 // produce.
 func TestMembershipEquivalenceLowPrefixDeterministic(t *testing.T) {
 	sets := [][]string{

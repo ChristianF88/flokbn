@@ -158,7 +158,7 @@ func (a *App) ShowError(message string) {
 // Concurrency model (AUDIT-02): the visualization build/precache runs on a single
 // background goroutine (buildAndPrecacheVisualization). It builds and precaches
 // the view privately, OFF the UI goroutine, then publishes the finished pointer to
-// a.visualizationView exclusively on the UI goroutine — which from that point is
+// a.visualizationView exclusively on the UI goroutine - which from that point is
 // its sole owner. This keeps the heavy precache off the event loop while ensuring
 // the view's fields/maps are never written by two goroutines at once.
 func (a *App) SetRequestData(requests []ingestor.Request) {
@@ -184,7 +184,7 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 // buildAndPrecacheVisualization builds a visualization view OFF the UI goroutine
 // (the sole writer of that view's fields/caches while it owns it), runs the heavy
 // precache there, and only then publishes the fully built view to the UI thread
-// — which from that point is its sole owner. This closes all three AUDIT-02
+// - which from that point is its sole owner. This closes all three AUDIT-02
 // findings:
 //   - The pointer is published exactly once, on the UI goroutine (finding #2).
 //   - The view's fields/maps are written by exactly one goroutine at a time: this

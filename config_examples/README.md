@@ -37,7 +37,7 @@ all four list files) with `flokbn generate static-demo --out ./demo`, then
 
 ### whitelist.txt
 Contains IP addresses and CIDR ranges that should **never** be banned. These
-ranges are protected from jail/ban only — their traffic still appears in
+ranges are protected from jail/ban only - their traffic still appears in
 analysis results and statistics:
 - Internal networks (192.168.0.0/16, 10.0.0.0/8)
 - Essential services (DNS servers, CDNs)
@@ -92,7 +92,7 @@ All files use the same format:
 - Whitespace is trimmed
 
 #### IP Files Format (whitelist.txt, blacklist.txt)
-**IPv4 CIDRs only** — a malformed CIDR or an IPv6 line aborts the run at
+**IPv4 CIDRs only** - a malformed CIDR or an IPv6 line aborts the run at
 startup, naming the line number and file (IPv4-only tool). The same IPv4-only
 rule applies to per-trie `cidrRanges` entries in the config.
 ```
@@ -102,7 +102,7 @@ rule applies to per-trie `cidrRanges` entries in the config.
 ```
 
 #### User-Agent Files Format (ua_whitelist.txt, ua_blacklist.txt)
-Entries are **exact** User-Agent strings — the full User-Agent header must
+Entries are **exact** User-Agent strings - the full User-Agent header must
 match the line completely. They are NOT substrings and NOT regexes.
 ```
 # Comment

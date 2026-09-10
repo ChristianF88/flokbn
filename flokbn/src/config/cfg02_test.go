@@ -71,7 +71,7 @@ cidrRanges = ["2001:db8::/48", "not-a-cidr"]
 }
 
 // TestCFG02_ValidateIdempotent: calling Validate twice yields identical Len()
-// AND identical Report() (proves Validate copies cfg.diags read-only — never
+// AND identical Report() (proves Validate copies cfg.diags read-only - never
 // accumulates, never double-counts list files / logFormat).
 func TestCFG02_ValidateIdempotent(t *testing.T) {
 	for _, mode := range []RunMode{StaticMode, LiveMode} {
@@ -122,7 +122,7 @@ clusterArgSets = [[1, 0, 32, 0.1], [2, 0, 32, 0.2], [3, 0, 32, 0.3]]
 
 // TestCFG02_CIDRRangesDropFromSlice: cidrRanges=[valid, IPv6, malformed] yields
 // 2 diagnostics AND tc.CIDRRanges holds ONLY the valid IPv4 entry (never stores
-// a bad entry — the negative-shift-panic guard).
+// a bad entry - the negative-shift-panic guard).
 func TestCFG02_CIDRRangesDropFromSlice(t *testing.T) {
 	cfg, err := loadConfigString(t, `
 [static.t]
@@ -187,7 +187,7 @@ useForJail = [true, "x"]
 }
 
 // TestCFG02_AddRawSanitizesNewline: a newline-bearing unknown-key name (TOML
-// quoted key) is escaped so it cannot forge a fake numbered line — the
+// quoted key) is escaped so it cannot forge a fake numbered line - the
 // header+N line-count invariant holds and Len() is exact.
 func TestCFG02_AddRawSanitizesNewline(t *testing.T) {
 	cfg, err := loadConfigString(t, `
@@ -344,7 +344,7 @@ whitelist = "`+missing+`"
 
 // TestCFG02_ListFileLongLineCannotRead: a list whose longest line exceeds the
 // 64KB bufio token limit surfaces a "cannot read" diagnostic (no silent
-// truncation of a whitelist — a fail-open guard).
+// truncation of a whitelist - a fail-open guard).
 func TestCFG02_ListFileLongLineCannotRead(t *testing.T) {
 	dir := t.TempDir()
 	wl := filepath.Join(dir, "wl.txt")

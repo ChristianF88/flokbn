@@ -106,7 +106,7 @@ func (ftc *TrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResult *o
 
 // cacheTrieTexts pre-renders all text components for a trie.
 // Must hold ftc.mu (write lock) on entry. Renders from the locally-derived
-// single-trie output and index — it does NOT mutate app.jsonResult/currentTrie,
+// single-trie output and index - it does NOT mutate app.jsonResult/currentTrie,
 // which are owned exclusively by the tview UI goroutine.
 func (ftc *TrieCache) cacheTrieTexts(trieIndex int, trieOutput *output.JSONOutput, app *App) {
 	ftc.summaryTexts[trieIndex] = app.buildSummaryTextFor(trieOutput, trieIndex)
@@ -116,8 +116,8 @@ func (ftc *TrieCache) cacheTrieTexts(trieIndex int, trieOutput *output.JSONOutpu
 }
 
 // cacheTrafficData pre-processes traffic data for visualization.
-// The traffic matrix is ground truth over ALL parsed requests — identical for
-// every trie — so it is computed once and reused. Only the clustered grids are
+// The traffic matrix is ground truth over ALL parsed requests - identical for
+// every trie - so it is computed once and reused. Only the clustered grids are
 // trie-specific (they depend on the trie's detected cluster ranges).
 func (ftc *TrieCache) cacheTrafficData(trieIndex int, requests []ingestor.Request, trieResult output.TrieResult) {
 	if !ftc.globalTrafficReady {

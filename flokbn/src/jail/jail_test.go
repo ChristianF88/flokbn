@@ -272,7 +272,7 @@ func TestCidrBounds_RejectsIPv6(t *testing.T) {
 		"2001:db8::/32",
 		"::/0",
 		"fe80::/10",
-		"::ffff:192.168.1.0/120", // IPv4-mapped IPv6 — the closed hole
+		"::ffff:192.168.1.0/120", // IPv4-mapped IPv6 - the closed hole
 		"::ffff:1.2.3.4/128",
 	}
 	for _, cidr := range rejected {

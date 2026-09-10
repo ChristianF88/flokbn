@@ -18,7 +18,7 @@ const concurrentZeroCopyFormat = `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
 // of n "interesting" lines plus injected edge cases:
 //   - valid IPs (varied octet widths so line lengths differ and straddle chunks),
 //   - invalid / missing IP lines (kept-but-zero-IP in full mode, counted invalid
-//     in IP mode — both paths agree),
+//     in IP mode - both paths agree),
 //   - quoted UA/URI fields containing spaces.
 //
 // Line endings: the chunked reader now strips a trailing '\r' exactly like the
@@ -59,7 +59,7 @@ func genConcurrentTestLogLE(n int, withTrailingNewline bool, lineEnding string) 
 	for i := 0; i < n; i++ {
 		switch i % 11 {
 		case 3:
-			// Invalid/missing IP — both paths agree: zero-IP Request in full mode,
+			// Invalid/missing IP - both paths agree: zero-IP Request in full mode,
 			// counted invalid in IP mode.
 			b.WriteString(fmt.Sprintf(
 				`- - - [10/Oct/2024:13:55:%02d +0000] "%s" 200 1234 "x" "%s" "not-an-ip"`,
@@ -508,7 +508,7 @@ func TestConcurrentLongLine_DiffFullMode(t *testing.T) {
 
 	// Chunk sizes: much smaller than the 32KB line (so it straddles boundaries),
 	// one ~half the line length (long line midpoint near a boundary), and the
-	// default-ish 64KB (line wholly inside one chunk's window — control).
+	// default-ish 64KB (line wholly inside one chunk's window - control).
 	chunkSizes := []int64{256, 1024, 4096, 8192, 16 * 1024, 17 * 1024, 64 * 1024}
 
 	for _, cs := range chunkSizes {

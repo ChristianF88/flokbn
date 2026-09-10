@@ -2,8 +2,8 @@ package jail_test
 
 // This file proves the critical safety invariant of the whole tool:
 //
-//	A whitelisted IP or CIDR range — whether it came from the CIDR whitelist
-//	file or from a User-Agent-whitelisted IP (added as a /32) — must NEVER be
+//	A whitelisted IP or CIDR range - whether it came from the CIDR whitelist
+//	file or from a User-Agent-whitelisted IP (added as a /32) - must NEVER be
 //	covered by any entry in the published ban file, under ANY path, including
 //	when it is also manually blacklisted, and including across jail reloads on
 //	subsequent runs.
@@ -98,19 +98,19 @@ func refIsWhitelisted(cidrStr string, whitelist []string) bool {
 // fails if ANY whitelisted address is contained in ANY emitted ban CIDR.
 //
 // It checks two independent ways for robustness:
-//  1. refIsWhitelisted(banCIDR, whitelist) must be false — i.e. no emitted
+//  1. refIsWhitelisted(banCIDR, whitelist) must be false - i.e. no emitted
 //     ban CIDR is fully inside the whitelist. (This catches a whole ban range
 //     that should have been dropped.)
 //  2. A direct numeric containment test: no whitelisted range may overlap any
 //     emitted ban range at all. (This catches partial leaks where a ban CIDR
-//     covers part of a whitelisted range — the case (1) would miss because the
+//     covers part of a whitelisted range - the case (1) would miss because the
 //     ban CIDR is larger than the whitelist entry.)
 func assertNoWhitelistedAddressBanned(t *testing.T, emittedBans, whitelist []string) {
 	t.Helper()
 
 	for _, ban := range emittedBans {
 		// Robustness check (1): a published ban CIDR must never itself be fully
-		// covered by the whitelist — that ban should have been dropped.
+		// covered by the whitelist - that ban should have been dropped.
 		if refIsWhitelisted(ban, whitelist) {
 			t.Errorf("INVARIANT VIOLATED: published ban CIDR %q is fully covered by the whitelist (should have been dropped)", ban)
 		}
@@ -158,7 +158,7 @@ func parseBanFile(t *testing.T, path string) []string {
 func publishToBanFile(t *testing.T, j *jail.Jail, banFile string, jailCIDRs, blacklist, whitelist []string) []string {
 	t.Helper()
 
-	// Pre-jail filter (keeps partial overlaps whole — matches production).
+	// Pre-jail filter (keeps partial overlaps whole - matches production).
 	filtered, _ := cidr.DropFullyWhitelisted(jailCIDRs, whitelist)
 
 	if err := j.Update(filtered); err != nil {
@@ -183,7 +183,7 @@ func TestPublishedBanFile_JailedRangeWithManyWhitelistedSlash32s(t *testing.T) {
 	dir := t.TempDir()
 	banFile := filepath.Join(dir, "bans.conf")
 
-	// A single jailed /16 (10.10.0.0/16) — the kind of whole range
+	// A single jailed /16 (10.10.0.0/16) - the kind of whole range
 	// DropFullyWhitelisted lets through because it is only PARTIALLY covered.
 	jailCIDRs := []string{"10.10.0.0/16"}
 
@@ -237,7 +237,7 @@ func TestPublishedBanFile_PartialOverlapWhitelistedSubRange(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// (c) A whitelisted CIDR that is ALSO in the manual blacklist — whitelist wins.
+// (c) A whitelisted CIDR that is ALSO in the manual blacklist - whitelist wins.
 // ---------------------------------------------------------------------------
 
 func TestPublishedBanFile_WhitelistBeatsManualBlacklist(t *testing.T) {
@@ -267,7 +267,7 @@ func TestPublishedBanFile_WhitelistBeatsManualBlacklist(t *testing.T) {
 	assertNoWhitelistedAddressBanned(t, emitted, whitelist)
 }
 
-// (c2) A whitelisted /25 inside a blacklisted /24 — partial overlap: the
+// (c2) A whitelisted /25 inside a blacklisted /24 - partial overlap: the
 // whitelisted half must be carved out of the manual blacklist too.
 func TestPublishedBanFile_WhitelistCarvesManualBlacklist(t *testing.T) {
 	dir := t.TempDir()
@@ -287,7 +287,7 @@ func TestPublishedBanFile_WhitelistCarvesManualBlacklist(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // (d) Cross-run persistence: a jail holding a whole range with whitelisted
-// holes is written to disk, reloaded via FileToJail, and republished — the
+// holes is written to disk, reloaded via FileToJail, and republished - the
 // whitelisted addresses must still be excluded.
 // ---------------------------------------------------------------------------
 
@@ -316,7 +316,7 @@ func TestPublishedBanFile_WhitelistReappliedAfterJailReload(t *testing.T) {
 	}
 
 	// Sanity: the jail file persists the WHOLE range (proves the subtraction is
-	// not baked into persistence — the next run must re-apply the whitelist).
+	// not baked into persistence - the next run must re-apply the whitelist).
 	persisted, err := os.ReadFile(jailFile)
 	if err != nil {
 		t.Fatalf("read jail file: %v", err)
@@ -370,7 +370,7 @@ func TestPublishedBanFile_WhitelistReappliedAfterJailReload(t *testing.T) {
 // verbatim (no whitelist applied at publish), the "guarded" emission below
 // would cover the whitelisted addresses and assertNoWhitelistedAddressBanned
 // would fail. We demonstrate both:
-//   - the BUGGY publish (active bans verbatim) DOES leak — proving the test is
+//   - the BUGGY publish (active bans verbatim) DOES leak - proving the test is
 //     sensitive to the regression;
 //   - the REAL publish (ComposeBanLists) does NOT leak.
 // ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ func TestComposeBanLists_IsARealGuard(t *testing.T) {
 
 	// Buggy publish: active bans verbatim (simulating a reverted guard). The
 	// whole /16 stays, so the whitelisted /24s ARE covered. Confirm a leak
-	// exists in that world — this is what the real guard prevents.
+	// exists in that world - this is what the real guard prevents.
 	leaked := false
 	for _, w := range whitelist {
 		wS, wE := cidrBounds(t, w)

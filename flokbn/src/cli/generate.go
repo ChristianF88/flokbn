@@ -92,7 +92,7 @@ func handleStaticDemo(c *cli.Context) error {
 	}
 
 	// Track what we create so a failure partway through cleans up only the
-	// artifacts WE wrote — never pre-existing user data. MkdirAll(absDir) may
+	// artifacts WE wrote - never pre-existing user data. MkdirAll(absDir) may
 	// create not just the leaf but every missing ancestor (e.g. --out a/b/new
 	// creates a, a/b and a/b/new), so walk upward from absDir to the first
 	// existing ancestor and record the directories that do not yet exist. On
@@ -107,7 +107,7 @@ func handleStaticDemo(c *cli.Context) error {
 		}
 		// Every path in `created` is a target the up-front refusal guard below
 		// proved did not pre-exist, so it is always a file the command itself
-		// wrote — removing it on a partial-write failure never touches user
+		// wrote - removing it on a partial-write failure never touches user
 		// data.
 		for i := len(created) - 1; i >= 0; i-- {
 			_ = os.Remove(created[i])
@@ -125,8 +125,8 @@ func handleStaticDemo(c *cli.Context) error {
 	// BEFORE MkdirAll or any write. If any already exists (a regular file OR a
 	// directory), abort without creating or touching anything; a non-IsNotExist
 	// stat error (e.g. a permission problem) is fatal too. This guarantees the
-	// command never overwrites — and therefore the deferred cleanup never
-	// deletes — a file it did not create. The defer is already registered, but
+	// command never overwrites - and therefore the deferred cleanup never
+	// deletes - a file it did not create. The defer is already registered, but
 	// returning here removes nothing: `created` is empty and no directory has
 	// been created yet.
 	for _, path := range scaffoldTargets(absDir) {
@@ -203,7 +203,7 @@ func handleStaticDemo(c *cli.Context) error {
 // source of truth shared by the up-front refusal guard and the writers, so a
 // future added artifact cannot bypass the overwrite check. The config-referenced
 // but never-written paths (flokbn_jail.json, flokbn_ban.txt, heatmap.html) are
-// intentionally excluded — the scaffold does not create them.
+// intentionally excluded - the scaffold does not create them.
 func scaffoldTargets(absDir string) []string {
 	targets := make([]string, 0, len(demoLists)+2)
 	for _, name := range demoLists {
@@ -218,7 +218,7 @@ func scaffoldTargets(absDir string) []string {
 // ordered deepest-first (leaf before its parents). It walks upward from absDir
 // to the first existing ancestor: every directory above that point already
 // exists and is left out. The deepest-first order lets a failure-cleanup loop
-// os.Remove each one in turn — a leaf is always emptied before its parent is
+// os.Remove each one in turn - a leaf is always emptied before its parent is
 // reached, so empty directories we created unwind cleanly while a parent that
 // still holds unrelated content is left intact. If absDir already exists the
 // result is empty (we create nothing). absDir must be absolute.

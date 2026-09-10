@@ -37,7 +37,7 @@ func TestActiveFilters_UAWhitelistOnly(t *testing.T) {
 // TestActiveFilters_IPWhitelistNeverListed guards the fix for the misleading
 // display: the IP whitelist does not drop requests from any trie (it acts only
 // in the jail/ban publish pipeline), so it must never appear as an active
-// filter — an IP-whitelist-only config renders "None".
+// filter - an IP-whitelist-only config renders "None".
 func TestActiveFilters_IPWhitelistNeverListed(t *testing.T) {
 	onlyIP := ActiveFilters(TrieParameters{}, GlobalFilters{IPWhitelistCIDRs: 4})
 	if len(onlyIP) != 0 {

@@ -173,7 +173,7 @@ func cidrBounds(cidr string) (start, end uint32, ok bool) {
 // prisonerBounds returns a prisoner's cached numeric range, falling back to
 // parsing CIDR if the cache was never populated (e.g. a struct literal built
 // outside ThrowPrisonerInCell/RefreshBounds, as in tests). Correctness never
-// depends on the cache — only speed.
+// depends on the cache - only speed.
 func prisonerBounds(p Prisoner) (start, end uint32, ok bool) {
 	if p.boundsOK {
 		return p.startU, p.endU, true
@@ -335,7 +335,7 @@ func (j *Jail) RetentionHorizon() time.Duration {
 // place (reusing the backing array, zero allocation on the no-evict path), then
 // AllCIDRs is rebuilt ONCE from the survivors so it stays exactly consistent
 // (no orphans, no duplicates). RemovePrisoner is deliberately NOT called per
-// eviction — that would be O(prisoners) per call (AllCIDRs linear scan) and turn
+// eviction - that would be O(prisoners) per call (AllCIDRs linear scan) and turn
 // Prune into O(prisoners^2). Returns the number of prisoners evicted.
 func (j *Jail) Prune(horizon time.Duration) int {
 	now := time.Now()

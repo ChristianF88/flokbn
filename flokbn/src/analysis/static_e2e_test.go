@@ -21,7 +21,7 @@ func TestStaticPipeline_ClusterDetection(t *testing.T) {
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "cluster.log")
 
-	// Generate 5000 IPs in 10.20.0.0/16 — enough to form a cluster
+	// Generate 5000 IPs in 10.20.0.0/16 - enough to form a cluster
 	var b strings.Builder
 	for i := 0; i < 5000; i++ {
 		v := i + 1

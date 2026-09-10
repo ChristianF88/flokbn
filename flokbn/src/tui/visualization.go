@@ -107,7 +107,7 @@ func (a *App) newVisualizationViewWith(totalClusterSets int) *VisualizationView 
 // PreCacheAllTries processes and caches traffic data for all tries to eliminate
 // switching delays. It restores the view's display state to the App's current
 // trie afterwards, so it must be called on the UI goroutine (its existing
-// callers — trie-switch closures and tests — already are). The background
+// callers - trie-switch closures and tests - already are). The background
 // initial-precache path must use PreCacheAllTriesFor, which never reads the
 // UI-owned App.jsonResult/currentTrie.
 func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
@@ -264,7 +264,7 @@ func (v *VisualizationView) updateTrafficDataCached() {
 
 // ProcessTrafficData processes the requests and builds the traffic heatmap
 // matrix. trafficData[a][b] counts all requests in /16 a.b over ALL parsed
-// requests — the matrix is ground truth and identical across tries.
+// requests - the matrix is ground truth and identical across tries.
 //
 // The clustered-traffic overlay grid is NOT built here: it is owned by
 // ensureClusteredData, which generateRenderText calls unconditionally before
@@ -313,7 +313,7 @@ func (v *VisualizationView) clusteredCacheKey() clusterKey {
 // ensureClusteredData makes v.clusteredData reflect the current (trie, cluster
 // set). It reuses the cached per-(trie,set) clustered grid when available;
 // otherwise it does a single clustered-only pass over the (already filtered)
-// requests and caches the result. trafficData is NOT recomputed here — it is
+// requests and caches the result. trafficData is NOT recomputed here - it is
 // the same for a trie across all cluster sets.
 func (v *VisualizationView) ensureClusteredData() {
 	key := v.clusteredCacheKey()
@@ -629,7 +629,7 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 }
 
 // blockStats sums traffic and clustered requests over the scale x scale block
-// of /16 bins starting at (aStart, bStart) — the totals of one display cell.
+// of /16 bins starting at (aStart, bStart) - the totals of one display cell.
 // Pointer params avoid copying the 256x256 arrays.
 func blockStats(traffic, clustered *[256][256]uint32, aStart, bStart, scale int) (cellTraffic, cellClustered uint32) {
 	for aa := aStart; aa < aStart+scale && aa < 256; aa++ {
@@ -672,7 +672,7 @@ func (v *VisualizationView) scaleName() string {
 }
 
 // intensityOf maps a display cell's request total to [0,1] relative to the
-// busiest cell on the map. Linear: x/max. Sqrt: sqrt(x/max) — power scale,
+// busiest cell on the map. Linear: x/max. Sqrt: sqrt(x/max) - power scale,
 // middle ground between linear and log. Log: log1p(x)/log1p(max). All modes
 // keep the endpoints (0 → 0, max → 1) and only redistribute the middle.
 func (v *VisualizationView) intensityOf(traffic, maxCellTraffic uint32) float64 {

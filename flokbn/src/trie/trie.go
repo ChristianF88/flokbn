@@ -84,7 +84,7 @@ func (t *Trie) BuildSorted(ips []uint32) {
 			child := node.Children[bit]
 			if child == nil {
 				// BuildSorted requires a Seq-backed trie (t.seqAlloc != nil),
-				// so call the allocator directly here — this is the hottest
+				// so call the allocator directly here - this is the hottest
 				// allocation loop and must avoid the newNode() branch.
 				child = t.seqAlloc.GetNode()
 				node.Children[bit] = child

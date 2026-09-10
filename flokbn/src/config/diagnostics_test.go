@@ -21,7 +21,7 @@ func writeConfig(t *testing.T, content string) string {
 
 // TestDiagnosticsCollectAllSingleTrieTwoErrors proves the per-trie checks do NOT
 // early-return: ONE trie with BOTH a bad startTime AND a bad endTime yields TWO
-// messages. The cross-trie Len==3 test is insufficient for this — it would pass
+// messages. The cross-trie Len==3 test is insufficient for this - it would pass
 // even if startTime short-circuited the endTime check within a single trie.
 func TestDiagnosticsCollectAllSingleTrieTwoErrors(t *testing.T) {
 	cfg, err := LoadConfig(writeConfig(t, `
@@ -230,7 +230,7 @@ endTime = "2025-01-01T00:00:00Z"
 }
 
 // TestDiagnosticsTypeErrorStaysHard proves a wrong-TYPE timestamp (int) is a
-// HARD LoadConfig error (structural), NOT a diagnostic — for BOTH the trie and
+// HARD LoadConfig error (structural), NOT a diagnostic - for BOTH the trie and
 // sliding-trie parse paths.
 func TestDiagnosticsTypeErrorStaysHard(t *testing.T) {
 	if _, err := LoadConfig(writeConfig(t, `

@@ -198,7 +198,7 @@ func TestStaticDemoRefusesToOverwriteExistingFile(t *testing.T) {
 func TestDirsToCreate(t *testing.T) {
 	base := t.TempDir() // exists; must never appear in the result
 
-	// base/a/b/leaf — a, b and leaf do not exist yet.
+	// base/a/b/leaf - a, b and leaf do not exist yet.
 	leaf := filepath.Join(base, "a", "b", "leaf")
 	got := dirsToCreate(leaf)
 	want := []string{
@@ -241,7 +241,7 @@ func TestDirsToCreate(t *testing.T) {
 // TestStaticDemoDetectsClusters is the strongest end-to-end guard: the demo,
 // when analyzed with its own config, must actually detect threat ranges. This
 // is what guarantees the fixed 1,000,000-line log and its calibrated config
-// stay in sync — a calibration regression would surface as an empty report. It
+// stay in sync - a calibration regression would surface as an empty report. It
 // runs the REAL command (full 1M log) end-to-end on purpose.
 func TestStaticDemoDetectsClusters(t *testing.T) {
 	dir := t.TempDir()
@@ -267,8 +267,8 @@ func TestStaticDemoDetectsClusters(t *testing.T) {
 // TestScaffoldRewriteContract guards the embedded-config path-rewrite contract.
 // rewriteScaffoldPaths is a set of line-anchored regexes against the committed
 // exampledata/complex-static.toml. If that TOML is ever reformatted in a way the
-// regexes no longer match — a renamed key, a reflowed line, indentation the
-// anchor rejects — the rewrites would silently no-op and `generate static-demo`
+// regexes no longer match - a renamed key, a reflowed line, indentation the
+// anchor rejects - the rewrites would silently no-op and `generate static-demo`
 // would emit a config with relative dangling paths, with no error. This test
 // reads the embedded asset exactly as handleStaticDemo does, runs the same
 // rewrite, and asserts every contract point still fires, so such a reformat

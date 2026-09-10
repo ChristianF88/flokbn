@@ -1,5 +1,5 @@
 # ==============================================================================
-# flokbn — complex static-analysis example (full filter surface)
+# flokbn - complex static-analysis example (full filter surface)
 # ==============================================================================
 # This is a RUNNABLE example exercising every static-mode filter option:
 # global IP/UA white- and blacklists, per-trie UA/endpoint/time filters,
@@ -21,17 +21,17 @@
 [global]
 # Jail/ban output. Both must be set or no jail/ban processing happens.
 # Co-located in the scaffolded directory; both names are git-ignored.
-# NOTE: the jail file persists across runs — delete it for a clean rerun.
+# NOTE: the jail file persists across runs - delete it for a clean rerun.
 #
 # Heads-up: on very large, high-cardinality inputs the jail/ban stage can be
 # slow. For a quick run, comment out jailFile/banFile below to skip jail
-# processing — the trie analysis, CIDR range stats, and clustering are
+# processing - the trie analysis, CIDR range stats, and clustering are
 # unaffected.
 jailFile = "flokbn_jail.json"
 banFile  = "flokbn_ban.txt"
 
 # IP lists: CIDRs never to ban / always to ban. They act on the jail/ban
-# pipeline only and never drop requests from the analysis — detection,
+# pipeline only and never drop requests from the analysis - detection,
 # statistics, and percentages are unaffected by them. The example whitelist
 # holds private ranges and public DNS; the blacklist holds TEST-NET-2.
 whitelist = "whitelist.txt"
@@ -41,7 +41,7 @@ blacklist = "blacklist.txt"
 # A whitelisted UA removes the request from EVERY trie below and shields the
 # IP from jailing; a blacklisted UA jails its IP immediately as a /32.
 # The example whitelist contains the exact Googlebot/bingbot strings present
-# in the fake data — that is why every trie below "loses" ~10.4% of requests,
+# in the fake data - that is why every trie below "loses" ~10.4% of requests,
 # including the unfiltered baseline. Deliberate: it demonstrates precedence.
 userAgentWhitelist = "ua_whitelist.txt"
 userAgentBlacklist = "ua_blacklist.txt"
@@ -54,7 +54,7 @@ logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
 plotPath = "heatmap.html"
 
 # ------------------------------------------------------------------------------
-# Trie 1 — unfiltered baseline: all traffic (minus UA-whitelisted requests).
+# Trie 1 - unfiltered baseline: all traffic (minus UA-whitelisted requests).
 # Expect ~896k requests. The ~10 hotspot /16s carry 7.5k-17.8k requests each;
 # a background /16 carries only ~12, so size thresholds separate them cleanly.
 # ------------------------------------------------------------------------------
@@ -71,9 +71,9 @@ clusterArgSets = [
 useForJail = [true, false, false]
 
 # ------------------------------------------------------------------------------
-# Trie 2 — UA-filtered bot traffic.
+# Trie 2 - UA-filtered bot traffic.
 # The regex names all five fake bot UAs, but Googlebot/bingbot requests are
-# already removed by the exact-match UA whitelist above — whitelist wins.
+# already removed by the exact-match UA whitelist above - whitelist wins.
 # What remains: curl + python-requests + Anubis ~= 196k requests; hotspot
 # /16s carry ~1.7k-3.9k of them.
 # ------------------------------------------------------------------------------
@@ -87,7 +87,7 @@ clusterArgSets = [
 useForJail = [true, true, false]
 
 # ------------------------------------------------------------------------------
-# Trie 3 — endpoint-filtered: the nine hottest endpoints (~60% of traffic,
+# Trie 3 - endpoint-filtered: the nine hottest endpoints (~60% of traffic,
 # Zipf-distributed; /fake-endpoint-1 alone is ~23%). ~545k requests;
 # hotspot /16s carry ~4.5k-10.6k.
 # ------------------------------------------------------------------------------
@@ -101,7 +101,7 @@ clusterArgSets = [
 useForJail = [false, true, false]
 
 # ------------------------------------------------------------------------------
-# Trie 4 — everything combined: bot UAs + hot endpoints + a 24h window
+# Trie 4 - everything combined: bot UAs + hot endpoints + a 24h window
 # (the log spans 2026-02-03T23:56Z to 2026-02-06T23:58Z; RFC3339 only).
 # A config startTime/endTime is RFC3339 (it carries a zone, e.g. ...Z or
 # ...+01:00) and is therefore compared as a TRUE INSTANT against each log line's

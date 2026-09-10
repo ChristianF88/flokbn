@@ -13,13 +13,13 @@ import (
 // line, including Apache-escaped quotes (`\"`) in the request line and referer.
 // The static parser skips backslash-escaped quotes via scanQuotedClose; the live
 // parser duplicates that logic in scanQuotedCloseStr (ingestor is a leaf package
-// and logparser imports it, so ingestor cannot import logparser — import cycle).
+// and logparser imports it, so ingestor cannot import logparser - import cycle).
 // This test lives in logparser because only here can BOTH parsers be invoked.
 //
 // The static format mirrors the live wire shape that ParseEventForTest assumes:
 // IP first, timestamp in brackets, quoted request line, status, bytes, quoted
 // referer (skipped), quoted user-agent. The referer is a QUOTED skip field
-// (`"%^"`) so the static parser scans it escape-aware too — exactly what the
+// (`"%^"`) so the static parser scans it escape-aware too - exactly what the
 // live walk now does.
 func TestLiveStaticUserAgentParity(t *testing.T) {
 	const format = `%h %^ %^ [%t] "%r" %s %b "%^" "%u"`

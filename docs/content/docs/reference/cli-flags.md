@@ -50,7 +50,7 @@ flokbn static [options]
 
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `--clusterArgSets` | string | No | `1000,30,32,0.2` (injected) | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. If omitted, flags mode injects the default set `1000,30,32,0.2` (jailed), matching live flags mode — clusters are still detected and jailed. Note: a `[static.NAME]` TOML trie has **no** such default — without `clusterArgSets` it detects nothing. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
+| `--clusterArgSets` | string | No | `1000,30,32,0.2` (injected) | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. If omitted, flags mode injects the default set `1000,30,32,0.2` (jailed), matching live flags mode - clusters are still detected and jailed. Note: a `[static.NAME]` TOML trie has **no** such default - without `clusterArgSets` it detects nothing. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
 
 ### Filtering Options
 
@@ -159,7 +159,7 @@ an absolute, co-located target, so it runs from any working directory.
 
 The synthetic log is deterministic, with a known traffic shape (weighted `/16`
 hotspots over a uniform public-IP background, Zipf endpoint popularity, and
-exact-match whitelist User-Agents). There is no line-count flag — the demo
+exact-match whitelist User-Agents). There is no line-count flag - the demo
 always generates exactly 1,000,000 lines.
 
 | Flag | Type | Required | Default | Description |

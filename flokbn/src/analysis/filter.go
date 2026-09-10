@@ -111,7 +111,7 @@ func filterWorker(
 				request: r,
 			}
 
-			// Apply time filtering — skip rejected requests entirely (no channel send)
+			// Apply time filtering - skip rejected requests entirely (no channel send)
 			if bounds.excluded(r.Timestamp) {
 				continue
 			}

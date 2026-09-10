@@ -20,7 +20,7 @@ func genUniformSorted(n int, seed int64) []uint32 {
 }
 
 // genClusteredSorted returns n ascending-sorted IPs clustered into a handful of
-// /16 and /24 bases with some hot single IPs — representative of bot traffic.
+// /16 and /24 bases with some hot single IPs - representative of bot traffic.
 func genClusteredSorted(n int, seed int64) []uint32 {
 	r := rand.New(rand.NewSource(seed))
 	bases16 := []uint32{0x0EA90000, 0x0EBA0000, 0x0EBF0000, 0x71AC0000, 0x7B140000}

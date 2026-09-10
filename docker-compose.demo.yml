@@ -1,4 +1,4 @@
-# DEMO base stack (FLOKBN-045) — same topology as docker-compose.test.yml but
+# DEMO base stack (FLOKBN-045) - same topology as docker-compose.test.yml but
 # paced for watching the Grafana dashboard: slower clients (~46 req/s total
 # instead of ~580) and a detection config (docker-test-config.demo.toml)
 # tuned so the first ban lands ~20 s after traffic starts and further

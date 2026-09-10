@@ -32,7 +32,7 @@ func FuzzNumericCIDR_String(f *testing.F) {
 
 // FuzzMergeCIDRs feeds MergeIPNets up to four CIDRs at once so the merge /
 // containment / collapse logic is actually exercised (the old single-CIDR fuzzer
-// returned at len<=1 and never reached the fast-path overlap check — which is why
+// returned at len<=1 and never reached the fast-path overlap check - which is why
 // the top-of-space prevEnd+1 wraparound went uncaught). Post-merge invariants:
 //
 //	(a) results are pairwise non-overlapping (after sorting by start, no two
@@ -45,7 +45,7 @@ func FuzzNumericCIDR_String(f *testing.F) {
 //	    gain-free: it equals the union of the inputs;
 //	(c) no two adjacent output CIDRs of EQUAL prefix that form an aligned
 //	    power-of-two pair remain un-merged (the collapse must be complete for the
-//	    mergeable case — this is what the top-of-space bug broke).
+//	    mergeable case - this is what the top-of-space bug broke).
 //
 // IPv4-only: entries whose parsed mask is not 4 bytes are skipped, never fed into
 // MergeIPNets (which reads the mask via BigEndian.Uint32).
@@ -121,7 +121,7 @@ func FuzzMergeCIDRs(f *testing.F) {
 				t.Fatalf("merge left OVERLAPPING ranges: %v then %v (inputs a=%q b=%q c=%q d=%q)",
 					outs[i-1], outs[i], a, b, c, d)
 			}
-			// Invariant (c): no two EQUAL-prefix, aligned, adjacent CIDRs remain —
+			// Invariant (c): no two EQUAL-prefix, aligned, adjacent CIDRs remain -
 			// those MUST collapse into the next-larger CIDR. This is exactly the
 			// case the top-of-space wraparound bug broke.
 			if outs[i-1].prefix == outs[i].prefix && outs[i-1].end+1 == outs[i].start {

@@ -439,7 +439,7 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	trieConfig.CompileRegexInto(diags)
 
 	// Validate --rangesCidr into cfg.diags, storing ONLY valid IPv4 entries on the
-	// trie (drop IPv6/malformed before append — never store a bad entry, parity
+	// trie (drop IPv6/malformed before append - never store a bad entry, parity
 	// with the TOML cidrRanges path).
 	for i, cidrStr := range c.StringSlice("rangesCidr") {
 		if !iputils.IsValidCidrOrIP(cidrStr) {

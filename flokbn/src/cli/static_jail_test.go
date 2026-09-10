@@ -61,7 +61,7 @@ func TestStaticFlagsModeJailsDetections(t *testing.T) {
 	jailFile := filepath.Join(tmpDir, "jail.json")
 	banFile := filepath.Join(tmpDir, "ban.txt")
 
-	// 5000 IPs in 10.20.0.0/16 — enough to form a detectable cluster.
+	// 5000 IPs in 10.20.0.0/16 - enough to form a detectable cluster.
 	var b strings.Builder
 	for i := 0; i < 5000; i++ {
 		v := i + 1

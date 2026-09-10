@@ -1,4 +1,4 @@
-# Generator for docker-compose.yml — the YAML is GENERATED; hand edits to
+# Generator for docker-compose.yml - the YAML is GENERATED; hand edits to
 # docker-compose.yml are lost on the next run of this script. Change things
 # here, then run `python3 generate-docker-compose.py` from the repo root.
 #

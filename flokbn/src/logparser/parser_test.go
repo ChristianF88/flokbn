@@ -810,8 +810,8 @@ func TestParser_EdgeCases(t *testing.T) {
 // TestParser_IPv6FieldYieldsZero is the URGENT-21 repro for the log parser:
 // when the %h (IP) field holds an IPv6 address, the IPv4-only fast path
 // (parseIPv4ToUint32) must yield IPUint32 == 0 (a reject sentinel), never a
-// bogus IPv4. A colon is neither a digit nor a dot, so any IPv6 form — plain or
-// IPv4-mapped — funnels to 0. Downstream clustering skips IPUint32 == 0, so an
+// bogus IPv4. A colon is neither a digit nor a dot, so any IPv6 form - plain or
+// IPv4-mapped - funnels to 0. Downstream clustering skips IPUint32 == 0, so an
 // IPv6 line is never counted as a successful IPv4 request.
 func TestParser_IPv6FieldYieldsZero(t *testing.T) {
 	// %h is the FIRST field so the IPv6 address lands in the IP slot.

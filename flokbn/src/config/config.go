@@ -236,7 +236,7 @@ type Config struct {
 	// sub-tables nested under [static.<name>] / [live.<name>], which LoadConfig
 	// parses by hand from a map[string]any (see the dispatch loops there). The
 	// `toml:"-"` tag documents that these fields are never populated by
-	// toml.Decode; a previous `,remain` tag here was dead and misleading —
+	// toml.Decode; a previous `,remain` tag here was dead and misleading -
 	// BurntSushi/toml populated neither (two `,remain` fields cannot both win),
 	// so a refactor to toml.Decode(data, cfg) would have silently lost every
 	// trie. Keep the hand-parsing; do not reintroduce a decode tag.
@@ -244,7 +244,7 @@ type Config struct {
 	LiveTries   map[string]*SlidingTrieConfig `toml:"-"`
 
 	// diags accumulates the parse-phase + flags-handler-injected diagnostics
-	// (CFG-02). It is NOT a package global — it is allocated at the top of
+	// (CFG-02). It is NOT a package global - it is allocated at the top of
 	// LoadConfig and threaded by-pointer into every parse* function, and the
 	// flags handlers append into it directly. Validate(mode) COPIES these
 	// messages (read-only on cfg.diags) into a fresh local accumulator and
@@ -281,7 +281,7 @@ const (
 //
 // CONTRACT (CFG-02, tested by the idempotency test):
 //   - Validate COPIES the persistent cfg.diags (parse-phase + flags-handler
-//     messages) into a fresh LOCAL accumulator (read-only on cfg.diags — never
+//     messages) into a fresh LOCAL accumulator (read-only on cfg.diags - never
 //     appends into it).
 //   - It then APPENDS its own validate-phase checks into the LOCAL accumulator
 //     only: trie timestamps (CFG-01), the effective logFormat (StaticMode),
@@ -289,7 +289,7 @@ const (
 //   - Because it never mutates cfg.diags and every check is deterministic,
 //     calling Validate twice yields identical Len() and identical Report().
 //
-// I/O: Validate is NO LONGER pure — it READS the configured whitelist/blacklist/
+// I/O: Validate is NO LONGER pure - it READS the configured whitelist/blacklist/
 // UA-list files and the log format. It remains side-effect-free w.r.t. on-disk
 // state (it only reads). It is called EXACTLY ONCE per run, at the barrier seam
 // in executeStaticAnalysis / executeLiveAnalysis.
@@ -406,7 +406,7 @@ func plotPathDiagnostic(plotPath string) string {
 // validation site: the flags handler must NOT also load lists (that would
 // double-count). The list bytes validated here are read again by the downstream
 // enforcers (runLiveLoop / computeGlobalFilters / ProcessJailWithWhitelist); the
-// 2-3x read with a TOCTOU window is accepted (documented in the commit body) —
+// 2-3x read with a TOCTOU window is accepted (documented in the commit body) -
 // the barrier's job is to catch a structurally broken/unreadable list at start.
 //
 // The c.Global wrappers internally guard a nil c.Global and an empty path, so a
@@ -497,7 +497,7 @@ func LoadConfig(configPath string) (*Config, error) {
 				}
 				config.Static = staticConfig
 				// Parse static tries from nested config. Only the recognized
-				// scalar keys (staticScalarKeys — the same set parseStaticConfig
+				// scalar keys (staticScalarKeys - the same set parseStaticConfig
 				// checks against) are section fields; everything else is a trie
 				// sub-table. Deriving both from one set keeps the strict
 				// unknown-key check and this dispatch from drifting apart.
@@ -559,7 +559,7 @@ func LoadConfig(configPath string) (*Config, error) {
 			// optional sections never appear as keys here, so omission stays valid.
 			//
 			// Deliberate asymmetry: a misspelled top-level SECTION stays a hard
-			// returned error, NOT a collect-all diagnostic — it loses an ENTIRE
+			// returned error, NOT a collect-all diagnostic - it loses an ENTIRE
 			// section (a fail-OPEN, e.g. a swallowed [global] nullifies whitelist
 			// filtering), structurally distinct from a misspelled KEY within a
 			// recognized section (which IS migrated to diagnostics). The unknown-key
@@ -797,7 +797,7 @@ func checkUnknownKeys(m map[string]any, allowed map[string]struct{}, section str
 // hadError=true if ANY row was dropped.
 //
 // INVARIANT (security): EVERY code path that drops/skips a row records a
-// diagnostic — so len(diags additions)==0 implies every input row survived (no
+// diagnostic - so len(diags additions)==0 implies every input row survived (no
 // silent drop). A silent drop would shift the positional useForJail alignment
 // (cli/api.go, analysis/static.go index argSet[i] against useForJail[i]) and
 // disable operator-requested jail rules. The barrier ALWAYS aborts when a
@@ -945,7 +945,7 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 	// ANTI-MISALIGNMENT (security): when a clusterArgSets row was dropped, the
 	// surviving (shorter) slice must NOT be jailed by a mis-sized useForJail.
 	// The barrier always aborts when a clusterArgSets diagnostic is present, so
-	// this never reaches analysis — but clear UseForJail belt-and-suspenders so
+	// this never reaches analysis - but clear UseForJail belt-and-suspenders so
 	// even a hypothetical barrier-bypass cannot apply useForJail[i] to a shifted
 	// survivor. The alignment check (in Validate) is skipped when either flag is
 	// set, so it never emits a spurious second mismatch.
@@ -973,7 +973,7 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 			if !ok {
 				return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
 			}
-			// SECURITY: append ONLY valid IPv4 entries — drop (continue) on an
+			// SECURITY: append ONLY valid IPv4 entries - drop (continue) on an
 			// IPv6/malformed entry BEFORE the append so an invalid string never
 			// lands on tc.CIDRRanges (a pre-barrier reader / negative-shift panic
 			// guard). COLLECT-ALL: validateCIDRRangeEntry records each bad entry.
@@ -1077,7 +1077,7 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 	// consumed by sliding tries (SlidingTrieConfig has no CIDRRanges field, so a
 	// live config never reaches trie.CountInRange). We still validate-and-discard
 	// each entry so IPv6 fails loud at load identically to static mode. NOTE:
-	// this is a deliberate strictness increase — a live config that previously
+	// this is a deliberate strictness increase - a live config that previously
 	// set an IPv6 cidrRanges value was tolerated (ignored) and now fails load;
 	// IPv4 cidrRanges remain tolerated-and-ignored exactly as before.
 	if v, present := m["cidrRanges"]; present {
@@ -1102,10 +1102,10 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 // positionally with clusterArgSets, recording a diagnostic on a mismatch.
 // Downstream (cli/api.go, analysis/static.go) indexes argSet[i] against
 // useForJail[i], so a present-but-mismatched array silently shifts and disables
-// operator-requested jail rules — the landmine the ticket calls out.
+// operator-requested jail rules - the landmine the ticket calls out.
 //
 // GUARD (CFG-02, security): SKIP the check when clusterHadError || jailHadError
-// for this trie — EITHER producer dropped a row/element, shortening its slice,
+// for this trie - EITHER producer dropped a row/element, shortening its slice,
 // which would emit a SPURIOUS mismatch. The guard trips on ANY error for the
 // trie (not per-row). The barrier already aborts on the producer's diagnostic.
 //
@@ -1170,7 +1170,7 @@ func (c *Config) GetReadTimeout() time.Duration {
 // config" terminology. It runs validateLiveInto on a temp accumulator and
 // returns the FIRST emitted message as an error; validateLiveInto's emission
 // order is deterministic (scalar/live-section checks before the per-window map
-// range) so "first" is stable. validateLiveInto is THE single implementation —
+// range) so "first" is stable. validateLiveInto is THE single implementation -
 // Validate(LiveMode) delegates to it too, so the message grammar never drifts.
 func (c *Config) ValidateLive() error {
 	d := &ConfigDiagnostics{}
@@ -1184,7 +1184,7 @@ func (c *Config) ValidateLive() error {
 // validateLiveInto records every live-mode required-field / cross-field problem
 // into diags and CONTINUES (collect-all). NIL-SAFETY (security): a nil c.Live /
 // nil c.Global is REPORTED (required-section diagnostic) and every dependent
-// deref is then GUARDED — never deref a nil after reporting. EMISSION ORDER is
+// deref is then GUARDED - never deref a nil after reporting. EMISSION ORDER is
 // FIXED and deterministic: live-section scalar checks first, global checks next,
 // then the per-window map range LAST, so the shim's "first message" stays
 // stable. After LoadConfig c.Live/c.Global are non-nil empty structs; a
@@ -1324,10 +1324,10 @@ func (c *Config) LoadBlacklistCIDRs() ([]string, error) {
 // CompileRegexInto(diags). It returns the first wrapped compile error (the exact
 // substrings "invalid useragentRegex pattern: ..." / "invalid endpointRegex
 // pattern: ..." that direct callers assert) and, on success, sets the compiled
-// regex AND the prefilter — ORDER MATTERS (security, D1-SECURITY): the prefilter
+// regex AND the prefilter - ORDER MATTERS (security, D1-SECURITY): the prefilter
 // is built ONLY after a successful Compile, so a compile failure leaves BOTH the
 // compiled regex AND the prefilter nil. regexGate(nil,...) returns true, so a
-// FAIL-OPEN would admit all traffic — the barrier (which fires when the
+// FAIL-OPEN would admit all traffic - the barrier (which fires when the
 // diagnostic is recorded) is the only thing permitted to run between this and
 // any ShouldIncludeRequest call. Never set a partial/garbage prefilter.
 func (tc *TrieConfig) compileRegexFields() error {
@@ -1360,7 +1360,7 @@ func (tc *TrieConfig) CompileRegex() error {
 }
 
 // CompileRegexInto compiles the regex patterns and, on failure, records the
-// wrapped error into diags (verbatim, sanitized — the regexp.Compile error text
+// wrapped error into diags (verbatim, sanitized - the regexp.Compile error text
 // is operator/attacker-influenced via the pattern). It NEVER returns an error;
 // callers proceed to build the Config and the barrier aborts before any
 // ShouldIncludeRequest call. On failure BOTH compiled+prefilter stay nil (see

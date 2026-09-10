@@ -125,7 +125,7 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 			t.Fatal("no iteration log records emitted")
 		}
 		snap := iters[0].snap
-		// Jail keeps the range whole — no fragmentation.
+		// Jail keeps the range whole - no fragmentation.
 		if bans := jailActiveCIDRs(snap); len(bans) != 1 || bans[0] != "10.5.5.0/24" {
 			t.Errorf("jail active bans = %v, want [10.5.5.0/24] (range kept whole)", bans)
 		}

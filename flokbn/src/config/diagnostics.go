@@ -16,7 +16,7 @@ import (
 // then reports all messages and exits before any side-effecting work.
 //
 // Structural/type errors (TOML syntax, wrong-typed timestamp, unreadable file)
-// are not routed here — they stay hard fail-fast errors at LoadConfig time.
+// are not routed here - they stay hard fail-fast errors at LoadConfig time.
 type ConfigDiagnostics struct {
 	msgs []string
 }
@@ -74,7 +74,7 @@ func (d *ConfigDiagnostics) Add(section, key, value, want string, cause error) {
 //
 // SANITATION CONTRACT (CFG-02, HARD): callers MUST pre-format every UNTRUSTED
 // substring (unknown-key NAME, offending CIDR string, offending raw values)
-// through quoteCapped (or strconv.Quote) BEFORE assembling the line — TOML
+// through quoteCapped (or strconv.Quote) BEFORE assembling the line - TOML
 // quoted-key syntax allows embedded newlines/control chars (`"a\nb" = 1`),
 // reachable from a hostile config, which would otherwise forge a fake numbered
 // line, break the one-line-per-error contract, or make Len() lie. As

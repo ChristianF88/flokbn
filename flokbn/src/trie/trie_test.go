@@ -1498,8 +1498,8 @@ func TestCountInRangeSlashZero(t *testing.T) {
 	})
 
 	t.Run("exactly one IP", func(t *testing.T) {
-		// A trie holding exactly one IP — including the very first and very
-		// last address of the space — must report 1 for the full range.
+		// A trie holding exactly one IP - including the very first and very
+		// last address of the space - must report 1 for the full range.
 		for _, ipStr := range []string{"0.0.0.0", "203.0.113.7", "255.255.255.255"} {
 			trie := NewTrie()
 			ip := net.ParseIP(ipStr)

@@ -50,15 +50,15 @@ func ParseMethod(m string) HTTPMethod {
 }
 
 type Request struct {
-	// Hot fields — first cache line (accessed by trie insertion, filtering, clustering)
+	// Hot fields - first cache line (accessed by trie insertion, filtering, clustering)
 	IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation in parser
 	Status    uint16     // Smaller type for status code
 	Method    HTTPMethod // 1 byte
 	_         byte       // explicit padding for alignment
 	Bytes     uint32
-	Timestamp time.Time // 24 bytes — needed for time-range filtering
+	Timestamp time.Time // 24 bytes - needed for time-range filtering
 
-	// Cold fields — second cache line (only accessed during output or string filtering)
+	// Cold fields - second cache line (only accessed during output or string filtering)
 	URI       string
 	UserAgent string
 	IP        net.IP // Legacy (TCP ingestor path only, nil from log parser)
@@ -208,7 +208,7 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 		// 20 bytes): treat the wall-clock as UTC, mirroring the static parser's
 		// >=26-byte gate (parser.go parseTimestamp). A zone-less layout returns a
 		// time located in time.UTC, byte-identical to static's time.Date(...,
-		// time.UTC) for the same wall-clock — restoring live<->static parity
+		// time.UTC) for the same wall-clock - restoring live<->static parity
 		// (AUDIT-07). The offset path is tried first, so well-formed +HHMM lines
 		// do no extra work and incur no extra allocations; the fallback runs only
 		// on the error path. Genuinely malformed brackets (e.g. "badtime") fail
@@ -223,8 +223,8 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	// 3. Request line (after first quote). The closing quote must be escape-aware
 	// so an Apache-escaped `\"` inside the URI does not terminate the field early.
 	// This matches the static parser (parser.go scanQuotedClose) so live and
-	// static align on the same byte offsets — and therefore extract the same
-	// Method/URI/status/bytes/UserAgent — for adversary-controlled escaped quotes.
+	// static align on the same byte offsets - and therefore extract the same
+	// Method/URI/status/bytes/UserAgent - for adversary-controlled escaped quotes.
 	start = strings.IndexByte(msg[end:], '"')
 	if start == -1 {
 		return 0, errors.New("missing request start quote")
@@ -245,13 +245,13 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 	// Bounds-check: when the closing request-line quote is the final byte of
 	// the message, end == len(msg)-1 so end+2 == len(msg)+1, which would panic
 	// on slice. Treat a truncated line as having no status/bytes tail (status
-	// and bytes stay zero, not counted malformed) — same as any short line.
+	// and bytes stay zero, not counted malformed) - same as any short line.
 	var fields []string
 	if end+2 <= len(msg) {
 		fields = strings.Fields(msg[end+2:])
 	}
 	if len(fields) >= 2 {
-		// "-" = absent (Apache convention): silent zero, NOT malformed — parity
+		// "-" = absent (Apache convention): silent zero, NOT malformed - parity
 		// with the static log parser (parser.go status/bytes handling). Anything
 		// else non-numeric stays counted as malformed.
 		if fields[0] == "-" {
@@ -308,8 +308,8 @@ func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err er
 // quote at/after contentStart. The fast path uses strings.IndexByte (SIMD on
 // amd64); the escape-aware slow path runs only when a candidate closing quote
 // is immediately preceded by a backslash, so clean lines never pay for it.
-// Field content keeps its raw escape bytes — this fixes field ALIGNMENT, not
-// unescaping — matching the static parser exactly.
+// Field content keeps its raw escape bytes - this fixes field ALIGNMENT, not
+// unescaping - matching the static parser exactly.
 func closeQuote(s string, contentStart int) int {
 	idx := strings.IndexByte(s[contentStart:], '"')
 	if idx < 0 {
@@ -371,7 +371,7 @@ func parseEventSafe(m map[string]interface{}, out *Request) (malformed int, err 
 // parseEvent and returns the resulting Request. It exists solely so the
 // live<->static UserAgent parity test (logparser/parser_live_ua_parity_test.go)
 // can drive the live parser from a package that ALSO compiles the static format
-// — ingestor is a leaf package that logparser imports, so the parity test cannot
+// - ingestor is a leaf package that logparser imports, so the parity test cannot
 // live in ingestor (it would have to import logparser, an import cycle). This is
 // a thin wrapper over the unexported parseEvent and is not part of the live data
 // path (ReadBatch uses parseEventSafe directly).
@@ -442,7 +442,7 @@ func (ing *TCPIngestor) IsClosed() bool {
 func (ing *TCPIngestor) Close() error {
 	ing.closeOnce.Do(func() {
 		// go-lumber's Server.Close() already closes the underlying listener, so
-		// close the server XOR the listener — never both. Closing both stored a
+		// close the server XOR the listener - never both. Closing both stored a
 		// spurious "use of closed network connection" (net.ErrClosed) and
 		// discarded the real server error (URGENT-09).
 		var err error

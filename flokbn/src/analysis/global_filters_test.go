@@ -108,7 +108,7 @@ func TestStaticWithRequestsGlobalFiltersPopulated(t *testing.T) {
 }
 
 // TestComputeGlobalFiltersMissingFileTreatedAsZero verifies that an unreadable
-// whitelist path does not fail the computation — it is treated as zero.
+// whitelist path does not fail the computation - it is treated as zero.
 func TestComputeGlobalFiltersMissingFileTreatedAsZero(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newGlobalFiltersConfig(filepath.Join(dir, "does-not-exist.txt"), "")

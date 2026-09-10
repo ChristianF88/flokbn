@@ -90,7 +90,7 @@ func TestConcurrentReadAtError_FullModeSurfaces(t *testing.T) {
 	fr := &failingReaderAt{delegate: f, failAtOffset: chunkSize}
 	reqs, perr := pp.parseFileConcurrentIOChunked(fr, path, size, chunkSize)
 	if perr == nil {
-		t.Fatalf("BUG: ReadAt failure swallowed — got nil error and %d requests (want non-nil error)", len(reqs))
+		t.Fatalf("BUG: ReadAt failure swallowed - got nil error and %d requests (want non-nil error)", len(reqs))
 	}
 	if !errors.Is(perr, errInjectedReadAt) {
 		t.Fatalf("error does not wrap injected failure: %v", perr)
@@ -141,7 +141,7 @@ func TestConcurrentReadAtError_IPModeSurfaces(t *testing.T) {
 	fr := &failingReaderAt{delegate: f, failAtOffset: chunkSize}
 	ips, invalid, perr := pp.parseFileIPsConcurrentIOChunked(fr, path, size, chunkSize)
 	if perr == nil {
-		t.Fatalf("BUG: ReadAt failure swallowed — got nil error, %d IPs, invalid=%d (want non-nil error)", len(ips), invalid)
+		t.Fatalf("BUG: ReadAt failure swallowed - got nil error, %d IPs, invalid=%d (want non-nil error)", len(ips), invalid)
 	}
 	if !errors.Is(perr, errInjectedReadAt) {
 		t.Fatalf("error does not wrap injected failure: %v", perr)

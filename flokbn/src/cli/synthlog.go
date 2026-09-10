@@ -17,7 +17,7 @@ package cli
 //     public-IP background.
 //   - 10 user agents with fixed weights, including the two EXACT strings
 //     present in the example UA whitelist (Googlebot + bingbot, together
-//     ~10.4%) — the whitelist collision is intentional.
+//     ~10.4%) - the whitelist collision is intentional.
 //   - 100 endpoints /fake-endpoint-1 ... /fake-endpoint-100, Zipf-like
 //     (s=1.1): the top endpoint carries ~23% of requests, the top 9 ~60%.
 //   - Timestamps ascend over 72h starting 2026-02-03T23:56:44Z with
@@ -67,7 +67,7 @@ type synthHotspot struct {
 //
 // NOTE: mirrored (with the UA weights, seed, byte range and the per-line draw
 // order in generateSyntheticLog) in cidr/demo_compose_bench_test.go, which
-// can't import this package offline. Keep the two in sync — a draw-order or
+// can't import this package offline. Keep the two in sync - a draw-order or
 // weight change here silently desyncs that benchmark's derived data.
 var synthHotspots = []synthHotspot{
 	{synthIPv4(23, 253, 0, 0), 0.01988},
@@ -84,7 +84,7 @@ var synthHotspots = []synthHotspot{
 
 // synthUserAgents and synthUAWeights are the 10 fake user agents with their
 // measured shares. The Googlebot and bingbot strings are EXACT matches for
-// entries in the example UA whitelist — deliberate, to demonstrate
+// entries in the example UA whitelist - deliberate, to demonstrate
 // UA-whitelist precedence (~10.4% of all requests are whitelisted away).
 var synthUserAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",

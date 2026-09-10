@@ -29,7 +29,7 @@ func reqFor(ip string) ingestor.Request {
 	return ingestor.Request{IPUint32: iputils.IPToUint32(net.ParseIP(ip))}
 }
 
-// bruteContains reports membership via net.Contains over the parsed CIDRs —
+// bruteContains reports membership via net.Contains over the parsed CIDRs -
 // the independent reference the fast interval path must match.
 func bruteContains(cidrs []*net.IPNet, ipu uint32) bool {
 	ip := iputils.Uint32ToIP(ipu)
@@ -262,8 +262,8 @@ func TestOverlayRatioSemantics(t *testing.T) {
 
 // TestMembershipEquivalence is a property test: over a large random corpus of
 // IPs and random cluster CIDRs, the fast interval membership must agree with
-// net.Contains exactly. Split into prefix bands so wide (low-prefix) CIDRs —
-// including /0../7, which the original /8../32 band never generated — get
+// net.Contains exactly. Split into prefix bands so wide (low-prefix) CIDRs -
+// including /0../7, which the original /8../32 band never generated - get
 // dedicated coverage. 70000 random IPs per band (3 bands, 210000 total,
 // roughly the original 200000).
 func TestMembershipEquivalence(t *testing.T) {
@@ -405,7 +405,7 @@ func TestBlockStatsCellSums(t *testing.T) {
 // TestRenderHeatmapCellCapture is the end-to-end bug repro: the busiest cell's
 // traffic is nearly all captured by a cluster. The cell must render white
 // (busiest cell = 100% linear brightness) with a full ● dot (>=80% of the
-// cell's requests captured) — dot size from request share, never from
+// cell's requests captured) - dot size from request share, never from
 // address-space geometry.
 func TestRenderHeatmapCellCapture(t *testing.T) {
 	// Cell containing 9.9/9.10: 110 requests, 100 captured (91% -> ●), busiest
@@ -520,7 +520,7 @@ func BenchmarkGenerateRenderText(b *testing.B) {
 }
 
 // BenchmarkSetRenderText measures tview.TextView.SetText with the rendered
-// heatmap at every resolution — the one-time cost paid when a (trie, cluster
+// heatmap at every resolution - the one-time cost paid when a (trie, cluster
 // set) view is swapped in. Drawing afterwards only touches visible lines.
 func BenchmarkSetRenderText(b *testing.B) {
 	for _, scale := range []int{16, 8, 4, 2, 1} {
@@ -764,7 +764,7 @@ func TestCacheKeysNoCompositeCollision(t *testing.T) {
 }
 
 // TestTrafficMatrixIsGroundTruth verifies the traffic matrix shows ALL parsed
-// requests and is identical for every trie — only the clustered overlay may
+// requests and is identical for every trie - only the clustered overlay may
 // differ per trie. Guards against re-introducing per-trie traffic filtering.
 func TestTrafficMatrixIsGroundTruth(t *testing.T) {
 	reqs := []ingestor.Request{
@@ -784,7 +784,7 @@ func TestTrafficMatrixIsGroundTruth(t *testing.T) {
 		t.Fatalf("traffic data missing: A=%v B=%v", okA, okB)
 	}
 	if mA != mB || maxA != maxB {
-		t.Errorf("traffic matrix differs between tries — must be ground truth")
+		t.Errorf("traffic matrix differs between tries - must be ground truth")
 	}
 	var total uint32
 	for a := 0; a < 256; a++ {

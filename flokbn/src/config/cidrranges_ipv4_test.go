@@ -94,7 +94,7 @@ cidrRanges = ["2001:db8::/48"]
 }
 
 // Live config: a valid IPv4 cidrRanges entry must still load (tolerated and
-// ignored, exactly as before — no CIDRRanges field on SlidingTrieConfig).
+// ignored, exactly as before - no CIDRRanges field on SlidingTrieConfig).
 func TestLoadConfig_LiveCIDRRangesAcceptsIPv4(t *testing.T) {
 	cfg, err := loadConfigString(t, `
 [live.win_1]

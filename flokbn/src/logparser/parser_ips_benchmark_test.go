@@ -7,7 +7,7 @@ import (
 	"github.com/ChristianF88/flokbn/testutil"
 )
 
-// The format used by the generated test corpus (testutil) — IP first, IP also
+// The format used by the generated test corpus (testutil) - IP first, IP also
 // repeated last in the real Apache combined line; we mirror the shape used by
 // the rest of the suite.
 const ipsBenchFormat = `%h %^ %^ [%t] "%r" %s %b %^ "%u"`

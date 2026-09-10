@@ -299,7 +299,7 @@ func TestLiveConfigValidation(t *testing.T) {
 						SlidingWindowMaxSize:   100000,
 						SleepBetweenIterations: 10,
 						// clusterArgSets is now a per-window required field
-						// (an empty window clusters nothing — a silent no-op).
+						// (an empty window clusters nothing - a silent no-op).
 						ClusterArgSets: []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
 					},
 				},
@@ -696,7 +696,7 @@ endpointRegex = "/admin/.*"
 }
 
 func TestInvalidRegexHandling(t *testing.T) {
-	// CFG-02: an invalid regex is now COLLECT-ALL — LoadConfig succeeds and the
+	// CFG-02: an invalid regex is now COLLECT-ALL - LoadConfig succeeds and the
 	// failure surfaces through Validate(StaticMode).Report() (the barrier aborts
 	// before any ShouldIncludeRequest call). The MSG text is preserved.
 	tmpDir := t.TempDir()
@@ -797,7 +797,7 @@ useForJail = [true]
 
 	// Both bounds failed RFC3339 parse, so the parsed pointers stay nil and the
 	// raw carriers feed the diagnostics pass (the exported StartTimeRaw/EndTimeRaw
-	// fields are gone — CFG-01 surfaces these through Validate instead).
+	// fields are gone - CFG-01 surfaces these through Validate instead).
 	if trie1.StartTime != nil {
 		t.Errorf("Expected StartTime to be nil for invalid format, got %v", trie1.StartTime)
 	}

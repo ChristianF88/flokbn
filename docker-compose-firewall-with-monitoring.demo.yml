@@ -18,7 +18,7 @@
 #   - nginx-log-exporter: tails the proxy's full access log (incl. 403s)
 #     and exposes per-status request counts for Prometheus.
 #   - prometheus: scrapes flokbn (/metrics, FLOKBN-045) + the log exporter.
-#   - grafana: provisioned datasource + "flokbn — closed-loop firewall"
+#   - grafana: provisioned datasource + "flokbn - closed-loop firewall"
 #     dashboard, anonymous access (test stack only). http://localhost:3000
 services:
   proxy:

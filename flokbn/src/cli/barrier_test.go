@@ -12,7 +12,7 @@ import (
 // flokbnBin is the path to the binary built once for the whole cli test suite.
 // CFG-01's barrier returns cli.Exit("", 1), which triggers os.Exit(1) INSIDE
 // App.Run (urfave/cli's default HandleExitCoder). An in-process App.Run test
-// would therefore kill the test process — so every barrier-firing test runs the
+// would therefore kill the test process - so every barrier-firing test runs the
 // BUILT BINARY as a subprocess via os/exec and asserts exit code, stderr, and
 // side effects. The binary is built in the FOREGROUND in TestMain.
 var flokbnBin string
@@ -122,7 +122,7 @@ logFormat = "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%^\""
 
 // TestBarrierStderrExactness: static --config with a bad startTime exits 1 and
 // stderr is EXACTLY the enumerated report (header + 1 numbered line + trailing
-// newline) — no "flokbn:" prefix line, no duplicate block.
+// newline) - no "flokbn:" prefix line, no duplicate block.
 func TestBarrierStderrExactness(t *testing.T) {
 	dir := t.TempDir()
 	cfg := staticConfig(t, dir, `startTime = "2026-02-04T12:00:0"`, "")
@@ -147,7 +147,7 @@ func TestBarrierStderrExactness(t *testing.T) {
 // TestBarrierGatesPlot: a bad startTime with a VALID plotPath under tmp must
 // stop at the barrier, NOT plot-path validation, so the plot file is never
 // written. POSITIVE CONTROL: the same config with a valid startTime exits 0 and
-// the plot file IS written — so the absence in the negative case is attributable
+// the plot file IS written - so the absence in the negative case is attributable
 // to the barrier.
 func TestBarrierGatesPlot(t *testing.T) {
 	// Negative: bad startTime, valid plot dir.
@@ -222,7 +222,7 @@ func TestBarrierGatesTUI(t *testing.T) {
 // TestBarrierGatesLiveBind: live --config with valid required fields but a bad
 // [live.<win>] startTime exits 1 with the report, and NEITHER the ingest-bind
 // log ("starting live loop") NOR the stats-bind log ("stats server listening")
-// appears — a deterministic, no-network proof that neither listener was bound.
+// appears - a deterministic, no-network proof that neither listener was bound.
 // A statsListen is set so BOTH binds are covered.
 func TestBarrierGatesLiveBind(t *testing.T) {
 	dir := t.TempDir()
@@ -550,7 +550,7 @@ func TestCFG02_LiveUnreadableWhitelistBeforeBind(t *testing.T) {
 // TestCFG02_LiveBadLogEnumEnumeratesAtBarrier closes the slop2 hole: a bad
 // [log] level/format enum in a live --config is a collect-all diagnostic
 // (parseLogConfig), but handleLiveConfigMode used to call logging.Setup BEFORE
-// the barrier, and logging.Setup hard-fails on a bad enum — so the [log]
+// the barrier, and logging.Setup hard-fails on a bad enum - so the [log]
 // diagnostic AND every other config error were hidden behind a single
 // "flokbn:" logging error (violating acceptance #1). The logger install is now
 // TOLERANT of a bad config enum, so the enum enumerates at the barrier with the
@@ -613,7 +613,7 @@ clusterArgSets = [[1, 0, 32, 1.0]]
 }
 
 // TestCFG02_LiveBadLogLevelFlagStaysHard: a bad --logLevel FLAG (a direct CLI
-// input, not a config key) stays a TIER-1 hard return via the "flokbn:" path —
+// input, not a config key) stays a TIER-1 hard return via the "flokbn:" path -
 // it is NOT migrated to the barrier (no config diagnostic validates a flag), so
 // a typo'd flag still fails loud. This guards the asymmetry the slop2 fix keeps:
 // the [log] CONFIG enum routes through the barrier; the --logLevel FLAG does not.

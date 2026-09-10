@@ -1,4 +1,4 @@
-# Repo-root Makefile — canonical local test gate for flokbn.
+# Repo-root Makefile - canonical local test gate for flokbn.
 # Go module lives in $(GO_DIR); e2e suites delegate to e2e/Makefile.
 
 GO_DIR := flokbn/src

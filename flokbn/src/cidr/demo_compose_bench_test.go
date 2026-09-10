@@ -11,11 +11,11 @@ package cidr
 // representative blacklist/whitelist of the SHAPE the static pipeline produces
 // (the exact jailing heuristic here is a stand-in, not the real clusterer):
 //
-//   - blacklist : the 10 weighted /16 hotspots, plus — only at very large line
-//                 counts — a handful of background /24s that happen to collect
+//   - blacklist : the 10 weighted /16 hotspots, plus - only at very large line
+//                 counts - a handful of background /24s that happen to collect
 //                 >=4 hits (B is 10 at 100k/300k lines, 16 at 1M).
 //   - whitelist : the scattered /32 bot IPs (Googlebot/bingbot UA) that
-//                 land inside the jailed hotspots — the "interior holes"
+//                 land inside the jailed hotspots - the "interior holes"
 //                 described in DropFullyWhitelisted's doc comment.
 //
 // The load-bearing shape is a small blacklist (B≈10-16) against a LARGE

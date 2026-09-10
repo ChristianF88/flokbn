@@ -124,7 +124,7 @@ func TestDiffParseIPv4_RandomValid(t *testing.T) {
 }
 
 // formatOctet renders an octet, sometimes with random leading zeros (still <=15
-// total length is not guaranteed; that's fine — both impls share the length gate).
+// total length is not guaranteed; that's fine - both impls share the length gate).
 func formatOctet(rng *rand.Rand, v int) string {
 	s := itoa(v)
 	if rng.Intn(4) == 0 {

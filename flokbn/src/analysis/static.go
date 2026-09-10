@@ -76,7 +76,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	// Check if any trie config requires string fields (URI/UserAgent) or non-IP fields.
 	// The User-Agent matcher depends only on global config (the same whitelist/blacklist
 	// files for every trie), so it is built ONCE here and shared across all tries via
-	// processTrie — avoiding N redundant disk reads (one matcher rebuild per trie).
+	// processTrie - avoiding N redundant disk reads (one matcher rebuild per trie).
 	needsStringFields := false
 	needsNonIPFields := false
 	sharedUAMatcher, uaMatcherErr := cfg.CreateUserAgentMatcher()
@@ -85,7 +85,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 		// setup error: continuing would skip ALL UA filtering and persist a wrong
 		// ban file (UA-whitelisted IPs bannable, UA-blacklisted bots not
 		// force-banned) on a "successful" exit. Fail loud BEFORE any trie work or
-		// the jail/ban-file side effects below — identical severity to the fast
+		// the jail/ban-file side effects below - identical severity to the fast
 		// path Static(). The wrapped loader error already names the file.
 		jsonOutput.AddError("useragent_matcher_create", fmt.Sprintf("Failed to create User-Agent matcher: %v", uaMatcherErr), 1)
 		return jsonOutput, nil, uaMatcherErr
@@ -213,7 +213,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 
 	// Record the global whitelist entry counts. Only the UA whitelist is a real
 	// request filter (it drops requests from every trie) and is listed under
-	// Active Filters; the IP whitelist count is informational only — it filters
+	// Active Filters; the IP whitelist count is informational only - it filters
 	// nothing here (jail/ban publish pipeline only). Lists are tiny and loaded
 	// once here; never in the hot loop.
 	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
@@ -254,12 +254,12 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 // (and is rendered as an active filter); the IP whitelist acts solely in the
 // jail/ban publish pipeline, so its count is surfaced in the JSON output only
 // (see output.GlobalFilters). Only counts
-// are needed (not the entries), and the files are tiny — loaded once per
+// are needed (not the entries), and the files are tiny - loaded once per
 // analysis here, never in the per-request hot loop. A loader error yields a
 // zero count for that summary line. CFG-02: this is now strictly DOWNSTREAM of
 // the pre-work barrier, which already validated every configured list file
 // (config.Validate -> validateListFiles) and aborted on an unreadable/IPv6 list
-// — so a broken list can no longer reach this summary as a phantom 0; the
+// - so a broken list can no longer reach this summary as a phantom 0; the
 // swallow here is a harmless belt-and-suspenders for the count line only.
 func computeGlobalFilters(cfg *config.Config) output.GlobalFilters {
 	var gf output.GlobalFilters
@@ -298,7 +298,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 
 	// Malformed/inverted startTime/endTime are now caught at config load and
 	// reported by the pre-work barrier (CFG-01), which fails loud before analysis
-	// runs — so the old invalid_time_format / invalid_time_range warnings here
+	// runs - so the old invalid_time_format / invalid_time_range warnings here
 	// are dead and removed. The time_filter_no_results warning (below, ~line 455)
 	// is a RUNTIME observation on VALIDLY-parsed bounds and STAYS.
 
@@ -374,12 +374,12 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	var uaWhitelistExcluded int
 
 	// True unique-IP count, derived from the sorted insert slice in a single
-	// linear pass — keeps the trie insert hot path untouched.
+	// linear pass - keeps the trie insert hot path untouched.
 	var uniqueIPs int
 
 	// Fast path for unfiltered data: use sorted insertion optimization
 	if !hasFilters {
-		// Use IPUint32 directly — no conversion needed (parsed directly to uint32)
+		// Use IPUint32 directly - no conversion needed (parsed directly to uint32)
 		ipUints := make([]uint32, 0, len(requests))
 		for _, r := range requests {
 			// Skip 0 IPs (invalid or failed to parse)
@@ -392,7 +392,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 		// Every nonzero IP was inserted, so the post-filter count is exactly len(ipUints).
 		filteredRequestCount = len(ipUints)
 
-		// Radix sort: O(n) vs sort.Slice O(n log n) — 10-15x faster for large arrays
+		// Radix sort: O(n) vs sort.Slice O(n log n) - 10-15x faster for large arrays
 		iputils.RadixSortUint32(ipUints)
 		uniqueIPs = iputils.CountDistinctSorted(ipUints)
 
@@ -423,7 +423,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 				&filteredRequestCount, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded)
 		}
 
-		// Radix sort + batch sorted insert — same optimization as unfiltered fast path
+		// Radix sort + batch sorted insert - same optimization as unfiltered fast path
 		if len(ipsToInsertUint32) > 0 {
 			iputils.RadixSortUint32(ipsToInsertUint32)
 			uniqueIPs = iputils.CountDistinctSorted(ipsToInsertUint32)
@@ -524,7 +524,7 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 
 	// NewParser revalidates the format as defense-in-depth; for a barrier-passed
 	// config this is unreachable (config.Validate ran logparser.ValidateFormat,
-	// a total precondition for NewParser success — see ValidateFormat docs), but
+	// a total precondition for NewParser success - see ValidateFormat docs), but
 	// it stays so a future non-barrier caller of Static() still fails loud.
 	parser, err := logparser.NewParser(logFormat)
 	if err != nil {
@@ -560,7 +560,7 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 		}
 	}
 
-	// Filters present: correctness first — delegate to the full path and drop the
+	// Filters present: correctness first - delegate to the full path and drop the
 	// requests slice.
 	if needsNonIPFields {
 		result, _, derr := StaticWithRequests(cfg)
@@ -594,7 +594,7 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 		return jsonOutput, nil
 	}
 
-	// Sort the IPs ONCE — shared across all tries (an extra win vs per-trie sort).
+	// Sort the IPs ONCE - shared across all tries (an extra win vs per-trie sort).
 	iputils.RadixSortUint32(ips)
 
 	// True unique-IP count, computed once from the shared sorted slice (single
@@ -645,8 +645,8 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	jsonOutput.Tries = trieResults
 
 	// Record the global whitelist entry counts (same as the full path). Only
-	// the IP whitelist can be configured here — any UA list forces the full
-	// path (needsNonIPFields above) — and it drops nothing from the analysis,
+	// the IP whitelist can be configured here - any UA list forces the full
+	// path (needsNonIPFields above) - and it drops nothing from the analysis,
 	// so this only feeds the informational JSON count, never an active filter.
 	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
 
@@ -814,7 +814,7 @@ func filterRequestsConcurrent(
 		defer collectorWG.Done()
 		for result := range resultChan {
 			// A zero IP (invalid or failed to parse) is counted as invalid FIRST,
-			// regardless of the UA verdict — this matches sequential filterRequests,
+			// regardless of the UA verdict - this matches sequential filterRequests,
 			// which checks IPUint32==0 before any UA logic. A 0.0.0.0 entry must
 			// never reach the UA-excluded counter or the whitelist/blacklist IP sets
 			// (those are converted to /32s for jail/ban processing).
@@ -999,7 +999,7 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 		// Parse CIDRs once for reuse across operations
 		var cidrIPNets []*net.IPNet
 		// CountAll counts every insertion (duplicate IPs included), so this is
-		// the request total — percentages below are percent-of-requests.
+		// the request total - percentages below are percent-of-requests.
 		totalRequests := float64(trieInstance.CountAll())
 
 		for _, cidrStr := range cidrs {
@@ -1087,7 +1087,7 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 	}
 
 	// Drop jail CIDRs fully covered by the whitelist, keeping the rest whole.
-	// Partial overlaps are NOT fragmented here — the whitelist is applied
+	// Partial overlaps are NOT fragmented here - the whitelist is applied
 	// exactly at the publish choke point (ComposeBanLists below). Fragmenting
 	// here around UA-whitelisted /32s would explode a handful of jail ranges
 	// into tens of thousands of CIDRs and feed a super-linear jail update.

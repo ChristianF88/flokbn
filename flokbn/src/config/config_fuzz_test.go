@@ -44,7 +44,7 @@ clusterArgSets = [[200, 30, 32, 0.2]]
 		if err := os.WriteFile(configPath, data, 0644); err != nil {
 			return
 		}
-		// Should not panic — invalid configs return errors
+		// Should not panic - invalid configs return errors
 		LoadConfig(configPath)
 	})
 }

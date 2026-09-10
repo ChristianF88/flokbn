@@ -458,7 +458,7 @@ func parseWhitelistRanges(whitelist []string) []rng32 {
 		curr := &ranges[merged]
 		next := ranges[i]
 		// next.start <= curr.end+1 means overlap or adjacency. Guard against
-		// curr.end == 0xFFFFFFFF (the +1 would wrap) — in that case curr already
+		// curr.end == 0xFFFFFFFF (the +1 would wrap) - in that case curr already
 		// covers the whole tail, so anything is absorbed.
 		if curr.end == 0xFFFFFFFF || next.start <= curr.end+1 {
 			if next.end > curr.end {
@@ -563,7 +563,7 @@ func RemoveWhitelisted(blacklist []string, whitelist []string) []string {
 
 	whiteRanges := parseWhitelistRanges(whitelist)
 	if len(whiteRanges) == 0 {
-		// Whitelist had only invalid entries — nothing to subtract or remove.
+		// Whitelist had only invalid entries - nothing to subtract or remove.
 		return blacklist
 	}
 
@@ -594,13 +594,13 @@ func RemoveWhitelisted(blacklist []string, whitelist []string) []string {
 		blackStart := iputils.IPToUint32(blackNet.IP)
 		blackEnd := blackStart | ^binary.BigEndian.Uint32(blackNet.Mask)
 
-		// Fully covered by a single whitelist entry — drop. (Covered only by the
+		// Fully covered by a single whitelist entry - drop. (Covered only by the
 		// UNION of several entries still subtracts to empty below, same outcome.)
 		if rangeFullyCovered(blackStart, blackEnd, whiteRanges) {
 			continue
 		}
 
-		// No whitelist entry intersects this CIDR — keep it VERBATIM, preserving
+		// No whitelist entry intersects this CIDR - keep it VERBATIM, preserving
 		// the exact bytes (including any non-canonical host-bits form) rather than
 		// re-emitting a canonicalized NumericCIDR.String().
 		if !rangeIntersects(blackStart, blackEnd, whiteRanges) {

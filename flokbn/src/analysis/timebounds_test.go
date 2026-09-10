@@ -24,16 +24,16 @@ func TestTimeBounds_WallClockVsInstant(t *testing.T) {
 
 	t.Run("zone-less start bound matches by wall-clock", func(t *testing.T) {
 		// Bound start = 06:00 UTC (zone-less). Wall-clock of logTS is also 06:00,
-		// so it must NOT be excluded — even though as a true instant logTS (05:00
+		// so it must NOT be excluded - even though as a true instant logTS (05:00
 		// UTC) is before 06:00 UTC.
 		start := time.Date(2025, 7, 6, 6, 0, 0, 0, time.UTC)
 		tc := &config.TrieConfig{StartTime: &start, StartTimeHasOffset: false}
 		tb := makeTimeBounds(tc)
 		if tb.excluded(logTS) {
-			t.Errorf("+0100 06:00 line excluded by zone-less start 06:00 — wall-clock match expected")
+			t.Errorf("+0100 06:00 line excluded by zone-less start 06:00 - wall-clock match expected")
 		}
 		if tb.excluded(logTSMinus7) {
-			t.Errorf("-0700 06:00 line excluded by zone-less start 06:00 — wall-clock match expected")
+			t.Errorf("-0700 06:00 line excluded by zone-less start 06:00 - wall-clock match expected")
 		}
 		// A 05:00 wall-clock line is before the bound and must be excluded.
 		before := time.Date(2025, 7, 6, 5, 0, 0, 0, plusOne)
@@ -47,7 +47,7 @@ func TestTimeBounds_WallClockVsInstant(t *testing.T) {
 		tc := &config.TrieConfig{EndTime: &end, EndTimeHasOffset: false}
 		tb := makeTimeBounds(tc)
 		if tb.excluded(logTS) {
-			t.Errorf("+0100 06:00 line excluded by zone-less end 06:00 — should be within (== boundary)")
+			t.Errorf("+0100 06:00 line excluded by zone-less end 06:00 - should be within (== boundary)")
 		}
 		after := time.Date(2025, 7, 6, 7, 0, 0, 0, plusOne)
 		if !tb.excluded(after) {

@@ -23,7 +23,7 @@ type JSONOutput struct {
 	UserAgentBlacklistIPs []string     `json:"useragent_blacklist_ips,omitempty"`
 	// GlobalFilters is ALWAYS present in the JSON output. This is a deliberate
 	// schema choice: the "global_filters" key is emitted on every run (it is not
-	// omitempty — a non-pointer struct cannot be, and we would not want it to be
+	// omitempty - a non-pointer struct cannot be, and we would not want it to be
 	// anyway), carrying zero counts when no whitelist is configured. Consumers can
 	// therefore rely on the key existing and need not special-case its absence.
 	GlobalFilters GlobalFilters `json:"global_filters"`
@@ -241,10 +241,10 @@ func (j *JSONOutput) UpdateDuration(startTime time.Time) {
 //
 // The per-trie filters (User-Agent regex, endpoint regex, time range) come from
 // params; the global UA whitelist comes from gf and is appended AFTER the
-// per-trie entries, and only when its count is > 0 — so a baseline trie with no
+// per-trie entries, and only when its count is > 0 - so a baseline trie with no
 // per-trie filters still reports the active UA whitelist instead of "None".
 // The IP whitelist is deliberately NOT listed: it never drops requests from a
-// trie — it acts only in the jail/ban publish pipeline (see GlobalFilters).
+// trie - it acts only in the jail/ban publish pipeline (see GlobalFilters).
 // Callers should print "None" only when the returned slice is empty.
 func ActiveFilters(params TrieParameters, gf GlobalFilters) []string {
 	var filters []string

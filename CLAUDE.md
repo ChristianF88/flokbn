@@ -8,8 +8,8 @@ A Go CLI that clusters the IPs in HTTP access logs into CIDR ranges using a bina
 trie, for botnet detection, abuse analysis, and ban-list generation. A 2M-line log
 clusters in ~1s on a workstation. Two modes:
 
-- **`flokbn static`** — batch-analyze a log file. Output: JSON / compact JSON / plain text / interactive TUI.
-- **`flokbn live`** — continuous monitoring. Ingests over the Lumberjack protocol (Filebeat-compatible), keeps a sliding window, escalates detected ranges through a persistent **jail**, and serves HTTP `/stats`, `/bans`, Prometheus `/metrics`.
+- **`flokbn static`** - batch-analyze a log file. Output: JSON / compact JSON / plain text / interactive TUI.
+- **`flokbn live`** - continuous monitoring. Ingests over the Lumberjack protocol (Filebeat-compatible), keeps a sliding window, escalates detected ranges through a persistent **jail**, and serves HTTP `/stats`, `/bans`, Prometheus `/metrics`.
 
 **IPv4 only.** IPv6 is deliberately unsupported and rejected loudly at config load.
 
@@ -24,7 +24,7 @@ flokbn/src/          # THE GO MODULE lives here, not at repo root
   ingestor/          # Request type; TCPIngestor (go-lumber server)
   trie/              # binary trie, CollectCIDRsNumeric clustering walk
   cidr/              # CIDR merge/subtract, RemoveWhitelisted, UserAgentMatcher
-  analysis/          # Static() / StaticWithRequests() — wires parse→trie→cluster→filter
+  analysis/          # Static() / StaticWithRequests() - wires parse→trie→cluster→filter
   sliding/           # time+size bounded window for live mode
   jail/              # persistent escalating ban state (jail.go, io.go)
   output/            # JSONOutput, plain text, PlotHeatmap (echarts HTML)
@@ -89,7 +89,7 @@ GoReleaser. No golangci-lint config; lint = gofmt + vet + staticcheck only.
   re-detection after expiry. Parent ranges consolidate contained sub-ranges (prevents
   fragment explosion). Persisted as JSON; bounds cached as uint32 to avoid re-parsing.
 - **Whitelist semantics:** a blacklist CIDR is dropped only if **fully covered by a
-  single whitelist entry** — the union of multiple entries does NOT count (deliberate;
+  single whitelist entry** - the union of multiple entries does NOT count (deliberate;
   see jail invariant tests). `RemoveWhitelisted` parses the whitelist once
   (O(B+W), not O(B*W)) and is byte-identical to the old path for IPv4 (proven by
   differential fuzz). Whitelist is applied at **publish time** (`ComposeBanLists`),
@@ -111,4 +111,4 @@ GoReleaser. No golangci-lint config; lint = gofmt + vet + staticcheck only.
   access.log + calibrated TOML + white/blacklist files) with absolute paths rewritten
   into the config. Use it to reproduce behavior locally.
 - When editing CIDR/jail/whitelist logic, the invariant and differential-fuzz tests
-  are the safety net — run `cd flokbn/src && go test ./cidr ./jail` after changes.
+  are the safety net - run `cd flokbn/src && go test ./cidr ./jail` after changes.
