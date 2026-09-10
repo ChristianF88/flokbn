@@ -30,35 +30,65 @@ cd flokbn/flokbn/src
 go build -o flokbn .
 ```
 
-Point it at a log file with one or more cluster arg sets:
+No logs at hand? flokbn builds its own demo - a 1,000,000-line synthetic access log, a calibrated config, and the whitelist/blacklist files it references, all with absolute paths already filled in:
 
 ```bash
-./flokbn static --logfile /var/log/nginx/access.log \
+flokbn generate static-demo --out ./demo
+```
+
+```
+generate static-demo: wrote a 1,000,000-line demo into /home/you/demo
+Run it with:
+  flokbn static --config /home/you/demo/complex-static.toml --plain
+```
+
+Run that command and you get the analysis below. The synthetic log is generated from a fixed seed, so your ranges and counts match these exactly - only the timings differ:
+
+```
+📊 ANALYSIS OVERVIEW
+────────────────────────────────────────────
+Analysis Type:   static
+Duration:        1511 ms
+
+⚡ PARSING PERFORMANCE
+────────────────────────────────────────────
+Total Requests:  1,000,000
+Parse Time:      301 ms
+Parse Rate:      3,321,302 requests/sec
+
+🎯 TRIE: t1_baseline
+────────────────────────────────────────────
+Requests After Filtering: 895,978
+Excluded (UA whitelist): 104,022
+Unique IPs:              884,202
+Active Filters:          UA whitelist (58 patterns)
+
+🔍 CLUSTERING RESULTS (3 sets)
+............................................
+  Set 1: min_size=10000, depth=12-18, threshold=0.20
+  Execution Time: 34 μs
+  Detected Threat Ranges:
+    23.253.0.0/16             17,838 requests  (  1.99%)
+    35.217.0.0/16             11,220 requests  (  1.25%)
+    50.231.0.0/16             11,938 requests  (  1.33%)
+    87.26.0.0/16              15,018 requests  (  1.68%)
+    ───────────────────       99,578 requests  ( 11.11%) [TOTAL]
+
+  [... two more arg sets, then tries t2_bots, t3_hot_endpoints,
+       t4_targeted_window ...]
+```
+
+Four tries run over the same log in one pass, each a different detection profile: a baseline, one filtered to bot User-Agents, one to hot endpoints, and one narrowed by User-Agent, endpoint, time window, and CIDR range at once. Alongside the report, the run writes `flokbn_ban.txt` (the ban list), `flokbn_jail.json` (jail state), and `heatmap.html` (a traffic heatmap).
+
+Open `demo/complex-static.toml` to see how it is put together - it is a commented tour of the config format. Each trie lists `clusterArgSets` as `minSize,minDepth,maxDepth,threshold`: a minimum request count, a CIDR depth range to search, and a balance threshold - 0.1 reports a subtree once traffic spreads across it with at most 10% imbalance between its halves. Each set is a detection tier: tight ones catch single hot hosts, loose ones whole subnets, all in one pass. `useForJail` picks which tiers feed the ban list.
+
+Point it at your own logs with flags instead of a config:
+
+```bash
+flokbn static --logfile /var/log/nginx/access.log \
   --clusterArgSets 1000,24,32,0.1 \
   --clusterArgSets 10000,16,24,0.2 --plain
 ```
-
-Illustrative output (RFC 5737 ranges):
-
-```
-ANALYSIS OVERVIEW
-────────────────────────────────────────────
-Total Requests:  2,345,057
-Parse Rate:      4,388,769 requests/sec
-Duration:        570 ms
-
-CLUSTERING RESULTS (2 sets)
-────────────────────────────────────────────
-Set 1: min_size=1000, depth=24-32, threshold=0.10
-  192.0.2.86/32        1,574 requests  (  0.07%)
-  198.51.100.192/26    3,083 requests  (  0.13%)
-
-Set 2: min_size=10000, depth=16-24, threshold=0.20
-  203.0.113.0/24      52,868 requests  (  2.25%)
-  198.51.100.0/24     28,812 requests  (  1.23%)
-```
-
-Each `--clusterArgSets` is `minSize,minDepth,maxDepth,threshold`: a minimum request count, a CIDR depth range to search, and a balance threshold - 0.1 reports a subtree once traffic spreads across it with at most 10% imbalance between its halves. Each set is a detection tier: tight ones catch single hot hosts, loose ones whole subnets, all in one pass.
 
 ## How it works
 
