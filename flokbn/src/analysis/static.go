@@ -798,7 +798,7 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 
 	for _, argSet := range trieConfig.ClusterArgSets {
 		// TrieResult.Data must hold exactly one entry per configured arg set, in
-		// config order: ProcessJailWithWhitelist pairs Data[i] with UseForJail[i]
+		// config order: the publish step (jailCandidates) pairs Data[i] with UseForJail[i]
 		// by position (and the renderers number the sets the same way). An
 		// invalid set therefore still gets an entry - an empty placeholder with
 		// its parameters - instead of being skipped, which would shift every

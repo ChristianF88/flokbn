@@ -165,7 +165,7 @@ func TestStaticWithRequestsUnreadableUAWhitelistFailsLoud(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(uaWhitelistFile, 0644) })
 
 	// Side-effect targets: must NOT be created if the fail-loud return fires
-	// before ProcessJailWithWhitelist.
+	// before the publish step.
 	jailFile := filepath.Join(tempDir, "jail.json")
 	banFile := filepath.Join(tempDir, "ban.txt")
 
