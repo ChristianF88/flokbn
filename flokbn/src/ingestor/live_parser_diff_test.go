@@ -13,9 +13,10 @@ import (
 	"github.com/ChristianF88/flokbn/logparser"
 )
 
-// Differential test: the hardcoded live parser against the compiled default
-// live format (logparser.DefaultLiveLogFormat through logparser.LineParser),
-// which replaces it.
+// Differential test: the hardcoded live parser that TCPIngestor used to have
+// (kept as legacyParseLine in legacy_parser_test.go) against the compiled
+// default live format (logparser.DefaultLiveLogFormat through
+// logparser.LineParser), which replaced it.
 //
 // Three layers:
 //
@@ -52,11 +53,6 @@ import (
 //   - A malformed status or bytes field on a line that is then dropped is
 //     counted, as in a file parse. The old parser dropped such a line before
 //     it reached those fields.
-
-// legacyParseLine is the parser the compiled format is compared against.
-func legacyParseLine(msg string, out *Request) (int, error) {
-	return parseLine(msg, out)
-}
 
 // outcome is what a parser made of one line, reduced to comparable values.
 type outcome struct {

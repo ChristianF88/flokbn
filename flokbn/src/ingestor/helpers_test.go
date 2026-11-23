@@ -6,12 +6,27 @@ import (
 )
 
 // The ingestor used to queue go-lumber batches of generically decoded JSON
-// events (map[string]interface{}) and parse those. It now decodes only the
-// "message" field on the wire side and parses plain lines. The helpers below
-// let the existing map-based test corpus keep driving the same code:
-// parseEvent/parseEventSafe pull the message out of a decoded event exactly
-// as the old parser's first step did, and makeBatch pushes each event through
-// the real wire decoder (eventBatch.add) as JSON.
+// events (map[string]interface{}) and parse those with a hardcoded parser. It
+// now decodes only the "message" field on the wire side and parses plain lines
+// with a compiled log format. The helpers below let the existing test corpus
+// keep driving the same code: parseLine parses one line exactly as ReadBatch
+// does, parseEvent/parseEventSafe pull the message out of a decoded event as
+// the old parser's first step did, and makeBatch pushes each event through the
+// real wire decoder (eventBatch.add) as JSON.
+
+// lineIngestor parses the lines handed to parseLine. It has the default live
+// log format, like every ingestor built without Options.LogFormat.
+var lineIngestor = newQueueIngestor(0)
+
+// parseLine parses one line the way ReadBatch does and also returns how many
+// malformed status/bytes fields the line added to the ingestor's counter. The
+// count is a before/after difference, so tests calling this must not run in
+// parallel.
+func parseLine(msg string, out *Request) (malformed int, err error) {
+	before := lineIngestor.Stats().MalformedFieldsTotal
+	err = lineIngestor.parseLine(msg, out)
+	return int(lineIngestor.Stats().MalformedFieldsTotal - before), err
+}
 
 func parseEvent(evt map[string]interface{}, out *Request) (int, error) {
 	msg, ok := evt["message"].(string)
@@ -21,12 +36,10 @@ func parseEvent(evt map[string]interface{}, out *Request) (int, error) {
 	return parseLine(msg, out)
 }
 
+// parseEventSafe is parseEvent: the recover guard it used to add is part of
+// TCPIngestor.parseLine now.
 func parseEventSafe(evt map[string]interface{}, out *Request) (int, error) {
-	msg, ok := evt["message"].(string)
-	if !ok {
-		return 0, errors.New("missing message field")
-	}
-	return parseLineSafe(msg, out)
+	return parseEvent(evt, out)
 }
 
 // makeBatch builds a queued batch from events as a Lumberjack client would
@@ -46,11 +59,21 @@ func makeBatch(events ...interface{}) *eventBatch {
 	return b
 }
 
-// newQueueIngestor returns an ingestor with only its batch queue set up, for
-// tests that feed ReadBatch directly without a network listener.
-func newQueueIngestor(capacity int) *TCPIngestor {
+// newQueueIngestor returns an ingestor with only its batch queue and line
+// parser set up, for tests that feed ReadBatch directly without a network
+// listener. logFormat is optional; without it the default live format is used.
+func newQueueIngestor(capacity int, logFormat ...string) *TCPIngestor {
+	format := ""
+	if len(logFormat) > 0 {
+		format = logFormat[0]
+	}
+	parser, err := newLineParser(format)
+	if err != nil {
+		panic(err)
+	}
 	limits := DefaultLimits()
 	return &TCPIngestor{
+		parser: parser,
 		events: make(chan *eventBatch, capacity),
 		budget: newByteBudget(limits.MaxQueuedBytes),
 		limits: limits,

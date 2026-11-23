@@ -55,11 +55,12 @@ type Request struct {
 	// Cold fields - second cache line (only accessed during output or string filtering)
 	URI       string
 	UserAgent string
-	IP        net.IP // Legacy (TCP ingestor path only, nil from log parser)
+	IP        net.IP // Legacy: no parser fills it; use GetIPNet
 }
 
-// GetIPNet returns the IP as net.IP, deriving from IPUint32 if IP is nil.
-// Use this for non-hot-path code that needs net.IP.
+// GetIPNet returns the IP as net.IP, deriving from IPUint32 if IP is nil
+// (which it is for every parsed request). Use this for non-hot-path code that
+// needs net.IP.
 func (r *Request) GetIPNet() net.IP {
 	if r.IP != nil {
 		return r.IP

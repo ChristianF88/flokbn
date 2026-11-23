@@ -1755,9 +1755,9 @@ var daysInMonth = [13]uint8{0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 // "+HHMM"/"-HHMM" zone offset is present (end-start >= 26), that offset is
 // RETAINED on the returned time: the wall-clock digits are unchanged (06:00
 // stays 06:00) but the location reflects the log's real offset instead of being
-// mislabeled UTC. This is URGENT-09 live<->static timestamp parity: the live
-// ingestor already parses offset-aware, so the static parser must too. When no
-// offset is present (the 20-byte EOL forms), the wall-clock is returned as UTC
+// mislabeled UTC (URGENT-09). Live mode parses its lines with this same
+// function, so both modes agree on the instant by construction. When no offset
+// is present (the 20-byte EOL forms), the wall-clock is returned as UTC
 // (unchanged behavior).
 //
 // Validation: the 12 digit positions must hold ASCII digits and the values must

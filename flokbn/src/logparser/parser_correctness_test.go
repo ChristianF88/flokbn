@@ -87,9 +87,9 @@ func TestParseTimestamp_EOLBounds(t *testing.T) {
 	// the log's timezone offset instead of mislabeling the wall-clock as UTC.
 	// The wall-clock digits are unchanged (06:00 stays 06:00 - the OWNER
 	// constraint), but the absolute instant now reflects the real offset, so the
-	// same line yields the same Request.Timestamp under both the live ingestor
-	// (already offset-aware) and the static parser. This case encodes the very
-	// bug being fixed (it previously asserted "+0200 == UTC wall-clock").
+	// same line yields the same Request.Timestamp in live and in static mode
+	// (which share this parser now). This case encodes the very bug being
+	// fixed (it previously asserted "+0200 == UTC wall-clock").
 	t.Run("retains timezone offset", func(t *testing.T) {
 		p := mustNewParser(t, "%h [%t]")
 		cases := []struct {

@@ -79,8 +79,8 @@ func TestTCPIngestor_AcceptSendReadBatch(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("ReadBatch returned %d requests, want 3", len(got))
 	}
-	if got[0].IP.String() != "192.0.2.1" || got[1].IP.String() != "192.0.2.2" || got[2].IP.String() != "192.0.2.3" {
-		t.Errorf("unexpected IPs: %v %v %v", got[0].IP, got[1].IP, got[2].IP)
+	if got[0].GetIPNet().String() != "192.0.2.1" || got[1].GetIPNet().String() != "192.0.2.2" || got[2].GetIPNet().String() != "192.0.2.3" {
+		t.Errorf("unexpected IPs: %v %v %v", got[0].GetIPNet(), got[1].GetIPNet(), got[2].GetIPNet())
 	}
 	if got[0].IPUint32 == 0 {
 		t.Error("IPUint32 not set on parsed request")

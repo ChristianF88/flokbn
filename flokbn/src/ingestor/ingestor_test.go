@@ -1,10 +1,12 @@
 package ingestor
 
 import (
+	"errors"
 	"net"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/ChristianF88/flokbn/logparser"
 )
 
 func TestParseEvent_MissingMessageField(t *testing.T) {
@@ -31,6 +33,11 @@ func TestParseEvent_InvalidIP(t *testing.T) {
 // and be counted as a successful request. It must now be rejected with an error
 // and NEVER stored (no IP, no IPUint32). Covers both a plain IPv6 literal and
 // the IPv4-mapped form, since both must be purged.
+//
+// The error is logparser.ErrInvalidIP, the one fixed value for "not an IPv4
+// address". The hardcoded parser this test was written for returned a text
+// naming the IPv6 token; nothing ever displayed it (ReadBatch only counts), and
+// building it allocated on every IPv6 line.
 func TestParseEvent_RejectsIPv6(t *testing.T) {
 	cases := []struct {
 		name string
@@ -49,13 +56,8 @@ func TestParseEvent_RejectsIPv6(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for IPv6 %q, got nil", tc.ip)
 			}
-			// MSG-04: the reject message must use the canonical parenthetical and
-			// quote the offending token, matching the config-load IPv6 wording.
-			if !strings.Contains(err.Error(), "(IPv4-only tool)") {
-				t.Errorf("IPv6 reject message missing canonical %q: %v", "(IPv4-only tool)", err)
-			}
-			if !strings.Contains(err.Error(), tc.ip) {
-				t.Errorf("IPv6 reject message does not quote the offending token %q: %v", tc.ip, err)
+			if !errors.Is(err, logparser.ErrInvalidIP) {
+				t.Errorf("IPv6 %q rejected with %v, want %v", tc.ip, err, logparser.ErrInvalidIP)
 			}
 			if req.IP != nil {
 				t.Errorf("IPv6 must not be stored: req.IP = %v", req.IP)
@@ -250,8 +252,9 @@ func TestParseEvent_SetsIPUint32(t *testing.T) {
 	if req.IPUint32 != want {
 		t.Errorf("expected IPUint32 %d, got %d", want, req.IPUint32)
 	}
-	if req.IP.String() != "192.168.1.100" {
-		t.Errorf("expected IP 192.168.1.100, got %v", req.IP)
+	// The legacy net.IP field is not filled; GetIPNet derives it.
+	if req.GetIPNet().String() != "192.168.1.100" {
+		t.Errorf("expected IP 192.168.1.100, got %v", req.GetIPNet())
 	}
 }
 
@@ -390,38 +393,6 @@ func TestParseEventSafe_Transparent(t *testing.T) {
 	}
 }
 
-// TestScanQuotedCloseStr asserts the string-typed escape-aware close scanner is
-// byte-identical to the static parser's scanQuotedClose (mirroring
-// logparser/parser_correctness_test.go:TestScanQuotedClose). These cases are the
-// invariant the cross-package parity test relies on: ingestor cannot import
-// logparser (import cycle), so the duplicated helper must match exactly.
-func TestScanQuotedCloseStr(t *testing.T) {
-	cases := []struct {
-		name         string
-		line         string
-		contentStart int
-		firstQuote   int
-		want         int
-	}{
-		// `\"x"` content starting at 0: quote at 1 escaped, closes at 3.
-		{"single escape", `\"x"`, 0, 1, 3},
-		// `\\"` even parity: quote at 2 is NOT escaped.
-		{"double backslash closes", `\\"`, 0, 2, 2},
-		// `\\\"x"` odd parity: quote at 3 escaped, closes at 5.
-		{"triple backslash escapes", `\\\"x"`, 0, 3, 5},
-		// no later quote -> len(line)
-		{"no closing quote", `\"abc`, 0, 1, 5},
-		// backslashes before contentStart must not count toward parity
-		{"parity stops at contentStart", `\"x`, 1, 1, 1},
-	}
-	for _, tc := range cases {
-		if got := scanQuotedCloseStr(tc.line, tc.contentStart, tc.firstQuote); got != tc.want {
-			t.Errorf("%s: scanQuotedCloseStr(%q, %d, %d) = %d, want %d",
-				tc.name, tc.line, tc.contentStart, tc.firstQuote, got, tc.want)
-		}
-	}
-}
-
 // TestParseEvent_EscapedQuotesUserAgent is the AUDIT-08 repro: an Apache-escaped
 // quote (`\"`) inside the request line or referer must NOT shift the UA field.
 // Before the fix, live counted raw `"` bytes from index 0 and captured the wrong
@@ -470,6 +441,18 @@ func TestParseEvent_EscapedQuotesUserAgent(t *testing.T) {
 			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /a\\\"b HTTP/1.1" 200 10 "-" "RealUA"`,
 			wantUA:  "RealUA",
 			wantURI: `/a\\\"b`,
+		},
+		{
+			name:    "escaped quote in the request and in the UA",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /a\"b HTTP/1.1" 200 10 "-" "UA\"X"`,
+			wantUA:  `UA\"X`,
+			wantURI: `/a\"b`,
+		},
+		{
+			name:    "empty UA field",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" ""`,
+			wantUA:  "",
+			wantURI: "/",
 		},
 	}
 	for _, tc := range cases {
@@ -554,8 +537,8 @@ func TestReadBatch_ValidEvents(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(got))
 	}
 	wantIP := net.ParseIP("127.0.0.1")
-	if !got[0].IP.Equal(wantIP) {
-		t.Errorf("expected IP %v, got %v", wantIP, got[0].IP)
+	if !got[0].GetIPNet().Equal(wantIP) {
+		t.Errorf("expected IP %v, got %v", wantIP, got[0].GetIPNet())
 	}
 	if got[0].Method != GET {
 		t.Errorf("expected GET method, got %v", got[0].Method)
@@ -589,8 +572,8 @@ func TestReadBatch_MultipleEventsAndBatches(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(got))
 	}
-	if got[0].IP.String() != "10.0.0.1" || got[1].IP.String() != "10.0.0.2" {
-		t.Errorf("unexpected IPs: %v, %v", got[0].IP, got[1].IP)
+	if got[0].GetIPNet().String() != "10.0.0.1" || got[1].GetIPNet().String() != "10.0.0.2" {
+		t.Errorf("unexpected IPs: %v, %v", got[0].GetIPNet(), got[1].GetIPNet())
 	}
 	if got[0].Method != POST || got[1].Method != GET {
 		t.Errorf("unexpected methods: %v, %v", got[0].Method, got[1].Method)
