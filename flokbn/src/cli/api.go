@@ -431,6 +431,8 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 	// the file once (recovers from a stale ban file on disk).
 	var lastBanKey string
 	banKeyValid := false
+	// Change detection for jail.json, shared by iterations and heartbeats.
+	var jailSave jailFileState
 	// Last iteration's per-window cluster stats, re-served by heartbeat
 	// snapshots (no traffic means no new clustering result).
 	var lastWinClusterStats [][]clusterSetStats
@@ -466,7 +468,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 				runHeartbeat(&jailInstance, cfg, logger, stats, statsState, ing,
 					windows, lastWinClusterStats, whitelistCIDRs, uaWhitelistIPs,
 					blacklistCIDRs, &lastBanKey, &banKeyValid, &blacklistWarned,
-					maxSleepTime)
+					maxSleepTime, &jailSave)
 				lastTick = time.Now()
 			}
 			continue
@@ -680,33 +682,41 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			logger.Warn("some CIDRs failed during jail update", "err", err)
 		}
 		// Evict prisoners stale beyond the escalation-memory window before
-		// persisting, so jail.json (rewritten in full every iteration) tracks
+		// persisting, so jail.json (written in full whenever it changes) tracks
 		// active+recent bans, not lifetime-distinct CIDRs (AUDIT-04).
 		prunedJail := jailInstance.Prune(jailInstance.RetentionHorizon())
-		if err := jail.JailToFile(jailInstance, cfg.GetJailFile()); err != nil {
-			logger.Error("failed to save jail", "path", cfg.GetJailFile(), "err", err)
+		// Persist only when the serialized jail changed (or the file is gone):
+		// most iterations re-detect ranges that are already banned.
+		jailFileWritten, saveErr := jailSave.save(&jailInstance, cfg.GetJailFile())
+		if saveErr != nil {
+			logger.Error("failed to save jail", "path", cfg.GetJailFile(), "err", saveErr)
 		}
 
 		// ComposeBanLists is the publish choke point (static parity):
 		// whitelists win over active bans AND the manual blacklist.
 		activeBans := jailInstance.ListActiveBans()
 		publishBans, publishBlacklist := cidr.ComposeBanLists(activeBans, blacklistCIDRs, allWhitelists)
-		banContent := jail.BuildBanFileContent(publishBans, publishBlacklist)
 		banFileWritten := false
-		if err := jail.WriteToFile(cfg.GetBanFile(), banContent); err != nil {
-			// On failure statsState keeps the previous content: /bans always
-			// serves the last content actually on disk.
-			logger.Error("failed to write ban file", "path", cfg.GetBanFile(), "err", err)
-		} else {
-			banFileWritten = true
-			lastBanKey = banListKey(publishBans, publishBlacklist)
-			banKeyValid = true
-			if statsState != nil {
-				statsState.recordBanFileWrite(banContent, len(publishBans)+len(publishBlacklist))
-			}
-			if len(publishBlacklist) > 0 && !blacklistWarned {
-				blacklistWarned = true
-				logger.Info("added manual blacklist entries to ban file", "count", len(publishBlacklist))
+		// Same change detection as the heartbeat: the ban file (and its
+		// timestamp header) is rewritten only when the published lists
+		// changed, when no write has succeeded yet, or when the file is gone.
+		if banKey := banListKey(publishBans, publishBlacklist); !banKeyValid || banKey != lastBanKey || fileMissing(cfg.GetBanFile()) {
+			banContent := jail.BuildBanFileContent(publishBans, publishBlacklist)
+			if err := jail.WriteToFile(cfg.GetBanFile(), banContent); err != nil {
+				// On failure statsState keeps the previous content: /bans always
+				// serves the last content actually on disk.
+				logger.Error("failed to write ban file", "path", cfg.GetBanFile(), "err", err)
+			} else {
+				banFileWritten = true
+				lastBanKey = banKey
+				banKeyValid = true
+				if statsState != nil {
+					statsState.recordBanFileWrite(banContent, len(publishBans)+len(publishBlacklist))
+				}
+				if len(publishBlacklist) > 0 && !blacklistWarned {
+					blacklistWarned = true
+					logger.Info("added manual blacklist entries to ban file", "count", len(publishBlacklist))
+				}
 			}
 		}
 
@@ -729,6 +739,7 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			"pruned", prunedJail,
 			"active_bans", len(publishBans),
 			"ban_file_written", banFileWritten,
+			"jail_file_written", jailFileWritten,
 			"loop_ms", loopEnd.Milliseconds(),
 			"cluster_ms", totalClusterDuration/1000,
 		)
@@ -783,6 +794,7 @@ func runHeartbeat(
 	banKeyValid *bool,
 	blacklistWarned *bool,
 	maxSleepTime int,
+	jailSave *jailFileState,
 ) {
 	hbStart := time.Now()
 
@@ -823,7 +835,9 @@ func runHeartbeat(
 	// active-ban count; force the save when anything was pruned as well.
 	pruned := jailInstance.Prune(jailInstance.RetentionHorizon())
 	if after != before || pruned > 0 {
-		if err := jail.JailToFile(*jailInstance, cfg.GetJailFile()); err != nil {
+		// Through jailSave so the iteration path's change detection knows
+		// what is on disk.
+		if _, err := jailSave.save(jailInstance, cfg.GetJailFile()); err != nil {
 			logger.Error("failed to save jail", "path", cfg.GetJailFile(), "err", err)
 		}
 	}
@@ -835,7 +849,7 @@ func runHeartbeat(
 	publishBans, publishBlacklist := cidr.ComposeBanLists(jailInstance.ListActiveBans(), blacklistCIDRs, allWhitelists)
 
 	wrote := false
-	if key := banListKey(publishBans, publishBlacklist); !*banKeyValid || key != *lastBanKey {
+	if key := banListKey(publishBans, publishBlacklist); !*banKeyValid || key != *lastBanKey || fileMissing(cfg.GetBanFile()) {
 		banContent := jail.BuildBanFileContent(publishBans, publishBlacklist)
 		if err := jail.WriteToFile(cfg.GetBanFile(), banContent); err != nil {
 			logger.Error("failed to write ban file", "path", cfg.GetBanFile(), "err", err)
