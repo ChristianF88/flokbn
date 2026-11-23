@@ -440,13 +440,15 @@ func handleStaticFlagsMode(c *cli.Context) error {
 
 	// Validate --rangesCidr into cfg.diags, storing ONLY valid IPv4 entries on the
 	// trie (drop IPv6/malformed before append - never store a bad entry, parity
-	// with the TOML cidrRanges path).
+	// with the TOML cidrRanges path). A bare IPv4 address is stored as /32: the
+	// trie counts ranges via net.ParseCIDR, which rejects a bare address.
 	for i, cidrStr := range c.StringSlice("rangesCidr") {
-		if !iputils.IsValidCidrOrIP(cidrStr) {
+		normalized, ok := iputils.NormalizeIPv4CIDR(cidrStr)
+		if !ok {
 			diags.AddRaw(fmt.Sprintf("[static.cli_trie] invalid rangesCidr[%d] %s", i, strconv.Quote(cidrStr)))
 			continue
 		}
-		trieConfig.CIDRRanges = append(trieConfig.CIDRRanges, cidrStr)
+		trieConfig.CIDRRanges = append(trieConfig.CIDRRanges, normalized)
 	}
 
 	// A malformed --startTime/--endTime hard-errors here (parseFlexibleTime); the

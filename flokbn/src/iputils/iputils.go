@@ -60,6 +60,25 @@ func IsValidCidrOrIP(s string) bool {
 	return false
 }
 
+// NormalizeIPv4CIDR returns s in CIDR notation: an IPv4 CIDR is returned
+// unchanged and a bare IPv4 address becomes a single-host "/32". ok is false
+// (and the result empty) for everything IsValidCidrOrIP rejects - malformed
+// input, IPv6 and IPv4-mapped IPv6.
+//
+// IsValidCidrOrIP alone is not enough for a value that is later handed to
+// net.ParseCIDR (trie.CountInRange, the cidr and jail packages): a bare address
+// passes it but is not a CIDR. Use this at every input boundary that documents
+// "IP or CIDR" so the stored value is always parseable downstream.
+func NormalizeIPv4CIDR(s string) (cidr string, ok bool) {
+	if !IsValidCidrOrIP(s) {
+		return "", false
+	}
+	if strings.IndexByte(s, '/') >= 0 {
+		return s, true
+	}
+	return s + "/32", true
+}
+
 // RandomIPsFromRange generates random IP addresses within a CIDR range.
 // It is a test-data generator with no production callers; it is kept because
 // tests and benchmarks in three packages (across four files) use it to

@@ -15,6 +15,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/ChristianF88/flokbn/config/regexprefilter"
 	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/logging"
 	"github.com/ChristianF88/flokbn/logparser"
@@ -1022,10 +1023,11 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 			// IPv6/malformed entry BEFORE the append so an invalid string never
 			// lands on tc.CIDRRanges (a pre-barrier reader / negative-shift panic
 			// guard). COLLECT-ALL: validateCIDRRangeEntry records each bad entry.
-			if !validateCIDRRangeEntry("cidrRanges", section, i, str, diags) {
+			cidrStr, valid := validateCIDRRangeEntry("cidrRanges", section, i, str, diags)
+			if !valid {
 				continue
 			}
-			tc.CIDRRanges = append(tc.CIDRRanges, str)
+			tc.CIDRRanges = append(tc.CIDRRanges, cidrStr)
 		}
 	}
 	return tc, nil
@@ -1041,17 +1043,29 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 // rejected while plain IPv4 CIDRs pass. The MSG-02 grammar is preserved verbatim
 // ("invalid %s[%d] %q: %w" / "IPv6 not supported (IPv4-only tool) in %s[%d]:
 // %q"); the offending value is quoteCapped (untrusted) inside an AddRaw line.
-func validateCIDRRangeEntry(field, section string, i int, str string, diags *ConfigDiagnostics) bool {
+//
+// A bare IPv4 address is accepted as a single host and returned as "/32" (the
+// same rule as --rangesCidr and the whitelist/blacklist files); the caller
+// stores the RETURNED value, never the raw string, so a downstream
+// net.ParseCIDR always succeeds. A bare IPv6 address is reported as IPv6.
+func validateCIDRRangeEntry(field, section string, i int, str string, diags *ConfigDiagnostics) (cidr string, valid bool) {
 	_, ipNet, err := net.ParseCIDR(str)
 	if err != nil {
+		if normalized, ok := iputils.NormalizeIPv4CIDR(str); ok {
+			return normalized, true
+		}
+		if net.ParseIP(str) != nil {
+			diags.AddRaw(fmt.Sprintf("[%s] IPv6 not supported (IPv4-only tool) in %s[%d]: %s", section, field, i, quoteCapped(str)))
+			return "", false
+		}
 		diags.AddRaw(fmt.Sprintf("[%s] invalid %s[%d] %s: %s", section, field, i, quoteCapped(str), err.Error()))
-		return false
+		return "", false
 	}
 	if len(ipNet.Mask) != 4 {
 		diags.AddRaw(fmt.Sprintf("[%s] IPv6 not supported (IPv4-only tool) in %s[%d]: %s", section, field, i, quoteCapped(str)))
-		return false
+		return "", false
 	}
-	return true
+	return str, true
 }
 
 func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*SlidingTrieConfig, error) {
@@ -1577,6 +1591,18 @@ func loadCIDRFile(filename string) ([]string, error) {
 		// Validate CIDR format
 		_, ipNet, err := net.ParseCIDR(line)
 		if err != nil {
+			// The list files are documented as "IP/CIDR": a bare IPv4 address
+			// is a single host. Store it as /32 so every consumer that calls
+			// net.ParseCIDR on these strings (cidr, jail) accepts it.
+			if normalized, ok := iputils.NormalizeIPv4CIDR(line); ok {
+				cidrs = append(cidrs, normalized)
+				continue
+			}
+			// A bare IPv6 address (incl. IPv4-mapped) is an IPv6 problem, not
+			// a format problem.
+			if net.ParseIP(line) != nil {
+				return nil, fmt.Errorf("IPv6 not supported (IPv4-only tool) in %s:%d: %q", filename, lineNum, line)
+			}
 			return nil, fmt.Errorf("invalid CIDR format in %s:%d: %q", filename, lineNum, line)
 		}
 		// IPv4-only tool: reject IPv6 at the boundary (fail-loud). net.ParseCIDR
