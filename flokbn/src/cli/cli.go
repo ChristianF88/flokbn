@@ -134,7 +134,7 @@ var (
 	}
 	logFormatFlag = &cli.StringFlag{
 		Name:  "logFormat",
-		Usage: "Log format string (e.g., '%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"')",
+		Usage: "Log format string (e.g., '%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"')",
 		Value: logparser.DefaultLogFormat,
 	}
 	startTimeFlag = &cli.StringFlag{

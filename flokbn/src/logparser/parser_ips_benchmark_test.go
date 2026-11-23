@@ -59,7 +59,8 @@ func BenchmarkParseFileIPs(b *testing.B) {
 
 var ipSink uint32
 
-// BenchmarkParseIPv4Old benchmarks the verbatim reference implementation.
+// BenchmarkParseIPv4Old benchmarks the plain reference implementation the
+// differential tests compare against (test-only, not a production path).
 func BenchmarkParseIPv4Old(b *testing.B) {
 	line := []byte("192.168.123.231")
 	b.ReportAllocs()
@@ -113,6 +114,47 @@ func BenchmarkParseLineIsolated(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		req = ingestor.Request{}
 		_ = cf.parseUsingCompiledFormatOpt(benchLine, &req, true, true)
+	}
+	ipSink = req.IPUint32
+}
+
+// BenchmarkExtractIPOnly_IPLast benchmarks the IP-only extractor on the default
+// format shape, where %h is the LAST field and every earlier field has to be
+// walked. This is the per-line cost of `flokbn static` without filters.
+func BenchmarkExtractIPOnly_IPLast(b *testing.B) {
+	for _, bc := range []struct{ name, format string }{
+		{"quoted_referer_slot", `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"`},
+		{"bare_referer_slot", `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			cf, err := compileFormat(bc.format)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			var s uint32
+			for i := 0; i < b.N; i++ {
+				s = cf.extractIPOnly(benchLine)
+			}
+			ipSink = s
+		})
+	}
+}
+
+// BenchmarkParseLine_IPLast is the full-Request counterpart (all fields
+// extracted) on the default format shape.
+func BenchmarkParseLine_IPLast(b *testing.B) {
+	cf, err := compileFormat(`%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var req ingestor.Request
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		req = ingestor.Request{}
+		_ = cf.parseUsingCompiledFormatOpt(benchLine, &req, false, false)
 	}
 	ipSink = req.IPUint32
 }

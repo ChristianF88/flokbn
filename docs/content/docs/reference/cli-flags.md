@@ -42,7 +42,7 @@ flokbn static [options]
 |------|------|----------|---------|-------------|
 | `--config` | string | No | - | Path to TOML config file. When used, only `--tui`, `--compact`, `--plain` are allowed alongside it. All other flags produce an error. |
 | `--logfile` | string | Yes (unless `--config`) | - | Path to log file to analyze. Note: the CLI flag is all-lowercase `--logfile`; the equivalent TOML key is camelCase `logFile`. This divergence is intentional. |
-| `--logFormat` | string | No | `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"` | Log format string. See [Log Formats]({{< relref "/docs/reference/log-formats/" >}}). |
+| `--logFormat` | string | No | `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"` | Log format string. See [Log Formats]({{< relref "/docs/reference/log-formats/" >}}). |
 | `--startTime` | string | No | - | Start of time window. Formats: `YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM-DD HH:MM` |
 | `--endTime` | string | No | - | End of time window. Same formats as `--startTime` |
 

@@ -54,7 +54,7 @@ userAgentBlacklist = "../../config_examples/ua_blacklist.txt"
 [static]
 logFile = "access.log"
 # Combined log with the real client IP in the trailing quoted field (%h last).
-logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 # 256x256 first-octet/second-octet request heatmap (git-ignored filename).
 plotPath = "heatmap.html"
 

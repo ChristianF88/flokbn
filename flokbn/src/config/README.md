@@ -22,7 +22,7 @@ Analyze historical log files.
 ```bash
 --config value          # Path to TOML config file (exclusive with other flags)
 --logfile value         # Path to log file (required if not using --config)
---logFormat value       # Log format string (default: "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\"")
+--logFormat value       # Log format string (default: "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\"")
 ```
 
 #### Clustering Options
@@ -100,7 +100,7 @@ Analyze historical log files.
 ```bash
 ./flokbn static \
   --logfile /var/log/nginx/access.log \
-  --logFormat "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\"" \
+  --logFormat "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\"" \
   --startTime "2025-01-15" \
   --endTime "2025-01-15 23:59" \
   --clusterArgSets 1000,24,32,0.1 \
@@ -232,7 +232,7 @@ userAgentBlacklist = "/etc/flokbn/ua_blacklist.txt"
 ```toml
 [static]
 logFile = "/var/log/nginx/access.log"
-logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 plotPath = "/tmp/heatmap.html"  # Optional
 ```
 
@@ -280,7 +280,7 @@ whitelist = "/etc/flokbn/whitelist.txt"
 
 [static]
 logFile = "/var/log/nginx/access.log"
-logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 plotPath = "/tmp/heatmap.html"
 
 [static.comprehensive_scan]
@@ -487,7 +487,7 @@ Mozilla/5.00 (Nikto/2.1.6) (Evasions:None) (Test:Port Check)   # web scanner
 Default log format for Apache/Nginx combined logs:
 
 ```
-%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"
+%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"
 ```
 
 ### Format Specifiers
@@ -506,13 +506,13 @@ Default log format for Apache/Nginx combined logs:
 
 ```bash
 # Apache Combined with X-Forwarded-For
---logFormat "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+--logFormat "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 
 # Standard Apache Combined
---logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+--logFormat "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # Nginx Access Log
---logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+--logFormat "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # Custom with standalone method/URI
 --logFormat "%h [%t] %m %U %^ %s %b"

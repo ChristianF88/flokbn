@@ -147,7 +147,7 @@ If your logs don't use the default format, specify a custom [log format]({{< rel
 
 ```bash
 flokbn static --logfile access.log \
-  --logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"" \
+  --logFormat "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"" \
   --clusterArgSets 1000,24,32,0.1 --plain
 ```
 

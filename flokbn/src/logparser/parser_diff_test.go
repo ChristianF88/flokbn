@@ -1,6 +1,7 @@
 package logparser
 
 import (
+	"bytes"
 	"math/rand"
 	"os"
 	"sort"
@@ -10,9 +11,16 @@ import (
 	"github.com/ChristianF88/flokbn/testutil"
 )
 
-// parseIPv4ToUint32_ref is a VERBATIM copy of the original parseIPv4ToUint32
-// implementation (before the branch-light rewrite). The differential tests
-// assert the new implementation returns the identical uint32 for every input.
+// parseIPv4ToUint32_ref is an independent, deliberately plain reference for
+// parseIPv4ToUint32: cut at the dots, then check every octet. The differential
+// tests assert the hand-optimised implementation returns the identical uint32
+// for every input.
+//
+// It used to be a verbatim copy of the original implementation, which read an
+// EMPTY octet as 0 ("1.2..34" -> 1.2.0.34, "1.2.34." -> 1.2.34.0) and accepted
+// octets of any digit count. That leniency was the bug, so the reference now
+// states the strict contract: total length 7..15, exactly four octets, each of
+// one to three ASCII digits and at most 255 (leading zeros allowed).
 func parseIPv4ToUint32_ref(line []byte, start, end int) uint32 {
 	if end-start < 7 || end-start > 15 {
 		return 0
@@ -21,33 +29,34 @@ func parseIPv4ToUint32_ref(line []byte, start, end int) uint32 {
 		return 0
 	}
 
-	dots := 0
-	partIdx := 0
-	current := 0
+	// Cut the text at the first three dots; whatever remains is the last
+	// octet (a 4th dot ends up inside it and fails the digit check).
+	rest := line[start:end]
 	var result uint32
-
-	for i := start; i < end; i++ {
-		b := line[i]
-		if b == '.' {
-			if current > 255 || partIdx >= 3 {
+	for part := 0; part < 4; part++ {
+		octet := rest
+		if part < 3 {
+			dot := bytes.IndexByte(rest, '.')
+			if dot < 0 {
 				return 0
 			}
-			result |= uint32(current) << (24 - 8*partIdx)
-			partIdx++
-			current = 0
-			dots++
-		} else if b >= '0' && b <= '9' {
-			current = current*10 + int(b&0x0F)
-		} else {
+			octet, rest = rest[:dot], rest[dot+1:]
+		}
+		if len(octet) < 1 || len(octet) > 3 {
 			return 0
 		}
+		value := 0
+		for _, c := range octet {
+			if c < '0' || c > '9' {
+				return 0
+			}
+			value = value*10 + int(c-'0')
+		}
+		if value > 255 {
+			return 0
+		}
+		result = result<<8 | uint32(value)
 	}
-
-	if dots != 3 || current > 255 || partIdx != 3 {
-		return 0
-	}
-	result |= uint32(current)
-
 	return result
 }
 
@@ -80,6 +89,12 @@ func TestDiffParseIPv4_HandPickedEdges(t *testing.T) {
 		"1.2.3.4567",
 		"0000.0.0.0",
 		"1.2.3.4.",
+		"1.2..34",
+		"1.2.34.",
+		".1.2.34",
+		"001.002.003.004",
+		"0001.2.3.4",
+		"1.2.3.0004",
 		"a.b.c.d",
 		"1.2.3.4a",
 		"1234567",         // 7 chars, no dots
@@ -212,6 +227,11 @@ func TestDiffExtractIPOnly(t *testing.T) {
 		`- - - [01/Jan/2025:10:15:31 +0000] "POST /b HTTP/1.1" 401 512 "-" "curl" "10.0.0.1"`,
 		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "-" "x" "999.1.1.1"`,
 		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "-" "x" "-"`,
+		// quoted referer containing spaces / an escaped quote, and a bare one
+		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "http://a b" "8.8.8.7" "203.0.113.9"`,
+		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "a \" b c" "x y" "203.0.113.9"`,
+		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 - "x y" "203.0.113.9"`,
+		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "unterminated "x" "203.0.113.9"`,
 	}
 
 	check := func(t *testing.T, format string, ls []string) {
@@ -238,6 +258,8 @@ func TestDiffExtractIPOnly(t *testing.T) {
 	}
 	// IP-last formats validated against the IP-last lines.
 	check(t, `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`, ipLastLines)
+	check(t, DefaultLogFormat, ipLastLines)
+	check(t, DefaultLogFormat, lines)
 }
 
 // ---------------------------------------------------------------------------

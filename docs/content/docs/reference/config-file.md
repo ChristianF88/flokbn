@@ -157,7 +157,7 @@ blacklist = "/etc/flokbn/blacklist.txt"
 
 [static]
 logFile = "/var/log/nginx/access.log"
-logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 plotPath = "/tmp/heatmap.html"
 
 # General detection across all traffic

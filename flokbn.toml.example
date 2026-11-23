@@ -94,7 +94,10 @@ plotPath = "/tmp/flokbn_heatmap.html"     # Optional: Generate visual heatmap
 # VALIDATION RULES:
 #   - Exactly ONE %h field is required
 #   - Other fields can appear at most once (except %^)
-#   - Use %^ to skip unwanted fields
+#   - Use %^ to skip unwanted fields; write \"%^\" when the log quotes that
+#     field (e.g. the Referer). A value that starts with a double quote is
+#     always read up to its closing quote, so a space inside it cannot shift
+#     the fields that follow.
 #   - Supported fields only: %h %t %r %m %U %s %b %u %^
 #
 # CRITICAL: %r vs %m %U %^ Usage:
@@ -105,16 +108,16 @@ plotPath = "/tmp/flokbn_heatmap.html"     # Optional: Generate visual heatmap
 # COMMON LOG FORMAT EXAMPLES:
 
 # Apache Combined with X-Forwarded-For (real client IP at end):
-logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 
 # Standard Apache Combined Log:
-# logFormat = "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+# logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # Apache Common Log:
 # logFormat = "%h %^ %^ [%t] \"%r\" %s %b"
 
 # Nginx Default Access Log:
-# logFormat = "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+# logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # Custom Format Examples with %r (quoted request):
 # logFormat = "%h [%t] \"%r\" %s %b"                   # Basic quoted request format

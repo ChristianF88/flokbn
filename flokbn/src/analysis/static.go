@@ -114,6 +114,13 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 		return jsonOutput, nil, err
 	}
 
+	// Lines longer than logparser.MaxLineLen are skipped by the parser, not
+	// analysed: say so instead of dropping them silently.
+	if n := parser.Stats().OversizedLines; n > 0 {
+		jsonOutput.AddWarning("oversized_lines",
+			fmt.Sprintf("%d line(s) longer than %d bytes were skipped", n, logparser.MaxLineLen), 1)
+	}
+
 	// Set general information
 	jsonOutput.General.LogFile = cfg.Static.LogFile
 	jsonOutput.General.TotalRequests = len(requests)
@@ -644,6 +651,13 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	if perr != nil {
 		jsonOutput.AddError("parse_file", fmt.Sprintf("Failed to parse log file %q: %v", cfg.Static.LogFile, perr), 1)
 		return jsonOutput, perr
+	}
+
+	// Lines longer than logparser.MaxLineLen are skipped by the parser, not
+	// analysed: say so instead of dropping them silently.
+	if n := parser.Stats().OversizedLines; n > 0 {
+		jsonOutput.AddWarning("oversized_lines",
+			fmt.Sprintf("%d line(s) longer than %d bytes were skipped", n, logparser.MaxLineLen), 1)
 	}
 
 	// TotalRequests must equal len(requests) from the full path: all parsed lines,
