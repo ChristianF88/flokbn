@@ -14,6 +14,14 @@ import (
 // (GET /stats as JSON, GET /bans as the verbatim ban-file content). The loop
 // publishes immutable snapshots through an atomic pointer and never blocks
 // on consumers; handlers serialize on demand.
+//
+// The endpoints are unauthenticated by design and /stats is not harmless: it
+// returns the whitelist and blacklist CIDRs, the jail and ban file paths and
+// the exact detection thresholds, which is what an attacker needs to stay
+// just under them. The server is therefore strictly opt-in: it exists only
+// when [live] statsListen is set (no default address, no CLI flag), and that
+// address must stay on loopback or behind an authenticating proxy. A host-less
+// value such as ":8666" binds every interface.
 type statsServer struct {
 	ln   net.Listener
 	srv  *http.Server

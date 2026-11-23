@@ -37,6 +37,31 @@ type SlidingWindow struct {
 	// from the trie since the last full rebuild. It drives the periodic
 	// rebuild that bounds RSS to window size (see DropOld).
 	evictedSinceRebuild int
+
+	// lastArrival describes the most recent InsertNew batch (see ArrivalStats).
+	lastArrival ArrivalStats
+}
+
+// futureSkewTolerance is how far ahead of the wall clock a timestamp may be
+// before it is counted in ArrivalStats.Future. Every future stamp is clamped
+// regardless; the tolerance only keeps ordinary clock skew between the log
+// host and this host out of the "timestamps look wrong" signal.
+const futureSkewTolerance = time.Minute
+
+// ArrivalStats describes how the timestamps of the most recent InsertNew batch
+// related to the wall clock at insert time. A batch that is mostly Stale or
+// Future means log time and wall clock disagree (typically zone-less
+// timestamps from a host that is not on UTC, or a badly set clock), which
+// makes time-based expiry meaningless.
+type ArrivalStats struct {
+	Inserted int // entries in the batch
+	Future   int // stamped more than futureSkewTolerance ahead of now (clamped to now)
+	Stale    int // already older than the window on arrival
+}
+
+// LastArrival returns the ArrivalStats of the most recent InsertNew/Update.
+func (s *SlidingWindow) LastArrival() ArrivalStats {
+	return s.lastArrival
 }
 
 func NewSlidingWindowTrie(window time.Duration, maxEntries int) *SlidingWindow {
@@ -111,11 +136,37 @@ func removeIPStat(m *haxmap.Map[uint32, IPStat], ip uint32) {
 }
 
 func (s *SlidingWindow) InsertNew(timedIPs []TimedIP) {
+	s.insertAt(timedIPs, time.Now())
+}
+
+// insertAt is InsertNew with an explicit wall clock (tests pin it).
+//
+// Timestamps ahead of now are clamped to now in the queue copy (the caller's
+// slice is left untouched). DropOld evicts from the queue head while the head
+// is older than the cutoff, so an entry stamped in the future would otherwise
+// sit at the head and keep everything queued behind it in the window until
+// the future stamp itself aged out. With the clamp no entry can outlive
+// timeLimit past its arrival, whatever its timestamp says.
+func (s *SlidingWindow) insertAt(timedIPs []TimedIP, now time.Time) {
+	start := len(s.IPQueue)
 	s.IPQueue = append(s.IPQueue, timedIPs...)
-	for _, timedIP := range timedIPs {
-		s.Trie.InsertUint32(timedIP.IP)
-		addIPStat(s.IPStats, timedIP.IP, timedIP)
+	cutoff := now.Add(-s.timeLimit)
+	future, stale := 0, 0
+	added := s.IPQueue[start:]
+	for i := range added {
+		e := &added[i]
+		if e.Time.After(now) {
+			if e.Time.Sub(now) > futureSkewTolerance {
+				future++
+			}
+			e.Time = now
+		} else if e.Time.Before(cutoff) {
+			stale++
+		}
+		s.Trie.InsertUint32(e.IP)
+		addIPStat(s.IPStats, e.IP, *e)
 	}
+	s.lastArrival = ArrivalStats{Inserted: len(timedIPs), Future: future, Stale: stale}
 }
 
 // rebuildMinEvictions is the floor on accumulated evictions before a periodic
@@ -125,8 +176,13 @@ func (s *SlidingWindow) InsertNew(timedIPs []TimedIP) {
 const rebuildMinEvictions = 1024
 
 func (s *SlidingWindow) DropOld() {
+	s.dropOldAt(time.Now())
+}
+
+// dropOldAt is DropOld with an explicit wall clock (tests pin it).
+func (s *SlidingWindow) dropOldAt(now time.Time) {
 	// enforce time limit
-	cutoff := time.Now().Add(-s.timeLimit)
+	cutoff := now.Add(-s.timeLimit)
 	idxTime := 0
 	for idxTime < len(s.IPQueue) && s.IPQueue[idxTime].Time.Before(cutoff) {
 		s.Trie.DeleteUint32(s.IPQueue[idxTime].IP)

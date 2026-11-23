@@ -12,6 +12,10 @@ import (
 // cold path, same as /stats.
 func renderMetrics(sn *statsSnapshot) []byte {
 	var b bytes.Buffer
+	// Size the buffer once instead of doubling up to it: about 3.7 KB of
+	// fixed families, a few hundred bytes per window (with its cluster sets)
+	// and one short line per ban series. An underestimate only costs a regrow.
+	b.Grow(4608 + 512*len(sn.Windows) + 64*len(sn.Jail.ActiveBans))
 
 	writeMetric(&b, "flokbn_uptime_seconds", "gauge",
 		"Seconds since the live loop started.",
@@ -75,9 +79,9 @@ func renderMetrics(sn *statsSnapshot) []byte {
 	writeMetric(&b, "flokbn_window_rejected_by_filter_total", "counter",
 		"Requests rejected by window filters since startup.", rejected...)
 	writeMetric(&b, "flokbn_cluster_detected", "gauge",
-		"CIDRs detected by this cluster arg set in the last iteration.", detected...)
+		"CIDRs detected by this cluster arg set in its latest run (iteration, or idle heartbeat after window expiry).", detected...)
 	writeMetric(&b, "flokbn_cluster_duration_seconds", "gauge",
-		"Clustering runtime of this arg set in the last iteration.", clusterDur...)
+		"Clustering runtime of this arg set in its latest run.", clusterDur...)
 
 	writeMetric(&b, "flokbn_jail_active", "gauge",
 		"Active bans in the jail (pre-whitelist truth).",
@@ -90,8 +94,17 @@ func renderMetrics(sn *statsSnapshot) []byte {
 		}
 	}
 	writeMetric(&b, "flokbn_ban_active", "gauge",
-		"One series per actively banned CIDR (1 while banned; capped like jail.active_bans).",
+		"One series per actively banned CIDR (1 while banned; capped like jail.active_bans, see flokbn_ban_active_truncated).",
 		banSamples...)
+	// Without this a scraper counting flokbn_ban_active series cannot tell
+	// "exactly at the cap" from "cut off"; flokbn_jail_active has the total.
+	banTruncated := 0.0
+	if sn.Jail.Truncated {
+		banTruncated = 1.0
+	}
+	writeMetric(&b, "flokbn_ban_active_truncated", "gauge",
+		"Whether the flokbn_ban_active series were cut off at the cap (1) or are complete (0); flokbn_jail_active is always the full count.",
+		sample{value: banTruncated})
 	stageSamples := make([]sample, len(sn.Jail.Stages))
 	for i, st := range sn.Jail.Stages {
 		stageSamples[i] = sample{
