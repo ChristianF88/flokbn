@@ -3,7 +3,7 @@ title: "CLI Flags"
 description: "Complete command-line reference for flokbn"
 summary: "Every flokbn command-line flag with type, default value, and description"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-18T10:00:00+00:00
+lastmod: 2026-11-23T10:00:00+00:00
 draft: false
 weight: 210
 slug: "cli-flags"
@@ -41,16 +41,20 @@ flokbn static [options]
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `--config` | string | No | - | Path to TOML config file. When used, only `--tui`, `--compact`, `--plain` are allowed alongside it. All other flags produce an error. |
-| `--logfile` | string | Yes (unless `--config`) | - | Path to log file to analyze. Note: the CLI flag is all-lowercase `--logfile`; the equivalent TOML key is camelCase `logFile`. This divergence is intentional. |
+| `--logfile` | string | Yes (unless `--config`) | - | Path to log file to analyze. Alias: `--logFile` (the spelling of the TOML key `logFile`). |
 | `--logFormat` | string | No | `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"` | Log format string. See [Log Formats]({{< relref "/docs/reference/log-formats/" >}}). |
-| `--startTime` | string | No | - | Start of time window. Formats: `YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM-DD HH:MM` |
+| `--startTime` | string | No | - | Start of time window. Formats: `YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM-DD HH:MM`, each optionally followed by ` ±HHMM`, or RFC3339 (`2025-07-06T06:00:00+01:00`). Needs `%t` in the log format. |
 | `--endTime` | string | No | - | End of time window. Same formats as `--startTime` |
+
+The time flags accept exactly what the TOML `startTime`/`endTime` keys accept. A value without an offset (`"2025-07-06 06:00"`) is compared with the wall-clock time of each log line, whatever offset the line carries; a value with an offset (`"2025-07-06 06:00 +0100"`, or any RFC3339 value) is compared as a true instant. See [Time Formats]({{< relref "/docs/reference/config-file/#time-formats" >}}).
 
 ### Clustering Options
 
 | Flag | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `--clusterArgSets` | string | No | `1000,30,32,0.2` (injected) | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. If omitted, flags mode injects the default set `1000,30,32,0.2` (jailed), matching live flags mode - clusters are still detected and jailed. Note: a `[static.NAME]` TOML trie has **no** such default - without `clusterArgSets` it detects nothing. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
+| `--clusterArgSets` | string | No | `1000,30,32,0.2` (injected) | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeat the flag for several sets; there is no separator for putting two sets into one value. Alias: `--clusterArgSet` (the spelling of the live flag). If omitted, flags mode injects the default set `1000,30,32,0.2` (jailed), matching live flags mode - clusters are still detected and jailed. Note: a `[static.NAME]` TOML trie has **no** such default - without `clusterArgSets` it detects nothing. See [Clustering]({{< relref "/docs/reference/clustering/" >}}). |
+
+Each set is validated before the run starts, with the same rules as the TOML `clusterArgSets` rows: `minSize` a whole number >= 1, `minDepth` and `maxDepth` whole numbers with `0 <= minDepth <= maxDepth <= 32`, `threshold` between `0` and `2`. A set that breaks a rule aborts the command naming every problem in it.
 
 ### Filtering Options
 
@@ -65,11 +69,13 @@ flokbn static [options]
 
 See [Filtering]({{< relref "/docs/reference/filtering/" >}}) for file formats.
 
+In static mode a filter is rejected when the log format does not extract the field it reads: `--useragentRegex` and the User-Agent list files need `%u`, `--endpointRegex` needs `%r` or `%U`, `--startTime`/`--endTime` need `%t`. The default format has all of them; this matters when you pass a shorter `--logFormat`.
+
 ### Analysis Options
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--rangesCidr` | string | Analyze specific CIDR range. Repeatable. Note: the CLI flag is `--rangesCidr`; the equivalent TOML key is `cidrRanges` (word order swapped). This divergence is intentional. |
+| `--rangesCidr` | string | Count the requests inside an IPv4 CIDR range or a single IPv4 address (a bare address is treated as `/32`). Repeatable. Alias: `--cidrRanges` (the spelling of the TOML key). |
 | `--plotPath` | string | Path for HTML heatmap output |
 
 ### Output Options
@@ -105,6 +111,7 @@ flokbn live [options]
 |------|------|----------|---------|-------------|
 | `--config` | string | No | - | Path to TOML config file. When used, only `--logLevel` is allowed alongside it. |
 | `--port` | string | Yes (unless `--config`) | - | Port for Lumberjack protocol listener |
+| `--listen` | string | No | `127.0.0.1` | Address the Lumberjack listener binds to (an IP address or host name, without a port). The port does not authenticate shippers, so pass another address such as `0.0.0.0` only when access to the port is restricted; flokbn then logs a warning at startup. Same as `[live] listen`. |
 | `--jailFile` | string | Yes (unless `--config`) | - | Path to jail state file (JSON) |
 | `--banFile` | string | Yes (unless `--config`) | - | Path to ban list output (CIDRs plus `#` comment headers) |
 | `--logLevel` | string | No | `info` | Verbosity of the live-mode log lines on stderr: `debug`, `info`, `warn`, or `error`. Overrides the `[log]` level from the config file. |
@@ -117,21 +124,21 @@ Live mode logs leveled, timestamped progress lines to stderr (one summary line p
 |------|------|---------|-------------|
 | `--slidingWindowMaxTime` | duration | `2h0m0s` | Maximum time span of sliding window |
 | `--slidingWindowMaxSize` | int | `100000` | Maximum requests in sliding window |
-| `--sleepBetweenIterations` | int | `10` | Seconds between detection iterations |
+| `--sleepBetweenIterations` | int | `10` | Seconds between detection iterations. `0` means no pause; a negative value is rejected. |
 
-Flags-only live mode creates a **single** sliding window (internally named `cli_default`). Multiple windows, the HTTP stats server (`statsListen`, `topTalkers`), and the ingestor `readTimeout` are only available via `--config` - there are no CLI flags for them. See [Config File]({{< relref "/docs/reference/config-file/" >}}).
+Flags-only live mode creates a **single** sliding window (internally named `cli_default`). Multiple windows, TLS for the ingest listener (`tlsCert`, `tlsKey`, `tlsClientCA`), the HTTP stats server (`statsListen`, `topTalkers`), and the ingestor `readTimeout` are only available via `--config` - there are no CLI flags for them. See [Config File]({{< relref "/docs/reference/config-file/" >}}).
 
 ### Clustering Options
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--clusterArgSet` | string | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeatable. Note: singular form (not `--clusterArgSets`). When omitted, a default set of `1000,30,32,0.2` is used. All sets passed this way are jailed (`useForJail` true). |
+| `--clusterArgSet` | string | Comma-separated `minSize,minDepth,maxDepth,threshold`. Repeat the flag for several sets. Alias: `--clusterArgSets` (the spelling of the static flag and the TOML key). Same validation as in static mode. When omitted, a default set of `1000,30,32,0.2` is used. All sets passed this way are jailed (`useForJail` true). |
 
 ### Filtering Options
 
 Live mode supports the same filter flags as static mode: `--useragentRegex`, `--endpointRegex`, `--whitelist`, `--blacklist`, `--userAgentWhitelist`, `--userAgentBlacklist`.
 
-`--rangesCidr`, `--plotPath`, `--plain`, `--compact`, and `--tui` are static-only flags - the live command rejects them with an error. Live mode produces log lines, the jail/ban files, and the optional HTTP endpoints, not a report.
+`--rangesCidr`, `--plotPath`, `--startTime`, `--endTime`, `--logfile`, `--logFormat`, `--plain`, `--compact`, and `--tui` are static-only flags - the live command rejects them with an error. Live mode produces log lines, the jail/ban files, and the optional HTTP endpoints, not a report.
 
 ---
 

@@ -3,7 +3,7 @@ title: "Log Formats"
 description: "Log format specifiers for parsing HTTP access logs"
 summary: "Complete reference for flokbn log format specifiers and common format patterns"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-18T10:00:00+00:00
+lastmod: 2026-11-23T10:00:00+00:00
 draft: false
 weight: 230
 slug: "log-formats"
@@ -17,7 +17,7 @@ seo:
 
 flokbn parses HTTP access logs using a format string that maps log fields to specifiers.
 
-Format strings apply to **static mode only**. Live mode parses incoming events with a fixed combined-log layout (client IP as the first field) - see the [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}).
+Format strings apply to **static mode only**. Live mode ignores `logFormat`: it parses incoming events with a fixed combined-log layout (client IP as the first field) - see [Expected log line format]({{< relref "/docs/guides/live-protection/#expected-log-line-format" >}}) in the Live Protection guide for what a live log line must look like.
 
 ## Format Specifiers
 
@@ -34,6 +34,8 @@ Format strings apply to **static mode only**. Live mode parses incoming events w
 | `%^` | Skip field (any value) | *(ignored)* | No (unlimited) |
 
 **Constraints**: Exactly one `%h` is required. Each field specifier may appear at most once (e.g., two `%t` fields are not allowed); only `%^` (skip) may repeat. IPv4 only.
+
+**Filters need their field.** A filter that reads a field the format does not extract is rejected at startup: `useragentRegex` and the User-Agent whitelist/blacklist need `%u`, `endpointRegex` needs `%r` or `%U`, `startTime`/`endTime` need `%t`. Keep those specifiers in the format when you use the filter - see [Config File]({{< relref "/docs/reference/config-file/#validation-rules" >}}).
 
 ## Common Formats
 
