@@ -1377,6 +1377,11 @@ func (c *Config) validateLiveInto(diags *ConfigDiagnostics) {
 		if win.SlidingWindowMaxTime <= 0 {
 			diags.AddRaw(fmt.Sprintf("slidingWindowMaxTime must be > 0 in [live.%s]", name))
 		}
+		// 0 is a valid "no pause"; a negative value would silently act like 0
+		// (the loop takes the largest value across windows, starting from 0).
+		if win.SleepBetweenIterations < 0 {
+			diags.AddRaw(fmt.Sprintf("sleepBetweenIterations must be >= 0 in [live.%s], got %d", name, win.SleepBetweenIterations))
+		}
 		if len(win.ClusterArgSets) == 0 {
 			diags.AddRaw(fmt.Sprintf("at least one clusterArgSets entry is required in [live.%s]", name))
 		}

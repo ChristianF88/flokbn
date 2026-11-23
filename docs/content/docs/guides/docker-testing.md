@@ -3,7 +3,7 @@ title: "Docker Test & Demo Stacks"
 description: "Using the flokbn Docker test environment and the closed-loop firewall demo"
 summary: "The Docker-based test stack with simulated traffic, and the demo stack with firewall enforcement, Prometheus, and Grafana"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-11-23T10:00:00+00:00
 draft: false
 weight: 830
 slug: "docker-testing"
@@ -38,7 +38,7 @@ Both stacks share the same topology:
 
 Every published port is bound to `127.0.0.1` on the host: none of these services is authenticated, so the stacks are reachable from the machine running Docker and nowhere else.
 
-The configs bind `statsListen = "0.0.0.0:8666"` (and the Lumberjack listener on all container interfaces) so Filebeat, the proxy's ban poller and the published ports can reach flokbn across the isolated compose networks. Inside a container that is the only way to be reachable; the exposure is limited by the `127.0.0.1` port mappings instead. It is a demo-only exception - outside Docker, keep both listeners on loopback, because neither is authenticated.
+The configs bind `statsListen = "0.0.0.0:8666"` and set `listen = "0.0.0.0"` for the Lumberjack listener (its default is `127.0.0.1`) so Filebeat, the proxy's ban poller and the published ports can reach flokbn across the isolated compose networks. Inside a container that is the only way to be reachable; the exposure is limited by the `127.0.0.1` port mappings instead. It is a demo-only exception - outside Docker, keep both listeners on loopback, because neither is authenticated.
 
 ## Quick Start (test stack)
 
@@ -109,7 +109,7 @@ flokbn live ─── sliding windows → clustering → jail (escalating stages
       Prometheus :9090 ──► Grafana :3000   (monitoring overlay)
 ```
 
-While it runs, watch the loop from the host: `curl localhost:8666/stats` for the JSON snapshot of the last iteration, `curl localhost:8666/bans` for exactly what the poller sees (both return 503 until the first detection iteration completes).
+While it runs, watch the loop from the host: `curl localhost:8666/stats` for the JSON snapshot of the last iteration, `curl localhost:8666/bans` for exactly what the poller sees (both return 503 until the loop has published its first snapshot, after the first iteration or idle heartbeat).
 
 ```bash
 docker compose -f docker-compose.demo.yml \
@@ -159,6 +159,7 @@ banFile = "/data/blocklist.txt"
 
 [live]
 port = "9000"
+listen = "0.0.0.0"              # Filebeat runs in another container
 statsListen = "0.0.0.0:8666"
 
 [live.general_detection]

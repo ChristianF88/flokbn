@@ -94,32 +94,46 @@ Note: relative paths are resolved from the directory you run flokbn in (the
 current working directory), not from the config file location.
 
 ### File Format
-All files use the same format:
+All four files share these rules:
 - One entry per line
-- Comments start with `#`
+- A line whose first non-blank character is `#` is a comment
 - Empty lines are ignored
-- Whitespace is trimmed
+- Leading and trailing whitespace is trimmed
+
+They differ in how a `#` **after** an entry is read - see below.
 
 #### IP Files Format (whitelist.txt, blacklist.txt)
-**IPv4 CIDRs only** - a malformed CIDR or an IPv6 line aborts the run at
-startup, naming the line number and file (IPv4-only tool). The same IPv4-only
-rule applies to per-trie `cidrRanges` entries in the config.
+**IPv4 only** - each line is a CIDR or a bare IPv4 address; a bare address is
+a single host and is treated as `/32`. A malformed entry or an IPv6 line
+aborts the run at startup, naming the line number and file (IPv4-only tool).
+The same rules apply to per-trie `cidrRanges` entries in the config and to
+`--rangesCidr`.
+
+A `#` after an entry starts an inline comment (a CIDR never contains `#`):
 ```
 # Comment
 192.168.1.0/24    # Internal network
-10.0.0.1          # Specific IP
+10.0.0.1          # Specific IP, same as 10.0.0.1/32
 ```
 
 #### User-Agent Files Format (ua_whitelist.txt, ua_blacklist.txt)
 Entries are **exact** User-Agent strings - the full User-Agent header must
 match the line completely. They are NOT substrings and NOT regexes.
+
+Only a **leading** `#` starts a comment. A `#` inside a line is part of the
+entry, because real User-Agent strings contain it - so do not append a
+comment to an entry, it would become part of the string to match:
 ```
 # Comment
 Googlebot/2.1 (+http://www.google.com/bot.html)
 curl/7.68.0
+sqlmap/1.7.2#stable (http://sqlmap.org)
 ```
 `Googlebot` alone would only match requests whose entire User-Agent header
 is literally `Googlebot`.
+
+In static mode the User-Agent files need a `%u` field in `logFormat`; a
+configured User-Agent list with a format that has no `%u` aborts the run.
 
 ## Processing Order
 
@@ -175,10 +189,12 @@ flokbn processes filtering in this order:
 
 ### Common Issues
 1. **File not found** - Check file paths and permissions
-2. **Invalid CIDR format** - Verify CIDR syntax (e.g., 192.168.1.0/24). IPv4
-   only: an IPv6 line aborts the run at startup (IPv4-only tool)
+2. **Invalid CIDR format** - Verify the entry is an IPv4 CIDR (e.g.,
+   192.168.1.0/24) or a bare IPv4 address. IPv4 only: an IPv6 line aborts the
+   run at startup (IPv4-only tool)
 3. **UA entry never matches** - Entries are exact strings; check for missing
-   version suffixes or extra whitespace
+   version suffixes, extra whitespace, or a comment appended after a `#` (in
+   User-Agent files that text is part of the entry)
 4. **Performance issues** - Consider file size and pattern complexity
 
 ### Debugging Tips

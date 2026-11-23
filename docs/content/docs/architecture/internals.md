@@ -3,7 +3,7 @@ title: "Internals"
 description: "flokbn internal architecture and design"
 summary: "Deep dive into how flokbn works: pipeline, binary trie, cluster detection, jail system, and code organization"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-11-23T10:00:00+00:00
 draft: false
 weight: 410
 toc: true
@@ -119,10 +119,11 @@ Log Files → Parser → Filter → Trie → Cluster Detector → Jail → Ban F
 ```
 
 **Characteristics**:
-- Continuous operation; waits for the first shipper connection at startup
+- Continuous operation; the loop starts as soon as the listener is up and does not block until a shipper connects
 - Multiple windows with independent filters and bounds, driven by one detection loop (the loop sleeps for the largest `sleepBetweenIterations` across windows)
 - Bounded memory (sliding windows)
-- Automatic jail updates and atomic ban-file writes
+- Automatic jail updates and atomic ban-file writes, skipped when the content did not change
+- An idle heartbeat expires window entries and bans while no traffic arrives
 - Optional HTTP stats server (`GET /stats`, `/bans`, `/metrics`) publishing an immutable snapshot per iteration
 
 ## Data Structures
@@ -297,7 +298,7 @@ type Jail struct {
 
 ### Jail File Format
 
-The jail file (`--jailFile`) persists detection state as JSON. It is read on startup and written after each detection cycle.
+The jail file (`--jailFile`) persists detection state as JSON. It is read on startup. Static mode writes it at the end of a run that changed the jail; live mode writes it after a detection cycle or idle heartbeat whose jail content differs from what is on disk.
 
 ## Data Flow
 
@@ -328,10 +329,14 @@ The IP whitelist/blacklist act in the **ban pipeline** (step 5), not on the per-
 ### Live Mode
 
 ```
-1. Start Lumberjack server on [live] port; wait for a shipper to connect
+1. Start the Lumberjack server on [live] listen:port (default 127.0.0.1);
+   shippers may connect at any time, the loop does not wait for one
 2. Initialize one sliding window per [live.NAME] section
 3. Loop:
-   a. Read one batch from the ingestor
+   a. Read the queued batches from the ingestor. If there are none: poll
+      again after one second and, once idle for max(sleepBetweenIterations),
+      run a heartbeat (expire window entries and bans, write the files if
+      that changed them, publish a stats snapshot)
    b. Classify User-Agents against the UA lists (whitelisted-UA requests
       never enter any window; blacklisted-UA IPs are marked for force-jail)
    c. For each window: apply that window's regex filters, append the
@@ -339,7 +344,8 @@ The IP whitelist/blacklist act in the **ban pipeline** (step 5), not on the per-
    d. For each window and each cluster arg set: detect clusters
    e. Merge all jail-eligible detections, remove whitelisted ranges,
       append force-jailed /32s
-   f. Update jail, write jail file, write ban file (atomic)
+   f. Update jail; write the jail file and the ban file (atomic) only
+      when their content changed
    g. Publish the stats snapshot (if statsListen is set), log one
       iteration summary line
    h. Sleep max(sleepBetweenIterations) across windows; repeat
@@ -351,7 +357,8 @@ Live mode uses sliding windows to bound memory usage:
 
 - **Time-bounded**: Old requests expire based on `slidingWindowMaxTime`
 - **Size-bounded**: Capped at `slidingWindowMaxSize` to prevent unbounded growth
-- **Lazy cleanup**: Cleanup runs on the detection timer, not per-request
+- **Lazy cleanup**: Cleanup runs on the detection timer and on the idle heartbeat, not per-request
+- **Wall-clock expiry**: an entry expires when its log timestamp is older than `slidingWindowMaxTime` by the clock of the flokbn host; timestamps in the future are clamped to the arrival time so one bad stamp cannot hold back expiry
 
 Multiple windows with different parameters are all updated by the single detection loop (which paces itself at the largest `sleepBetweenIterations`). See [Live Protection Guide]({{< relref "/docs/guides/live-protection/" >}}) for configuration.
 
@@ -364,6 +371,8 @@ Client (Filebeat) → [Lumberjack Protocol] → flokbn Server
 ```
 
 **Protocol features** (Lumberjack v2): zlib-compressed batches, acknowledgments, windowed flow control, reliable delivery.
+
+The server side is flokbn's own reader (`ingestor/lumberjack.go`), not a third-party library: every size a peer announces (events per window, event size, compressed and inflated batch size) is checked against a fixed limit before memory is allocated for it, and the number of connections and the bytes waiting for the detection loop are bounded. The listener binds `127.0.0.1` unless `[live] listen` says otherwise and can speak TLS or mutual TLS. A batch is acknowledged once it is queued for the detection loop, not once it has been processed, so batches still queued when the process dies are lost. See [Protocol limits]({{< relref "/docs/guides/live-protection/#protocol-limits" >}}).
 
 ## Optimization Techniques
 
