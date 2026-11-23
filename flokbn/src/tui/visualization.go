@@ -389,11 +389,8 @@ func (v *VisualizationView) generateRenderText() string {
 		if cluster != nil {
 			content.WriteString(fmt.Sprintf("[white::b]Traffic Heatmap (/16 ranges) - Cluster Set %d/%d - %s[white::-]\n",
 				v.currentClusterSet+1, v.totalClusterSets, trafficScope))
-			content.WriteString(fmt.Sprintf("[dim]Parameters: min_size=%d, depth=%d-%d, mean_diff=%.1f[white]\n",
-				cluster.Parameters.MinClusterSize,
-				cluster.Parameters.MinDepth,
-				cluster.Parameters.MaxDepth,
-				cluster.Parameters.MeanSubnetDifference))
+			content.WriteString(fmt.Sprintf("[dim]Parameters: %s[white]\n",
+				output.FormatClusterParameters(cluster.Parameters)))
 		}
 	} else if v.totalClusterSets > 0 {
 		content.WriteString(fmt.Sprintf("[white::b]Traffic Heatmap (/16 ranges) - %d cluster sets available - %s[white::-]\n",

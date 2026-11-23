@@ -12,7 +12,25 @@ import (
 )
 
 // PlotHeatmap creates an interactive heatmap for /16 IP ranges (A.B.0.0/16)
+// and announces the written file on stderr.
 func PlotHeatmap(requests []ingestor.Request, filename string) error {
+	if err := WriteHeatmap(requests, filename); err != nil {
+		return err
+	}
+
+	// Progress notice goes to STDERR, never stdout: stdout carries the
+	// machine-readable document in the default and --compact JSON modes, and a
+	// stray line there makes the whole output unparseable
+	// (jq: "Invalid numeric literal at line 1, column 8"). The same fact is also
+	// recorded as an "info" warning in the JSON itself (see executeStaticAnalysis).
+	fmt.Fprintf(os.Stderr, "Heatmap saved to %s\n", filename)
+	return nil
+}
+
+// WriteHeatmap is PlotHeatmap without the stderr notice: it writes the file and
+// prints nothing. The TUI uses it, because nothing may be written to the
+// terminal while tview owns it.
+func WriteHeatmap(requests []ingestor.Request, filename string) error {
 	var counts [256][256]uint32
 
 	// Fast bucketing into A.B.0.0/16
@@ -119,13 +137,6 @@ func PlotHeatmap(requests []ingestor.Request, filename string) error {
 	if cerr := f.Close(); cerr != nil {
 		return fmt.Errorf("closing heatmap file %s: %w", filename, cerr)
 	}
-
-	// Progress notice goes to STDERR, never stdout: stdout carries the
-	// machine-readable document in the default and --compact JSON modes, and a
-	// stray line there makes the whole output unparseable
-	// (jq: "Invalid numeric literal at line 1, column 8"). The same fact is also
-	// recorded as an "info" warning in the JSON itself (see executeStaticAnalysis).
-	fmt.Fprintf(os.Stderr, "Heatmap saved to %s\n", filename)
 	return nil
 }
 

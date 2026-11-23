@@ -121,6 +121,10 @@ func executeTUI(cfg *config.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// plotPath heatmap: written by the analysis goroutine, reported after the
+	// TUI has exited (see tuiHeatmap).
+	var heatmap tuiHeatmap
+
 	// Run the complete analysis first (like non-TUI mode), then pass results to TUI
 	go func() {
 		// Do the same complete analysis as non-TUI mode
@@ -146,6 +150,10 @@ func executeTUI(cfg *config.Config) error {
 			return
 		}
 
+		// Generate the heatmap if plotPath is provided - reuse parsed requests.
+		// Done before the results are shown so a failure is part of them.
+		heatmap.write(ctx, cfg.Static.PlotPath, requests, multiTrieResult)
+
 		// Set the complete analysis results first
 		app.SetAnalysisResults(multiTrieResult)
 
@@ -155,7 +163,13 @@ func executeTUI(cfg *config.Config) error {
 		}
 	}()
 
-	if err := app.Run(); err != nil {
+	err := app.Run()
+
+	// The terminal is ours again: stop the analysis and report the heatmap.
+	cancel()
+	heatmap.report(os.Stderr)
+
+	if err != nil {
 		return fmt.Errorf("TUI: %w", err)
 	}
 	return nil
@@ -907,9 +921,7 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 			fmt.Printf("...............................................................................  \n")
 
 			for j, cluster := range trieResult.Data {
-				fmt.Printf("  Set %d: min_size=%d, depth=%d-%d, threshold=%.2f\n",
-					j+1, cluster.Parameters.MinClusterSize, cluster.Parameters.MinDepth,
-					cluster.Parameters.MaxDepth, cluster.Parameters.MeanSubnetDifference)
+				fmt.Printf("  Set %d: %s\n", j+1, output.FormatClusterParameters(cluster.Parameters))
 				fmt.Printf("  Execution Time: %d μs\n", cluster.ExecutionTimeUS)
 
 				if len(cluster.MergedRanges) > 0 {
@@ -939,17 +951,25 @@ func outputPlain(jsonOutput *output.JSONOutput) {
 		}
 	}
 
-	// Warnings and Errors
-	if len(jsonOutput.Warnings) > 0 || len(jsonOutput.Errors) > 0 {
+	// Warnings and Errors. Info messages (e.g. "Heatmap generated ...") are
+	// skipped in plain output, so they must not count towards the section
+	// either: a run whose only warnings are infos prints no DIAGNOSTICS block
+	// and no empty "Warnings:" header.
+	var realWarnings []output.Warning
+	for _, warning := range jsonOutput.Warnings {
+		if warning.Type != "info" {
+			realWarnings = append(realWarnings, warning)
+		}
+	}
+
+	if len(realWarnings) > 0 || len(jsonOutput.Errors) > 0 {
 		fmt.Printf("⚠️  DIAGNOSTICS\n")
 		fmt.Printf("────────────────────────────────────────────────────────────────────────────────\n")
 
-		if len(jsonOutput.Warnings) > 0 {
+		if len(realWarnings) > 0 {
 			fmt.Printf("Warnings:\n")
-			for _, warning := range jsonOutput.Warnings {
-				if warning.Type != "info" { // Skip info messages in plain output
-					fmt.Printf("  • %s\n", warning.Message)
-				}
+			for _, warning := range realWarnings {
+				fmt.Printf("  • %s\n", warning.Message)
 			}
 		}
 

@@ -43,7 +43,6 @@ type App struct {
 	logFile        string
 	clusterArgSets []string
 	rangesCidr     []string
-	plotPath       string
 
 	// jsonResult and currentTrie are owned exclusively by the tview UI goroutine
 	// (read/written only inside QueueUpdateDraw closures). Background precache
@@ -85,7 +84,6 @@ func NewAppFromConfig(cfg *config.Config, configPath string) *App {
 		cfg:           cfg,
 		configPath:    configPath,
 		logFile:       cfg.Static.LogFile,
-		plotPath:      cfg.Static.PlotPath,
 		currentTrie:   0,
 		requestsReady: make(chan struct{}),
 	}
@@ -826,8 +824,8 @@ func (a *App) displayResultsUncached() {
 	clusteringText.WriteString("[white::b]Detected Threats[white::-]\n\n")
 
 	for i, cluster := range a.jsonResult.Clustering.Data {
-		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (min_size=%d, depth=%d-%d)\n",
-			i+1, cluster.Parameters.MinClusterSize, cluster.Parameters.MinDepth, cluster.Parameters.MaxDepth))
+		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (%s)\n",
+			i+1, output.FormatClusterParameters(cluster.Parameters)))
 
 		if len(cluster.MergedRanges) > 0 {
 			clusteringText.WriteString("[red]Merged Ranges:[white]\n")
@@ -917,8 +915,8 @@ func (a *App) buildClusteringTextFor(result *output.JSONOutput) string {
 	clusteringText.WriteString("[white::b]Detected Threats[white::-]\n\n")
 
 	for i, cluster := range result.Clustering.Data {
-		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (min_size=%d, depth=%d-%d)\n",
-			i+1, cluster.Parameters.MinClusterSize, cluster.Parameters.MinDepth, cluster.Parameters.MaxDepth))
+		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (%s)\n",
+			i+1, output.FormatClusterParameters(cluster.Parameters)))
 
 		if len(cluster.MergedRanges) > 0 {
 			clusteringText.WriteString("[red]Merged Ranges:[white]\n")

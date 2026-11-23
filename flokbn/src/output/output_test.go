@@ -375,3 +375,21 @@ func TestJSONOutput_NoTopLevelClusteringSections(t *testing.T) {
 		}
 	}
 }
+
+// TestFormatClusterParameters pins the one human-readable rendering of a
+// cluster arg set shared by the plain renderer and the TUI.
+func TestFormatClusterParameters(t *testing.T) {
+	tests := []struct {
+		params ClusterParameters
+		want   string
+	}{
+		{ClusterParameters{MinClusterSize: 1000, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1}, "min_size=1000, depth=24-32, threshold=0.10"},
+		{ClusterParameters{MinClusterSize: 10000, MinDepth: 12, MaxDepth: 18, MeanSubnetDifference: 0.25}, "min_size=10000, depth=12-18, threshold=0.25"},
+		{ClusterParameters{}, "min_size=0, depth=0-0, threshold=0.00"},
+	}
+	for _, tt := range tests {
+		if got := FormatClusterParameters(tt.params); got != tt.want {
+			t.Errorf("FormatClusterParameters(%+v) = %q, want %q", tt.params, got, tt.want)
+		}
+	}
+}

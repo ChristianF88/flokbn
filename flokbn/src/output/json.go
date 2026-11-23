@@ -294,6 +294,17 @@ func ActiveFilters(params TrieParameters, gf GlobalFilters) []string {
 	return filters
 }
 
+// FormatClusterParameters renders one cluster arg set for humans, e.g.
+// "min_size=1000, depth=24-32, threshold=0.10". Like ActiveFilters it is the
+// single source shared by the plain renderer and the TUI (clustering panel and
+// visualization header), which used to disagree: the plain output printed the
+// threshold with two decimals, the visualization with one and under another
+// name ("mean_diff"), and the clustering panel not at all.
+func FormatClusterParameters(p ClusterParameters) string {
+	return fmt.Sprintf("min_size=%d, depth=%d-%d, threshold=%.2f",
+		p.MinClusterSize, p.MinDepth, p.MaxDepth, p.MeanSubnetDifference)
+}
+
 // FormatNumber adds thousand separators to numbers
 func FormatNumber(n int) string {
 	str := fmt.Sprintf("%d", n)
