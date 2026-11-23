@@ -141,9 +141,7 @@ Enforced at load/startup (the run aborts with an error):
 10. **`[live.NAME]` windows are validated per window**: `slidingWindowMaxSize > 0`, `slidingWindowMaxTime > 0`, and at least one `clusterArgSets` row. A window missing or zeroing any of these aborts startup with a message naming the `[live.NAME]` window.
 11. `cidrRanges` entries must be valid **IPv4** CIDRs; an IPv6 entry aborts the load (IPv4-only tool), in both static and live tries.
 
-**Not** enforced - silently tolerated, so double-check it by hand:
-
-- An invalid RFC3339 `startTime`/`endTime` in `[static.NAME]` does **not** abort the run: it surfaces as a diagnostic in the output and the time filter is silently skipped (all requests are analyzed).
+12. **`startTime`/`endTime` must parse.** A bound that is neither RFC3339 nor one of the short forms (`YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM-DD HH:MM`, each optionally followed by ` ±HHMM`) aborts the run with a diagnostic naming the trie and the offending value, as does an `endTime` before its `startTime`. The time filter is never silently skipped.
 
 ## Complete Static Example
 
