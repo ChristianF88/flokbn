@@ -47,6 +47,7 @@ def generate_compose():
     volumes  = {
         'filebeat_data': {},
         'flokbn_data': {},
+        'nginx_logs': {},
     }
 
     # ── proxy ──
@@ -55,9 +56,16 @@ def generate_compose():
         'build':          PROXY_BUILD,
         'container_name': 'proxy',
         'restart':        'unless-stopped',
-        'ports':          ['80'],
+        'ports':          ['127.0.0.1::80'],
         'volumes':        [
-            '/tmp:/var/log/nginx:rw',
+            # Named volume, not the host's /tmp. nocopy keeps the image's
+            # access.log -> /dev/stdout symlinks out of the volume.
+            {
+                'type':   'volume',
+                'source': 'nginx_logs',
+                'target': '/var/log/nginx',
+                'volume': {'nocopy': True},
+            },
         ],
         'networks':       proxy_nets,
     }
@@ -67,7 +75,8 @@ def generate_compose():
         'build':          FLOKBN_BUILD,
         'container_name': 'flokbn',
         'restart':        'unless-stopped',
-        'ports':          ['9000:9000', '8666:8666'],
+        # Loopback only: neither port is authenticated.
+        'ports':          ['127.0.0.1:9000:9000', '127.0.0.1:8666:8666'],
         'volumes':        [
             './docker-test-config.toml:/config/flokbn.toml:ro',
             'flokbn_data:/data',
@@ -92,7 +101,7 @@ def generate_compose():
         'restart':        'unless-stopped',
         'networks':       proxy_nets,
         'volumes': [
-            '/tmp:/var/log/nginx:ro',
+            'nginx_logs:/var/log/nginx:ro',
             'filebeat_data:/usr/share/filebeat/data',
         ],
         'environment': {

@@ -19,7 +19,9 @@
 #     and exposes per-status request counts for Prometheus.
 #   - prometheus: scrapes flokbn (/metrics, FLOKBN-045) + the log exporter.
 #   - grafana: provisioned datasource + "flokbn - closed-loop firewall"
-#     dashboard, anonymous access (test stack only). http://localhost:3000
+#     dashboard, anonymous read-only access. http://localhost:3000
+#
+# Prometheus and Grafana are published on 127.0.0.1 only.
 services:
   proxy:
     environment:
@@ -40,7 +42,7 @@ services:
     - -config-file
     - /etc/nginx-log-exporter/config.yaml
     volumes:
-    - /tmp:/var/log/nginx:ro
+    - nginx_logs:/var/log/nginx:ro
     - ./nginx-exporter/config.yaml:/etc/nginx-log-exporter/config.yaml:ro
     networks:
       mon: {}
@@ -52,7 +54,7 @@ services:
     - flokbn
     - nginx-log-exporter
     ports:
-    - 9090:9090
+    - 127.0.0.1:9090:9090
     volumes:
     - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     networks:
@@ -64,12 +66,16 @@ services:
     depends_on:
     - prometheus
     ports:
-    - 3000:3000
+    - 127.0.0.1:3000:3000
     environment:
-      # Anonymous admin: local test stack only, never expose publicly.
+      # Anonymous visitors can view the provisioned dashboard, nothing else.
+      # The login form is off because this stack never changes Grafana's
+      # default admin password; remove that line (and set
+      # GF_SECURITY_ADMIN_PASSWORD) if you need to edit dashboards.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_AUTH_BASIC_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
     volumes:
     - ./grafana/provisioning:/etc/grafana/provisioning:ro
     - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

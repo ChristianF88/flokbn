@@ -6,9 +6,19 @@ services:
     container_name: proxy
     restart: unless-stopped
     ports:
-    - '80'
+    # Random host port, loopback only (the clients reach nginx over the
+    # compose networks, not through this mapping).
+    - 127.0.0.1::80
     volumes:
-    - /tmp:/var/log/nginx:rw
+    # Named volume, not a host directory: nginx, Filebeat and the log
+    # exporter run as root and must not get the host's /tmp. nocopy keeps
+    # the image's access.log -> /dev/stdout symlinks out of the volume so
+    # nginx creates real files for Filebeat to tail.
+    - type: volume
+      source: nginx_logs
+      target: /var/log/nginx
+      volume:
+        nocopy: true
     networks: &id001
       net1: {}
       net2: {}
@@ -22,8 +32,10 @@ services:
     container_name: flokbn
     restart: unless-stopped
     ports:
-    - 9000:9000
-    - 8666:8666
+    # Loopback only: neither port is authenticated. Filebeat and the proxy
+    # reach flokbn over the compose networks, not through these mappings.
+    - 127.0.0.1:9000:9000
+    - 127.0.0.1:8666:8666
     volumes:
     - ./docker-test-config.toml:/config/flokbn.toml:ro
     - flokbn_data:/data
@@ -52,7 +64,7 @@ services:
     restart: unless-stopped
     networks: *id001
     volumes:
-    - /tmp:/var/log/nginx:ro
+    - nginx_logs:/var/log/nginx:ro
     - filebeat_data:/usr/share/filebeat/data
     environment:
       INGESTOR_HOST: flokbn:9000
@@ -178,3 +190,4 @@ networks:
 volumes:
   filebeat_data: {}
   flokbn_data: {}
+  nginx_logs: {}
