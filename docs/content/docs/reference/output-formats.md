@@ -106,6 +106,8 @@ The top level contains `metadata`, `general`, one entry per trie under `tries`, 
 
 `tries[].data` holds one entry per cluster arg set. `detected_ranges` are the raw per-set detections; `merged_ranges` are the same detections after overlapping/adjacent CIDRs are merged - the merged list is what feeds the jail. Empty/optional fields are omitted (`omitempty`).
 
+All clustering results and CIDR range statistics are per trie: read `tries[].data` and `tries[].stats.cidr_analysis`. There are no top-level `clustering` or `cidr_analysis` keys. Earlier versions emitted both as objects whose `data` array was always empty; they have been removed, so a consumer that iterated over `.clustering.data` or `.cidr_analysis.data` (and never got an element) must switch to the per-trie paths.
+
 #### Processing with jq
 
 ```bash

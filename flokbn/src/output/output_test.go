@@ -59,11 +59,6 @@ func TestJSONOutput_ToJSON_RoundTrip(t *testing.T) {
 		},
 	}
 
-	// Add a CIDR range
-	out.CIDRAnalysis.Data = []CIDRRange{
-		{CIDR: "10.0.0.0/8", Requests: 12345, Percentage: 1.18},
-	}
-
 	// Add a warning
 	out.AddWarning("parse_error", "some lines failed to parse", 42)
 
@@ -116,11 +111,11 @@ func TestJSONOutput_ToJSON_RoundTrip(t *testing.T) {
 	if restored.Tries[0].Data[0].Parameters.MinClusterSize != 1000 {
 		t.Errorf("MinClusterSize = %d, want %d", restored.Tries[0].Data[0].Parameters.MinClusterSize, 1000)
 	}
-	if len(restored.CIDRAnalysis.Data) != 1 {
-		t.Fatalf("len(CIDRAnalysis.Data) = %d, want 1", len(restored.CIDRAnalysis.Data))
+	if len(restored.Tries[0].Stats.CIDRAnalysis) != 1 {
+		t.Fatalf("len(Tries[0].Stats.CIDRAnalysis) = %d, want 1", len(restored.Tries[0].Stats.CIDRAnalysis))
 	}
-	if restored.CIDRAnalysis.Data[0].CIDR != "10.0.0.0/8" {
-		t.Errorf("CIDRAnalysis.Data[0].CIDR = %q, want %q", restored.CIDRAnalysis.Data[0].CIDR, "10.0.0.0/8")
+	if restored.Tries[0].Stats.CIDRAnalysis[0].CIDR != "14.160.0.0/12" {
+		t.Errorf("Tries[0].Stats.CIDRAnalysis[0].CIDR = %q, want %q", restored.Tries[0].Stats.CIDRAnalysis[0].CIDR, "14.160.0.0/12")
 	}
 	if len(restored.Warnings) != 1 {
 		t.Fatalf("len(Warnings) = %d, want 1", len(restored.Warnings))
@@ -314,5 +309,69 @@ func BenchmarkAddWarning(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		out.AddWarning("bench", "benchmark warning", 1)
+	}
+}
+
+// TestJSONOutput_NoTopLevelClusteringSections is the regression test for the
+// two always-empty top-level objects: the CLI emitted
+//
+//	"clustering":    {"metadata": {...}, "data": []},
+//	"cidr_analysis": {"metadata": {...}, "data": []},
+//
+// on every run, because only the TUI ever fills JSONOutput.Clustering /
+// CIDRAnalysis (as in-memory single-trie views). The real results live under
+// "tries". Neither key may appear in the document - not when empty (the CLI
+// case) and not when the TUI views happen to be filled.
+func TestJSONOutput_NoTopLevelClusteringSections(t *testing.T) {
+	topLevelKeys := func(t *testing.T, data []byte) map[string]json.RawMessage {
+		t.Helper()
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(data, &keys); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		return keys
+	}
+
+	out := NewJSONOutput("static", time.Now())
+	out.Tries = []TrieResult{{
+		Name:  "cli_trie",
+		Stats: TrieStats{CIDRAnalysis: []CIDRRange{{CIDR: "10.0.0.0/8", Requests: 7}}},
+		Data:  []ClusterResult{{DetectedRanges: []CIDRRange{{CIDR: "10.1.0.0/16", Requests: 5}}}},
+	}}
+
+	for name, marshal := range map[string]func() ([]byte, error){
+		"pretty":  out.ToJSON,
+		"compact": out.ToCompactJSON,
+	} {
+		data, err := marshal()
+		if err != nil {
+			t.Fatalf("%s: marshal error: %v", name, err)
+		}
+		keys := topLevelKeys(t, data)
+		for _, key := range []string{"clustering", "cidr_analysis"} {
+			if raw, ok := keys[key]; ok {
+				t.Errorf("%s: top-level %q is emitted (%s); the results live under \"tries\"", name, key, raw)
+			}
+		}
+		// The keys consumers rely on are all still there.
+		for _, key := range []string{"metadata", "general", "tries", "warnings", "errors", "global_filters"} {
+			if _, ok := keys[key]; !ok {
+				t.Errorf("%s: top-level %q is missing", name, key)
+			}
+		}
+	}
+
+	// Filled TUI views stay in memory only.
+	out.Clustering.Data = out.Tries[0].Data
+	out.CIDRAnalysis.Data = out.Tries[0].Stats.CIDRAnalysis
+	data, err := out.ToCompactJSON()
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	keys := topLevelKeys(t, data)
+	for _, key := range []string{"clustering", "cidr_analysis"} {
+		if _, ok := keys[key]; ok {
+			t.Errorf("top-level %q is emitted once the TUI view is filled", key)
+		}
 	}
 }

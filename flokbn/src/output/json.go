@@ -12,11 +12,17 @@ import (
 
 // JSONOutput represents the complete analysis output structure
 type JSONOutput struct {
-	Metadata              Metadata     `json:"metadata"`
-	General               General      `json:"general"`
-	Tries                 []TrieResult `json:"tries,omitempty"`
-	Clustering            Clustering   `json:"clustering"`
-	CIDRAnalysis          CIDRAnalysis `json:"cidr_analysis"`
+	Metadata Metadata     `json:"metadata"`
+	General  General      `json:"general"`
+	Tries    []TrieResult `json:"tries,omitempty"`
+	// Clustering and CIDRAnalysis are in-memory single-trie views used only by
+	// the TUI (tui.App.singleTrieOutput fills them from one entry of Tries).
+	// They are NOT part of the JSON document: the analysis never fills them, so
+	// the CLI used to emit two always-empty "clustering" / "cidr_analysis"
+	// objects next to the real per-trie results under "tries". Consumers read
+	// tries[].data and tries[].stats.cidr_analysis.
+	Clustering            Clustering   `json:"-"`
+	CIDRAnalysis          CIDRAnalysis `json:"-"`
 	Warnings              []Warning    `json:"warnings"`
 	Errors                []Error      `json:"errors"`
 	UserAgentWhitelistIPs []string     `json:"useragent_whitelist_ips,omitempty"`
