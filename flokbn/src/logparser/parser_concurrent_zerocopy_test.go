@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // concurrentZeroCopyFormat is the standard Apache combined-style format with the
@@ -100,14 +100,14 @@ func writeTempLog(t testing.TB, content string) string {
 type reqKey struct {
 	IP        uint32
 	Status    uint16
-	Method    ingestor.HTTPMethod
+	Method    accesslog.HTTPMethod
 	Bytes     uint32
 	TimeUnix  int64
 	URI       string
 	UserAgent string
 }
 
-func toReqKey(r ingestor.Request) reqKey {
+func toReqKey(r accesslog.Request) reqKey {
 	return reqKey{
 		IP:        r.IPUint32,
 		Status:    r.Status,
@@ -146,7 +146,7 @@ func sortReqKeys(ks []reqKey) {
 
 // parseConcurrentFull drives the concurrent path directly with an overridden
 // chunkSize so the >=500MB gate is bypassed and small files produce many chunks.
-func parseConcurrentFull(t *testing.T, pp *Parser, path string, chunkSize int64) []ingestor.Request {
+func parseConcurrentFull(t *testing.T, pp *Parser, path string, chunkSize int64) []accesslog.Request {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
@@ -185,7 +185,7 @@ func parseConcurrentIPs(t *testing.T, pp *Parser, path string, chunkSize int64) 
 // parseStreamingFull drives the streaming full-Request path. The streaming
 // helpers now take the already-open *os.File and its size (so ParseFile opens
 // the file only once), so the test opens/stats/closes here.
-func parseStreamingFull(t *testing.T, pp *Parser, path string) []ingestor.Request {
+func parseStreamingFull(t *testing.T, pp *Parser, path string) []accesslog.Request {
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {

@@ -3,7 +3,7 @@ package logparser
 import (
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/testutil"
 )
 
@@ -108,11 +108,11 @@ func BenchmarkParseLineIsolated(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	var req ingestor.Request
+	var req accesslog.Request
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		req = ingestor.Request{}
+		req = accesslog.Request{}
 		_ = cf.parseUsingCompiledFormatOpt(benchLine, &req, true, true)
 	}
 	ipSink = req.IPUint32
@@ -149,11 +149,11 @@ func BenchmarkParseLine_IPLast(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	var req ingestor.Request
+	var req accesslog.Request
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		req = ingestor.Request{}
+		req = accesslog.Request{}
 		_ = cf.parseUsingCompiledFormatOpt(benchLine, &req, false, false)
 	}
 	ipSink = req.IPUint32

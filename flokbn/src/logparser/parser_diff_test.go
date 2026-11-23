@@ -7,7 +7,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/testutil"
 )
 
@@ -240,10 +240,10 @@ func TestDiffExtractIPOnly(t *testing.T) {
 			// Some format/line combos may be invalid formats; skip those.
 			t.Fatalf("compileFormat(%q): %v", format, err)
 		}
-		var req ingestor.Request
+		var req accesslog.Request
 		for _, line := range ls {
 			b := []byte(line)
-			req = ingestor.Request{}
+			req = accesslog.Request{}
 			_ = cf.parseUsingCompiledFormatOpt(b, &req, true, true)
 			want := req.IPUint32
 			got := cf.extractIPOnly(b)

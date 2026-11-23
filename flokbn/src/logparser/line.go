@@ -4,7 +4,7 @@ import (
 	"errors"
 	"unsafe"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // DefaultLiveLogFormat is the format live mode uses when no logFormat is
@@ -67,8 +67,8 @@ func (lp *LineParser) Format() string {
 //
 // URI and UserAgent are substrings of line: they share its memory and keep it
 // reachable for as long as the Request lives. ParseLine does not allocate.
-func (lp *LineParser) ParseLine(line string, req *ingestor.Request) error {
-	*req = ingestor.Request{}
+func (lp *LineParser) ParseLine(line string, req *accesslog.Request) error {
+	*req = accesslog.Request{}
 	if len(line) == 0 {
 		return ErrInvalidIP
 	}

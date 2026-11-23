@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // TestParseIPv4_RequiresWellFormedOctets: every octet needs one to three
@@ -46,7 +46,7 @@ func TestParseIPv4_RequiresWellFormedOctets(t *testing.T) {
 			want = ipStringToUint32(tt.want)
 		}
 		if got != want {
-			t.Errorf("parseIPv4ToUint32(%q) = %s, want %s", tt.in, ingestor.Uint32ToIPString(got), ingestor.Uint32ToIPString(want))
+			t.Errorf("parseIPv4ToUint32(%q) = %s, want %s", tt.in, accesslog.Uint32ToIPString(got), accesslog.Uint32ToIPString(want))
 		}
 	}
 }

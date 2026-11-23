@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 func mustLineParser(t testing.TB, format string) *LineParser {
@@ -24,7 +24,7 @@ func TestLineParser_DefaultLiveFormat(t *testing.T) {
 	}
 
 	line := `192.168.1.100 - frank [12/Mar/2024:15:04:05 -0700] "POST /api/items?page=2 HTTP/1.1" 201 5123 "https://example.com/a b" "Mozilla/5.0 (X11; Linux x86_64)"`
-	var req ingestor.Request
+	var req accesslog.Request
 	if err := lp.ParseLine(line, &req); err != nil {
 		t.Fatalf("ParseLine: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestLineParser_DefaultLiveFormat(t *testing.T) {
 	if want := time.Date(2024, 3, 12, 15, 4, 5, 0, time.FixedZone("", -7*3600)); !req.Timestamp.Equal(want) {
 		t.Errorf("Timestamp = %v, want %v", req.Timestamp, want)
 	}
-	if req.Method != ingestor.POST || req.URI != "/api/items?page=2" || req.Status != 201 || req.Bytes != 5123 {
+	if req.Method != accesslog.POST || req.URI != "/api/items?page=2" || req.Status != 201 || req.Bytes != 5123 {
 		t.Errorf("request fields misparsed: %+v", req)
 	}
 	if req.UserAgent != "Mozilla/5.0 (X11; Linux x86_64)" {
@@ -84,14 +84,14 @@ func TestLineParser_CustomFormats(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			lp := mustLineParser(t, tc.format)
-			var req ingestor.Request
+			var req accesslog.Request
 			if err := lp.ParseLine(tc.line, &req); err != nil {
 				t.Fatalf("ParseLine: %v", err)
 			}
 			if req.IPUint32 != tc.wantIP || req.URI != tc.wantURI || req.UserAgent != tc.wantUA {
 				t.Errorf("got IP=%s URI=%q UA=%q, want IP=%s URI=%q UA=%q",
-					ingestor.Uint32ToIPString(req.IPUint32), req.URI, req.UserAgent,
-					ingestor.Uint32ToIPString(tc.wantIP), tc.wantURI, tc.wantUA)
+					accesslog.Uint32ToIPString(req.IPUint32), req.URI, req.UserAgent,
+					accesslog.Uint32ToIPString(tc.wantIP), tc.wantURI, tc.wantUA)
 			}
 		})
 	}
@@ -119,7 +119,7 @@ func TestLineParser_Rejects(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var req ingestor.Request
+			var req accesslog.Request
 			if err := lp.ParseLine(tc.line, &req); !errors.Is(err, tc.want) {
 				t.Errorf("ParseLine(%q) = %v, want %v", tc.line, err, tc.want)
 			}
@@ -135,7 +135,7 @@ func TestLineParser_Rejects(t *testing.T) {
 // one; a stale timestamp would also defeat the invalid-timestamp check.
 func TestLineParser_OverwritesRequest(t *testing.T) {
 	lp := mustLineParser(t, DefaultLiveLogFormat)
-	var req ingestor.Request
+	var req accesslog.Request
 	full := `1.2.3.4 - - [12/Mar/2024:15:04:05 +0000] "GET /first HTTP/1.1" 200 10 "-" "FirstUA"`
 	if err := lp.ParseLine(full, &req); err != nil {
 		t.Fatalf("ParseLine: %v", err)
@@ -156,7 +156,7 @@ func TestLineParser_OverwritesRequest(t *testing.T) {
 
 func TestLineParser_Stats(t *testing.T) {
 	lp := mustLineParser(t, DefaultLiveLogFormat)
-	var req ingestor.Request
+	var req accesslog.Request
 	for _, line := range []string{
 		`1.2.3.4 - - [12/Mar/2024:15:04:05 +0000] "GET / HTTP/1.1" 200 10 "-" "UA"`,
 		`1.2.3.4 - - [12/Mar/2024:15:04:05 +0000] "GET / HTTP/1.1" oops 10 "-" "UA"`,
@@ -180,7 +180,7 @@ func TestLineParser_DoesNotAllocate(t *testing.T) {
 		`2001:db8::1 - - [12/Mar/2024:15:04:05 +0000] "GET / HTTP/1.1" 200 1 "-" "UA"`,
 		`1.2.3.4 - - [badtime] "GET / HTTP/1.1" 200 1 "-" "UA"`,
 	}
-	var req ingestor.Request
+	var req accesslog.Request
 	for _, line := range lines {
 		_ = lp.ParseLine(line, &req) // warm the zone-offset cache
 	}
@@ -197,7 +197,7 @@ func TestLineParser_DoesNotAllocate(t *testing.T) {
 func BenchmarkLineParser(b *testing.B) {
 	lp := mustLineParser(b, DefaultLiveLogFormat)
 	line := `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /api/users HTTP/1.1" 200 1024 "https://example.com/" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"`
-	var req ingestor.Request
+	var req accesslog.Request
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		if err := lp.ParseLine(line, &req); err != nil {

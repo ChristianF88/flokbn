@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // legacyDefaultLogFormat is the default format before the referer slot was
@@ -35,7 +35,7 @@ func TestSkipField_QuotedValueWithSpaces(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := ingestor.Uint32ToIPString(req.IPUint32); got != realIP {
+			if got := accesslog.Uint32ToIPString(req.IPUint32); got != realIP {
 				t.Errorf("full parse: IP = %s, want %s (the trailing %%h field, not the User-Agent)", got, realIP)
 			}
 			if req.UserAgent != "8.8.8.7" {
@@ -44,7 +44,7 @@ func TestSkipField_QuotedValueWithSpaces(t *testing.T) {
 			if req.Status != 200 || req.Bytes != 123 {
 				t.Errorf("status/bytes = %d/%d, want 200/123", req.Status, req.Bytes)
 			}
-			if got := ingestor.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != realIP {
+			if got := accesslog.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != realIP {
 				t.Errorf("IP-only parse: IP = %s, want %s", got, realIP)
 			}
 		})
@@ -77,7 +77,7 @@ func TestSkipField_QuotedValueWithSpaces_File(t *testing.T) {
 		want := ipStringToUint32("203.0.113.9")
 		for _, ip := range ips {
 			if ip != want {
-				t.Fatalf("format %q: parsed IP %s, want only 203.0.113.9", format, ingestor.Uint32ToIPString(ip))
+				t.Fatalf("format %q: parsed IP %s, want only 203.0.113.9", format, accesslog.Uint32ToIPString(ip))
 			}
 		}
 	}
@@ -89,7 +89,7 @@ func TestAutoQuote_AnyField(t *testing.T) {
 	t.Run("unquoted %h slot, quoted value", func(t *testing.T) {
 		p := mustNewParser(t, `%^ %h %s`)
 		req, _ := parseLineForTest(p, []byte(`"a b" "192.0.2.7" 404`))
-		if got := ingestor.Uint32ToIPString(req.IPUint32); got != "192.0.2.7" {
+		if got := accesslog.Uint32ToIPString(req.IPUint32); got != "192.0.2.7" {
 			t.Errorf("IP = %s, want 192.0.2.7", got)
 		}
 		if req.Status != 404 {
@@ -100,7 +100,7 @@ func TestAutoQuote_AnyField(t *testing.T) {
 	t.Run("unquoted %r slot, quoted request line", func(t *testing.T) {
 		p := mustNewParser(t, `%h %r %s`)
 		req, _ := parseLineForTest(p, []byte(`192.0.2.7 "POST /login HTTP/1.1" 401`))
-		if req.Method != ingestor.POST || req.URI != "/login" || req.Status != 401 {
+		if req.Method != accesslog.POST || req.URI != "/login" || req.Status != 401 {
 			t.Errorf("method/URI/status = %v/%q/%d, want POST//login/401", req.Method, req.URI, req.Status)
 		}
 	})
@@ -108,7 +108,7 @@ func TestAutoQuote_AnyField(t *testing.T) {
 	t.Run("escaped quote inside an auto-quoted skip", func(t *testing.T) {
 		p := mustNewParser(t, `%^ %h`)
 		line := []byte(`"a \" b" 192.0.2.7`)
-		if got := ingestor.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != "192.0.2.7" {
+		if got := accesslog.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != "192.0.2.7" {
 			t.Errorf("IP = %s, want 192.0.2.7", got)
 		}
 	})
@@ -117,7 +117,7 @@ func TestAutoQuote_AnyField(t *testing.T) {
 		p := mustNewParser(t, DefaultLogFormat)
 		line := []byte(`10.0.0.1 - - [23/Nov/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 123 - "curl/8" "203.0.113.9"`)
 		req, _ := parseLineForTest(p, line)
-		if got := ingestor.Uint32ToIPString(req.IPUint32); got != "203.0.113.9" {
+		if got := accesslog.Uint32ToIPString(req.IPUint32); got != "203.0.113.9" {
 			t.Errorf("IP = %s, want 203.0.113.9", got)
 		}
 		if req.UserAgent != "curl/8" {
@@ -300,13 +300,13 @@ func TestDiffFieldWalk_AgainstReference(t *testing.T) {
 
 			if got := cf.extractIPOnly(line); got != wantIP {
 				t.Fatalf("format %q line %q: extractIPOnly = %s, reference = %s",
-					format, line, ingestor.Uint32ToIPString(got), ingestor.Uint32ToIPString(wantIP))
+					format, line, accesslog.Uint32ToIPString(got), accesslog.Uint32ToIPString(wantIP))
 			}
-			var req ingestor.Request
+			var req accesslog.Request
 			_ = cf.parseUsingCompiledFormatOpt(line, &req, false, false)
 			if req.IPUint32 != wantIP {
 				t.Fatalf("format %q line %q: full parse IP = %s, reference = %s",
-					format, line, ingestor.Uint32ToIPString(req.IPUint32), ingestor.Uint32ToIPString(wantIP))
+					format, line, accesslog.Uint32ToIPString(req.IPUint32), accesslog.Uint32ToIPString(wantIP))
 			}
 			if checkUA && req.UserAgent != wantUA {
 				t.Fatalf("format %q line %q: UserAgent = %q, reference = %q", format, line, req.UserAgent, wantUA)

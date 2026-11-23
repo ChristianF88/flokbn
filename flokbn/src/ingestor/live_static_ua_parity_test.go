@@ -1,31 +1,29 @@
-package logparser
+package ingestor
 
 import (
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/logparser"
 )
 
 // TestLiveStaticUserAgentParity is the AUDIT-08 cross-package parity guard.
 //
-// The live ingestor (ingestor.ParseEventForTest -> parseEvent) and the static
-// compiled-format parser must extract the IDENTICAL UserAgent for the same log
-// line, including Apache-escaped quotes (`\"`) in the request line and referer.
-// The static parser skips backslash-escaped quotes via scanQuotedClose; the live
-// parser duplicates that logic in scanQuotedCloseStr (ingestor is a leaf package
-// and logparser imports it, so ingestor cannot import logparser - import cycle).
-// This test lives in logparser because only here can BOTH parsers be invoked.
+// The live ingestor (parseLine) and the static compiled-format parser must
+// extract the IDENTICAL UserAgent for the same log line, including
+// Apache-escaped quotes (`\"`) in the request line and referer. The static
+// parser skips backslash-escaped quotes via scanQuotedClose; the live parser
+// duplicates that logic in scanQuotedCloseStr.
 //
-// The static format mirrors the live wire shape that ParseEventForTest assumes:
+// The static format mirrors the live wire shape that parseLine assumes:
 // IP first, timestamp in brackets, quoted request line, status, bytes, quoted
 // referer (skipped), quoted user-agent. The referer is a QUOTED skip field
 // (`"%^"`) so the static parser scans it escape-aware too - exactly what the
 // live walk now does.
 func TestLiveStaticUserAgentParity(t *testing.T) {
 	const format = `%h %^ %^ [%t] "%r" %s %b "%^" "%u"`
-	cf, err := compileFormat(format)
+	lp, err := logparser.NewLineParser(format)
 	if err != nil {
-		t.Fatalf("compileFormat(%q): %v", format, err)
+		t.Fatalf("NewLineParser(%q): %v", format, err)
 	}
 
 	cases := []struct {
@@ -57,14 +55,14 @@ func TestLiveStaticUserAgentParity(t *testing.T) {
 	for _, tc := range cases {
 		line := tc.line
 		// Static extraction (strings NOT skipped so UserAgent is populated).
-		var staticReq ingestor.Request
-		if err := cf.parseUsingCompiledFormatOpt([]byte(line), &staticReq, false, false); err != nil {
+		var staticReq Request
+		if err := lp.ParseLine(line, &staticReq); err != nil {
 			t.Fatalf("static parse %q: %v", line, err)
 		}
 
 		// Live extraction.
-		liveReq, lerr := ingestor.ParseEventForTest(line)
-		if lerr != nil {
+		var liveReq Request
+		if _, lerr := parseLine(line, &liveReq); lerr != nil {
 			t.Fatalf("live parse %q: %v", line, lerr)
 		}
 

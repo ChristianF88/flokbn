@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/testutil"
 )
 
@@ -100,7 +100,7 @@ func BenchmarkParseLineReuseOpt(b *testing.B) {
 	b.Run("FreshRequest", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			req := &ingestor.Request{}
+			req := &accesslog.Request{}
 			if err := parser.compiled.parseLineReuseOpt(line, req, false, false); err != nil {
 				b.Fatal(err)
 			}
@@ -109,7 +109,7 @@ func BenchmarkParseLineReuseOpt(b *testing.B) {
 
 	b.Run("ReusedRequest", func(b *testing.B) {
 		b.ReportAllocs()
-		req := &ingestor.Request{}
+		req := &accesslog.Request{}
 		for i := 0; i < b.N; i++ {
 			if err := parser.compiled.parseLineReuseOpt(line, req, false, false); err != nil {
 				b.Fatal(err)
@@ -119,7 +119,7 @@ func BenchmarkParseLineReuseOpt(b *testing.B) {
 
 	b.Run("ReusedRequest_SkipStrings", func(b *testing.B) {
 		b.ReportAllocs()
-		req := &ingestor.Request{}
+		req := &accesslog.Request{}
 		for i := 0; i < b.N; i++ {
 			if err := parser.compiled.parseLineReuseOpt(line, req, true, false); err != nil {
 				b.Fatal(err)
