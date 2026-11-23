@@ -249,27 +249,9 @@ func parseLine(msg string, out *Request) (malformed int, err error) {
 	out.IPUint32 = binary.BigEndian.Uint32(ip4)
 
 	// 2. Extract timestamp
-	start := strings.IndexByte(msg, '[')
-	end := strings.IndexByte(msg, ']')
-	if start < 0 || end <= start {
-		return 0, errors.New("invalid timestamp format")
-	}
-	field := msg[start+1 : end]
-	t, err := time.Parse("02/Jan/2006:15:04:05 -0700", field)
+	t, end, err := locateTimestamp(msg, spaceIdx)
 	if err != nil {
-		// Offset-less Common/Apache-Log field (e.g. "06/Jul/2025:19:57:26",
-		// 20 bytes): treat the wall-clock as UTC, mirroring the static parser's
-		// >=26-byte gate (parser.go parseTimestamp). A zone-less layout returns a
-		// time located in time.UTC, byte-identical to static's time.Date(...,
-		// time.UTC) for the same wall-clock - restoring live<->static parity
-		// (AUDIT-07). The offset path is tried first, so well-formed +HHMM lines
-		// do no extra work and incur no extra allocations; the fallback runs only
-		// on the error path. Genuinely malformed brackets (e.g. "badtime") fail
-		// both layouts and are still rejected.
-		t, err = time.Parse("02/Jan/2006:15:04:05", field)
-		if err != nil {
-			return 0, err
-		}
+		return 0, err
 	}
 	out.Timestamp = t
 
@@ -278,7 +260,7 @@ func parseLine(msg string, out *Request) (malformed int, err error) {
 	// This matches the static parser (parser.go scanQuotedClose) so live and
 	// static align on the same byte offsets - and therefore extract the same
 	// Method/URI/status/bytes/UserAgent - for adversary-controlled escaped quotes.
-	start = strings.IndexByte(msg[end:], '"')
+	start := strings.IndexByte(msg[end:], '"')
 	if start == -1 {
 		return 0, errors.New("missing request start quote")
 	}
@@ -354,6 +336,66 @@ func parseLine(msg string, out *Request) (malformed int, err error) {
 	}
 
 	return malformed, nil
+}
+
+// locateTimestamp finds and parses the bracketed timestamp of a log line.
+// ipEnd is the index of the space that ends the client-IP token. It returns
+// the time and the index of the closing ']'.
+//
+// The timestamp is located by POSITION, not by content: in the layout live
+// mode reads (`%h ident user [time] "request" ...`) it is the fourth
+// space-separated field. Searching for the first '[' anywhere instead let a
+// bracket in the ident or user field (client-controlled via HTTP basic auth)
+// be taken for the timestamp, which dropped the event. Lines that do not have
+// the timestamp in fourth position (e.g. no ident/user fields) fall back to
+// the first bracketed field after the IP, as before.
+func locateTimestamp(msg string, ipEnd int) (time.Time, int, error) {
+	pos := ipEnd + 1
+	for i := 0; i < 2 && pos >= 0; i++ {
+		if sp := strings.IndexByte(msg[pos:], ' '); sp >= 0 {
+			pos += sp + 1
+		} else {
+			pos = -1
+		}
+	}
+	if pos >= 0 && pos < len(msg) && msg[pos] == '[' {
+		if t, end, err := parseBracketTime(msg, pos); err == nil {
+			return t, end, nil
+		}
+	}
+	first := strings.IndexByte(msg[ipEnd:], '[')
+	if first < 0 {
+		return time.Time{}, 0, errors.New("invalid timestamp format")
+	}
+	return parseBracketTime(msg, ipEnd+first)
+}
+
+// parseBracketTime parses the timestamp whose opening '[' is at msg[open] and
+// returns it with the index of the closing ']'.
+func parseBracketTime(msg string, open int) (time.Time, int, error) {
+	n := strings.IndexByte(msg[open:], ']')
+	if n < 0 {
+		return time.Time{}, 0, errors.New("invalid timestamp format")
+	}
+	end := open + n
+	field := msg[open+1 : end]
+	t, err := time.Parse("02/Jan/2006:15:04:05 -0700", field)
+	if err != nil {
+		// Offset-less Common/Apache-Log field (e.g. "06/Jul/2025:19:57:26",
+		// 20 bytes): treat the wall-clock as UTC, mirroring the static parser's
+		// >=26-byte gate (parser.go parseTimestamp). A zone-less layout returns a
+		// time located in time.UTC, byte-identical to static's time.Date(...,
+		// time.UTC) for the same wall-clock - restoring live<->static parity
+		// (AUDIT-07). The offset path is tried first, so well-formed +HHMM lines
+		// do no extra work and incur no extra allocations; the fallback runs only
+		// on the error path. Genuinely malformed brackets (e.g. "badtime") fail
+		// both layouts and are still rejected.
+		t, err = time.Parse("02/Jan/2006:15:04:05", field)
+		if err != nil {
+			return time.Time{}, 0, err
+		}
+	}
+	return t, end, nil
 }
 
 // closeQuote returns the index of the closing quote of a quoted field whose
