@@ -841,27 +841,17 @@ func parseClusterArgSetsFromTOML(m map[string]any, section string, diags *Config
 			hadError = true
 			continue
 		}
-		minDepth := uint32(argSet[1])
-		maxDepth := uint32(argSet[2])
-		// 32 is the IPv4 bit width ceiling. Mirror the CLI REJECT
-		// (ParseClusterArgSetsFromStrings) so an invalid set never reaches
-		// collectCIDRsNode and the positional useForJail alignment is preserved.
-		if minDepth > maxDepth {
-			diags.AddRaw(fmt.Sprintf("[%s] clusterArgSets row %d: minDepth (%d) must be <= maxDepth (%d)", section, i, minDepth, maxDepth))
+		// Range/integrality rules live in validateClusterArgValues, shared with
+		// the CLI path (ParseClusterArgSetsFromStrings), so an invalid set never
+		// reaches collectCIDRsNode and the positional useForJail alignment is
+		// preserved. One diagnostic per rejected row.
+		set, verr := validateClusterArgValues(argSet[0], argSet[1], argSet[2], argSet[3])
+		if verr != nil {
+			diags.AddRaw(fmt.Sprintf("[%s] clusterArgSets row %d: %s", section, i, verr.Error()))
 			hadError = true
 			continue
 		}
-		if maxDepth > 32 {
-			diags.AddRaw(fmt.Sprintf("[%s] clusterArgSets row %d: maxDepth (%d) must be <= 32", section, i, maxDepth))
-			hadError = true
-			continue
-		}
-		sets = append(sets, ClusterArgSet{
-			MinClusterSize:       uint32(argSet[0]),
-			MinDepth:             minDepth,
-			MaxDepth:             maxDepth,
-			MeanSubnetDifference: argSet[3],
-		})
+		sets = append(sets, set)
 	}
 	return sets, hadError, nil
 }
@@ -1434,18 +1424,13 @@ func ParseClusterArgSetsFromStrings(args []string) ([]ClusterArgSet, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid meanSubnetDifference %q: %w", args[i+3], err)
 		}
-		if minDepth > maxDepth {
-			return nil, fmt.Errorf("clusterArgSets set %d: minDepth (%d) must be <= maxDepth (%d)", i/4, uint32(minDepth), uint32(maxDepth))
+		// Same range/integrality rules as the TOML path (see
+		// validateClusterArgValues).
+		set, err := validateClusterArgValues(minClusterSize, minDepth, maxDepth, meanSubnetDiff)
+		if err != nil {
+			return nil, fmt.Errorf("clusterArgSets set %d: %w", i/4, err)
 		}
-		if maxDepth > 32 {
-			return nil, fmt.Errorf("clusterArgSets set %d: maxDepth (%d) must be <= 32", i/4, uint32(maxDepth))
-		}
-		sets = append(sets, ClusterArgSet{
-			MinClusterSize:       uint32(minClusterSize),
-			MinDepth:             uint32(minDepth),
-			MaxDepth:             uint32(maxDepth),
-			MeanSubnetDifference: meanSubnetDiff,
-		})
+		sets = append(sets, set)
 	}
 	return sets, nil
 }
