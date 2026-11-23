@@ -118,6 +118,10 @@ type SlidingTrieConfig struct {
 	// CFG-02 collect-all guard flags (see TrieConfig).
 	clusterArgSetsHadError bool
 	useForJailHadError     bool
+
+	// ignoredKeys lists the keys present in this [live.<name>] table that are
+	// accepted but have no effect in live mode (see Config.LiveWarnings).
+	ignoredKeys []string
 }
 
 type StaticConfig struct {
@@ -452,12 +456,12 @@ func (c *Config) validateJailFile(diags *ConfigDiagnostics) {
 func validateTrieTimestamps(diags *ConfigDiagnostics, section string,
 	startRaw, endRaw string, start, end *time.Time, startHasOffset, endHasOffset bool) {
 
-	// Format: raw captured (non-empty) but never parsed => RFC3339 failure.
+	// Format: raw captured (non-empty) but never parsed => no accepted layout matched.
 	if startRaw != "" && start == nil {
-		diags.Add(section, "startTime", startRaw, "RFC3339 (e.g. 2025-01-01T00:00:00Z)", nil)
+		diags.Add(section, "startTime", startRaw, TimeBoundFormats, nil)
 	}
 	if endRaw != "" && end == nil {
-		diags.Add(section, "endTime", endRaw, "RFC3339 (e.g. 2025-01-01T00:00:00Z)", nil)
+		diags.Add(section, "endTime", endRaw, TimeBoundFormats, nil)
 	}
 	// Range: only when both bounds parsed. The offset-equality gate matches
 	// makeTimeBounds (URGENT-09): a zone-less wall-clock bound and an
@@ -940,14 +944,14 @@ func parseUseForJail(m map[string]any, section string, diags *ConfigDiagnostics)
 	return result, hadError, nil
 }
 
-// parseTimeBound reads an RFC3339 timestamp bound (startTime/endTime) from a
-// trie TOML map. A present-but-non-string value is a hard fail-fast (structural
-// error); an empty or absent value yields the zero result, accepted as before.
-// A non-empty string is returned as raw and, when it parses, as a non-nil
-// instant with hasOffset=true (RFC3339 always carries a zone designator;
-// URGENT-09). The raw literal is returned even on parse failure so Validate can
-// echo the operator's text. Shared by both trie parsers so the static and
-// sliding bound paths cannot drift.
+// parseTimeBound reads a timestamp bound (startTime/endTime) from a trie TOML
+// map. A present-but-non-string value is a hard fail-fast (structural error);
+// an empty or absent value yields the zero result, accepted as before. A
+// non-empty string is returned as raw and, when ParseTimeBound accepts it, as a
+// non-nil time with hasOffset reporting whether it carried an explicit zone
+// offset (always true for RFC3339; URGENT-09). The raw literal is returned even
+// on parse failure so Validate can echo the operator's text. Shared by both
+// trie parsers so the static and sliding bound paths cannot drift.
 func parseTimeBound(m map[string]any, key string) (raw string, t *time.Time, hasOffset bool, err error) {
 	v, present := m[key]
 	if !present {
@@ -960,8 +964,11 @@ func parseTimeBound(m map[string]any, key string) (raw string, t *time.Time, has
 	if s == "" {
 		return "", nil, false, nil
 	}
-	if parsed, perr := time.Parse(time.RFC3339, s); perr == nil {
-		return s, &parsed, true, nil
+	// ParseTimeBound is shared with the --startTime/--endTime flags, so the
+	// TOML keys accept the same syntaxes: RFC3339 (always an explicit offset)
+	// and the short zone-less / "±HHMM" forms.
+	if parsed, offset, perr := ParseTimeBound(s); perr == nil {
+		return s, &parsed, offset, nil
 	}
 	return s, nil, false, nil
 }
@@ -1085,12 +1092,22 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 		return nil, err
 	}
 	stc := &SlidingTrieConfig{
-		UserAgentRegex:         uaRegex,
-		EndpointRegex:          epRegex,
+		UserAgentRegex: uaRegex,
+		EndpointRegex:  epRegex,
+		// Same default as the --sleepBetweenIterations flag; overwritten below
+		// when the key is present (an explicit 0 is honored).
+		SleepBetweenIterations: DefaultSleepBetweenIterations,
 		ClusterArgSets:         clusterArgSets,
 		UseForJail:             useForJail,
 		clusterArgSetsHadError: clusterHadError,
 		useForJailHadError:     useForJailHadError,
+	}
+	// Keys that are validated below but never consumed by a sliding trie; the
+	// live command warns about each one (Config.LiveWarnings).
+	for _, key := range ignoredLiveKeys {
+		if _, present := m[key]; present {
+			stc.ignoredKeys = append(stc.ignoredKeys, key)
+		}
 	}
 	if clusterHadError {
 		stc.UseForJail = nil // belt-and-suspenders (see parseTrieConfig)
