@@ -241,18 +241,13 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Graceful shutdown
-	stop := make(chan os.Signal, 1)
+	// Graceful shutdown on the first SIGINT/SIGTERM, forced exit on the second.
+	stop := make(chan os.Signal, 2)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(stop)
-	go func() {
-		select {
-		case <-stop:
-			logger.Info("received shutdown signal")
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	finished := make(chan struct{})
+	defer close(finished)
+	go watchShutdownSignals(stop, finished, cancel, logger, os.Exit)
 
 	stats, err := newStatsServerFromConfig(cfg)
 	if err != nil {
@@ -278,6 +273,29 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// watchShutdownSignals turns the first signal on sig into a graceful shutdown
+// (cancel) and the second into an immediate exit. The handler has to outlive
+// the first signal: signal.Notify stays registered for the whole shutdown, so
+// with nobody reading sig a second Ctrl-C would be swallowed and a stalled
+// shutdown could only be ended with SIGKILL. It returns when finished is
+// closed (the live loop has returned).
+func watchShutdownSignals(sig <-chan os.Signal, finished <-chan struct{}, cancel context.CancelFunc, logger *slog.Logger, exit func(int)) {
+	select {
+	case <-sig:
+	case <-finished:
+		return
+	}
+	logger.Info("received shutdown signal, shutting down (signal again to exit immediately)")
+	cancel()
+
+	select {
+	case <-sig:
+		logger.Error("received second shutdown signal, exiting immediately")
+		exit(1)
+	case <-finished:
+	}
 }
 
 // newStatsServerFromConfig binds the stats listener when [live] statsListen
