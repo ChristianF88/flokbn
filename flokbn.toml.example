@@ -16,7 +16,9 @@
 #################################################################################
 
 [global]
-# REQUIRED: Core jail and ban file configuration
+# Core jail and ban file configuration
+# REQUIRED in live mode. OPTIONAL in static mode: leave both out and static mode
+# only reports its detections; set both to also write a jail and a ban file.
 # These files are used by both static and live modes
 # Keep them in a directory only flokbn can write, never in /tmp or another
 # world-writable location: the ban file feeds your firewall. The directory must
@@ -36,7 +38,7 @@ blacklist = "config_examples/blacklist.txt"              # Optional: IPs/CIDRs a
 # removed from active bans AND from the manual IP blacklist. Do not treat the
 # User-Agent whitelist as access control; for crawlers and monitoring you must
 # never ban, whitelist their published IP ranges instead.
-userAgentWhitelist ="config_examples/ua_whitelist.txt"  # Optional: exact User-Agent strings that whitelist IPs
+userAgentWhitelist = "config_examples/ua_whitelist.txt"  # Optional: exact User-Agent strings that whitelist IPs
 userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-Agent strings that blacklist IPs
 
 # WHITELIST/BLACKLIST BEHAVIOR:
@@ -146,21 +148,26 @@ logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
 # IPv4 CIDRs only - an IPv6 entry aborts the load (IPv4-only tool).
 cidrRanges = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
-# REQUIRED: Clustering configuration
+# Clustering configuration
+# OPTIONAL in static mode (without it the trie only reports parse statistics and
+# cidrRanges counts); REQUIRED for every [live.NAME] window.
 # Each array defines one clustering analysis: [minClusterSize, minDepth, maxDepth, meanSubnetDifference]
-# - minClusterSize: Minimum IPs needed to form a cluster
+# - minClusterSize: Minimum number of REQUESTS (log lines) a range must account for
+#   to be reported. It is a request count, NOT a count of distinct IPs: one IP
+#   sending 1000 requests satisfies minClusterSize = 1000.
 # - minDepth: Minimum subnet depth to consider (e.g., 24 for /24 networks)
 # - maxDepth: Maximum subnet depth to consider (e.g., 32 for individual IPs)
 # - meanSubnetDifference: Threshold for grouping similar subnets
 clusterArgSets = [
-    [1000, 16, 24, 0.2],    # Large clusters: 1000+ IPs, /16 to /24 networks
-    [500, 20, 28, 0.15],    # Medium clusters: 500+ IPs, /20 to /28 networks
-    [100, 24, 32, 0.1]      # Small clusters: 100+ IPs, /24 to /32 (individual IPs)
+    [1000, 16, 24, 0.2],    # Large clusters: 1000+ requests, /16 to /24 networks
+    [500, 20, 28, 0.15],    # Medium clusters: 500+ requests, /20 to /28 networks
+    [100, 24, 32, 0.1]      # Small clusters: 100+ requests, /24 to /32 (individual IPs)
 ]
 
-# REQUIRED: Jail configuration
-# Specify which clustering results should contribute to the jail
-# Must match the number of clusterArgSets entries
+# OPTIONAL: Jail configuration
+# Specify which clustering results should contribute to the jail.
+# Omit useForJail entirely and every set is detected and reported but never
+# jailed. If present, it must have exactly one entry per clusterArgSets row.
 useForJail = [true, true, false]    # Use first two cluster results for jail
 
 [static.trie_2]
@@ -177,9 +184,9 @@ cidrRanges = ["192.168.0.0/16"]          # Report request volume in the 192.168.
 
 # More aggressive clustering for admin endpoints
 clusterArgSets = [
-    [50, 24, 32, 0.05],     # Very sensitive: 50+ IPs, /24 to /32
-    [20, 28, 32, 0.03],     # Highly sensitive: 20+ IPs, /28 to /32
-    [10, 30, 32, 0.02]      # Extremely sensitive: 10+ IPs, /30 to /32
+    [50, 24, 32, 0.05],     # Very sensitive: 50+ requests, /24 to /32
+    [20, 28, 32, 0.03],     # Highly sensitive: 20+ requests, /28 to /32
+    [10, 30, 32, 0.02]      # Extremely sensitive: 10+ requests, /30 to /32
 ]
 
 # All admin endpoint clusters go to jail
@@ -202,9 +209,9 @@ cidrRanges = ["0.0.0.0/0"]
 
 # Moderate clustering for suspicious UAs
 clusterArgSets = [
-    [200, 20, 28, 0.1],     # Medium clusters: 200+ IPs
-    [100, 24, 32, 0.08],    # Small clusters: 100+ IPs
-    [50, 28, 32, 0.05]      # Very small clusters: 50+ IPs
+    [200, 20, 28, 0.1],     # Medium clusters: 200+ requests
+    [100, 24, 32, 0.08],    # Small clusters: 100+ requests
+    [50, 28, 32, 0.05]      # Very small clusters: 50+ requests
 ]
 
 # Use all suspicious UA clusters for jail
@@ -221,6 +228,18 @@ useForJail = [true, true, true]
 [live]
 # REQUIRED: Network configuration (global settings only)
 port = "8080"                           # Port to listen for incoming log streams
+
+# OPTIONAL: TCP read timeout for the log ingestor (duration string, default "5s")
+# readTimeout = "5s"
+
+# OPTIONAL: HTTP endpoints GET /stats (JSON), GET /bans (ban list) and
+# GET /metrics (Prometheus). Off unless set. There is no authentication and
+# /stats returns the whitelist, file paths and detection thresholds, so keep it
+# on loopback or behind an authenticating reverse proxy.
+# statsListen = "127.0.0.1:8666"
+
+# OPTIONAL: include the top-N IPs per window in /stats (default 0 = off)
+# topTalkers = 5
 
 # NOTE: Sliding window parameters are now per-window, not global
 # Each [live.X] section below defines its own sliding window
@@ -245,7 +264,8 @@ clusterArgSets = [
     [100, 24, 32, 0.1]      # Individual IP detection
 ]
 
-# REQUIRED: Real-time jail configuration
+# OPTIONAL: Real-time jail configuration (omit it and nothing from this window
+# is ever jailed; if present, one entry per clusterArgSets row)
 useForJail = [true, true, false]
 
 [live.sliding_trie_2]
@@ -269,7 +289,7 @@ clusterArgSets = [
     [25, 28, 32, 0.03]      # Very sensitive detection
 ]
 
-# REQUIRED: All rapid threat clusters go to jail
+# OPTIONAL: All rapid threat clusters go to jail
 useForJail = [true, true, true]
 
 #################################################################################
