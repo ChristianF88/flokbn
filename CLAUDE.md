@@ -9,7 +9,7 @@ trie, for botnet detection, abuse analysis, and ban-list generation. A 2M-line l
 clusters in ~1s on a workstation. Two modes:
 
 - **`flokbn static`** - batch-analyze a log file. Output: JSON / compact JSON / plain text / interactive TUI.
-- **`flokbn live`** - continuous monitoring. Ingests over the Lumberjack protocol (Filebeat-compatible), keeps a sliding window, escalates detected ranges through a persistent **jail**, and serves HTTP `/stats`, `/bans`, Prometheus `/metrics`.
+- **`flokbn live`** - continuous monitoring. Ingests over the Lumberjack protocol (Filebeat-compatible), keeps a sliding window, escalates detected ranges through a persistent **jail**, and serves HTTP `/stats`, `/bans`, Prometheus `/metrics`. The ingest listener binds `[live] listen` / `--listen` (default `127.0.0.1`); optional TLS / mutual TLS via `tlsCert`, `tlsKey`, `tlsClientCA` (config file only).
 
 **IPv4 only.** IPv6 is deliberately unsupported and rejected loudly at config load.
 
@@ -21,7 +21,7 @@ flokbn/src/          # THE GO MODULE lives here, not at repo root
   cli/               # command defs (urfave/cli v2), api.go orchestration, stats server, generate, synthlog
   config/            # TOML + flag parsing; regexprefilter/ subpkg
   logparser/         # fast multi-worker log parser, format-string compiler
-  ingestor/          # Request type; TCPIngestor (go-lumber server)
+  ingestor/          # Request type; TCPIngestor + own size-limited Lumberjack v2 reader (lumberjack.go)
   trie/              # binary trie, CollectCIDRsNumeric clustering walk
   cidr/              # CIDR merge/subtract, RemoveWhitelisted, UserAgentMatcher
   analysis/          # Static() / StaticWithRequests() - wires parse→trie→cluster→filter
@@ -66,8 +66,9 @@ cd flokbn/src && go test -run TestName ./cidr
 cd e2e && bash e2e_static_test.sh        # non-docker e2e scripts
 ```
 
-Go 1.23. No test dependencies: tests use the standard library `testing` package only
-(go.mod has no testify or go-cmp). ~93 `_test.go` files including
+Go 1.23. Tests use the standard library `testing` package (no testify or go-cmp).
+`github.com/elastic/go-lumber` is in go.mod for tests only: its client drives the
+ingestor and live e2e tests, the server side is our own reader. ~137 `_test.go` files including
 differential fuzz (`cidr/removewhitelisted_diff_test.go`) and invariant tests
 (`jail/whitelist_invariant_test.go`). Real-world benchmarks are env-gated (run manually).
 
@@ -85,7 +86,10 @@ holds a write token, and tests run in the CI job it requires.
   count; depth = CIDR prefix-length search range; threshold = max imbalance between a
   subtree's halves (0.1 = emit a subtree when traffic spreads across it with ≤10%
   imbalance). Multiple sets run in one pass as detection tiers (tight = hot hosts,
-  loose = whole subnets). Static flag: `--clusterArgSets`; live flag: `--clusterArgSet`.
+  loose = whole subnets). Static flag `--clusterArgSets`, live flag `--clusterArgSet`;
+  each command accepts the other spelling as an alias. One flag = one set (repeat the
+  flag). Both surfaces share `validateClusterArgValues` (`config/clusterargs.go`): whole
+  minSize >= 1, whole depths with 0 <= minDepth <= maxDepth <= 32, threshold in [0, 2].
 - **Trie clustering** (`trie.CollectCIDRsNumeric`): DFS walk emitting a node's prefix
   as a `NumericCIDR{IP uint32, PrefixLen uint8}` when balance/size/depth gates pass;
   early-exits to avoid overlapping ranges.
@@ -116,7 +120,16 @@ holds a write token, and tests run in the CI job it requires.
   `fmt.Sprintf`, memory pools for trie nodes, IP-only fast path skips URI/UA parsing
   when no regex filter is set.
 - Log format strings: exactly one `%h`, no duplicate specifiers (except `%^`).
-  Static default format puts `%h` last (`... "%u" "%h"`).
+  Static default (`logparser.DefaultLogFormat`) is
+  `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"`: `%h` last, every quoted slot quoted.
+  Static mode rejects a filter whose field is missing from the format
+  (`config/filter_fields.go`). Live mode ignores `logFormat`: its own parser in
+  `ingestor/` reads the client IP from the first field.
+- Flag/TOML surfaces: aliases `--logFile` (= `--logfile`) and `--cidrRanges`
+  (= `--rangesCidr`); `startTime`/`endTime` use one parser for flags and TOML
+  (`config.ParseTimeBound`: RFC3339 or the short forms); omitted
+  `sleepBetweenIterations` = 10 on both (`config.DefaultSleepBetweenIterations`).
+- Live mode writes jail.json and the ban file only when their content changed.
 - Config mode vs flag mode are mutually exclusive per command. With `--config`, only
   output flags are allowed alongside it (static: `--tui/--compact/--plain`; live: `--logLevel`).
 - `flokbn generate static-demo` writes a self-contained demo (1M-line synthetic
