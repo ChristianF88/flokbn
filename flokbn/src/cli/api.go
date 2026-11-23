@@ -763,7 +763,8 @@ func banListKey(publishBans, publishBlacklist []string) string {
 }
 
 // runHeartbeat keeps live mode honest while no traffic arrives: it expires
-// jail bans, persists the jail when bans flipped inactive, rewrites the ban
+// the sliding windows (refreshing the published detections), expires jail
+// bans, persists the jail when bans flipped inactive, rewrites the ban
 // file only when the published lists changed, and publishes a heartbeat
 // snapshot so /stats keeps advancing. Called from the loop goroutine only.
 func runHeartbeat(
@@ -784,6 +785,32 @@ func runHeartbeat(
 	maxSleepTime int,
 ) {
 	hbStart := time.Now()
+
+	// Expire the sliding windows. Update only runs when a batch arrives, so
+	// without this an idle loop would keep serving the window size, unique
+	// IPs, detections and top talkers of the last busy moment (and hold the
+	// memory). When entries left a window its published clustering result and
+	// top talkers are recomputed for the stats view only; the jail is not
+	// involved, bans are still raised by the iteration path alone.
+	windowExpired := 0
+	for i := range windows {
+		w := &windows[i]
+		queued := len(w.window.IPQueue)
+		w.window.DropOld()
+		evicted := queued - len(w.window.IPQueue)
+		if evicted == 0 {
+			continue
+		}
+		windowExpired += evicted
+		if lastWinClusterStats != nil {
+			// Replaces one element of the loop-owned outer slice; published
+			// snapshots only hold the inner slices, which stay untouched.
+			lastWinClusterStats[i] = clusterStatsForWindow(w)
+		}
+		if statsState != nil {
+			statsState.refreshTopTalkers(cfg, windows, i)
+		}
+	}
 
 	// Expiry only flips bans active -> inactive, so a count delta is an
 	// exact change signal.
@@ -836,6 +863,7 @@ func runHeartbeat(
 		"expired", before-after,
 		"active_bans", len(publishBans),
 		"ban_file_written", wrote,
+		"window_expired", windowExpired,
 	)
 }
 

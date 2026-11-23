@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/ChristianF88/flokbn/config"
@@ -71,7 +72,8 @@ type clusterSetStats struct {
 	UseForJail     bool          `json:"use_for_jail"`
 	LastDurationUS int64         `json:"last_duration_us"`
 	// DetectedNow is the latest clustering result. Heartbeat snapshots
-	// (idle loop, no new traffic) carry the last iteration's result.
+	// (idle loop, no new traffic) carry the last result, recomputed whenever
+	// the heartbeat expired entries from the window.
 	DetectedNow []output.LiveCIDR `json:"detected_now"`
 }
 
@@ -205,11 +207,59 @@ func newClusterSetStats(argSet config.ClusterArgSet, useForJail bool, duration t
 	}
 }
 
+// clusterStatsForWindow re-runs clustering on one window for the published
+// view only (/stats, /metrics). The idle heartbeat calls it after expiring
+// entries, so detections follow the window instead of staying frozen at the
+// last iteration's values. The result never reaches the jail: bans are only
+// ever raised by the iteration path, on real traffic. The returned slice is
+// freshly allocated and owned by the snapshot it is published in.
+func clusterStatsForWindow(w *slidingWindowInstance) []clusterSetStats {
+	sets := make([]clusterSetStats, 0, len(w.config.ClusterArgSets))
+	for i, argSet := range w.config.ClusterArgSets {
+		useForJail := i < len(w.config.UseForJail) && w.config.UseForJail[i]
+
+		start := time.Now()
+		cidrs := w.window.Trie.CollectCIDRs(
+			argSet.MinClusterSize,
+			argSet.MinDepth,
+			argSet.MaxDepth,
+			argSet.MeanSubnetDifference,
+		)
+		duration := time.Since(start)
+
+		var detected []output.LiveCIDR
+		for _, cidrStr := range cidrs {
+			_, ipNet, err := net.ParseCIDR(cidrStr)
+			if err != nil {
+				continue
+			}
+			detected = append(detected, output.LiveCIDR{
+				CIDR:  cidrStr,
+				Count: w.window.Trie.CountInRangeIPNet(ipNet),
+			})
+		}
+		sets = append(sets, newClusterSetStats(argSet, useForJail, duration, detected))
+	}
+	return sets
+}
+
+// refreshTopTalkers recomputes window i's cached top talkers outside the
+// iteration cadence (the idle heartbeat calls it after expiring entries from
+// that window). The slice is replaced wholesale, never mutated in place. A
+// nil cache means top talkers are off or no iteration has run yet.
+func (st *liveStatsState) refreshTopTalkers(cfg *config.Config, windows []slidingWindowInstance, i int) {
+	if st.topTalkers == nil || cfg.Live == nil || cfg.Live.TopTalkers <= 0 {
+		return
+	}
+	st.topTalkers[i] = windows[i].window.TopTalkers(cfg.Live.TopTalkers)
+}
+
 // buildSnapshot assembles the immutable per-iteration snapshot. Called from
 // the loop goroutine only; everything reachable from the returned snapshot is
 // either freshly allocated here, immutable (strings), or never mutated after
 // startup (list CIDR slices). heartbeat snapshots (idle loop) do not count
-// as iterations and reuse the cached top-talker slices.
+// as iterations and reuse the cached top-talker slices (runHeartbeat
+// refreshes the cache itself when it expired window entries).
 func buildSnapshot(
 	st *liveStatsState,
 	ing ingestor.Ingestor,

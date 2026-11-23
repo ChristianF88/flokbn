@@ -75,9 +75,9 @@ func renderMetrics(sn *statsSnapshot) []byte {
 	writeMetric(&b, "flokbn_window_rejected_by_filter_total", "counter",
 		"Requests rejected by window filters since startup.", rejected...)
 	writeMetric(&b, "flokbn_cluster_detected", "gauge",
-		"CIDRs detected by this cluster arg set in the last iteration.", detected...)
+		"CIDRs detected by this cluster arg set in its latest run (iteration, or idle heartbeat after window expiry).", detected...)
 	writeMetric(&b, "flokbn_cluster_duration_seconds", "gauge",
-		"Clustering runtime of this arg set in the last iteration.", clusterDur...)
+		"Clustering runtime of this arg set in its latest run.", clusterDur...)
 
 	writeMetric(&b, "flokbn_jail_active", "gauge",
 		"Active bans in the jail (pre-whitelist truth).",
