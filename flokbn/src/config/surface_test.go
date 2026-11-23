@@ -182,3 +182,43 @@ endTime = "2025-07-07 +0200"
 		}
 	}
 }
+
+// A negative sleepBetweenIterations used to pass validation and then behave
+// like 0 (the loop takes the largest value across windows, starting from 0), so
+// a typo such as -10 silently removed the pause. It is rejected at the barrier,
+// naming the window; an explicit 0 stays valid.
+func TestNegativeSleepBetweenIterationsRejected(t *testing.T) {
+	const want = "sleepBetweenIterations must be >= 0 in [live.w], got -5"
+
+	report := loadAndReport(t, liveWindowPrefix+"sleepBetweenIterations = -5\n", LiveMode)
+	if !strings.Contains(report, want) {
+		t.Errorf("negative sleepBetweenIterations must be rejected with %q, got:\n%s", want, report)
+	}
+
+	for _, ok := range []string{"sleepBetweenIterations = 0\n", "sleepBetweenIterations = 3\n", ""} {
+		report := loadAndReport(t, liveWindowPrefix+ok, LiveMode)
+		if strings.Contains(report, "sleepBetweenIterations") {
+			t.Errorf("%q must stay valid, got:\n%s", ok, report)
+		}
+	}
+
+	// Flags mode builds the window by hand (--sleepBetweenIterations -5).
+	cfg := &Config{
+		Global: &GlobalConfig{JailFile: "jail.json", BanFile: "ban.txt"},
+		Live:   &LiveConfig{Port: "9000"},
+		LiveTries: map[string]*SlidingTrieConfig{"w": {
+			SlidingWindowMaxTime:   time.Hour,
+			SlidingWindowMaxSize:   10,
+			SleepBetweenIterations: -5,
+			ClusterArgSets:         DefaultClusterArgSets(),
+		}},
+	}
+	err := cfg.ValidateLive()
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("ValidateLive() = %v, want an error containing %q", err, want)
+	}
+	cfg.LiveTries["w"].SleepBetweenIterations = 0
+	if err := cfg.ValidateLive(); err != nil {
+		t.Errorf("explicit 0 must stay valid, got %v", err)
+	}
+}
