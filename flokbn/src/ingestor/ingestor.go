@@ -1,18 +1,17 @@
 package ingestor
 
 import (
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	lj "github.com/elastic/go-lumber/lj"
-	srv2 "github.com/elastic/go-lumber/server/v2"
 )
 
 type HTTPMethod uint8
@@ -76,10 +75,13 @@ func (r *Request) GetIPNet() net.IP {
 	return net.IPv4(byte(r.IPUint32>>24), byte(r.IPUint32>>16), byte(r.IPUint32>>8), byte(r.IPUint32))
 }
 
-// --- TCP Ingestor using go-lumber v2 ---
+// --- TCP Ingestor (Lumberjack v2, see lumberjack.go) ---
 
 // Ingestor is the contract the live loop consumes. TCPIngestor is the
 // lumberjack/TCP implementation; FLOKBN-037 will add a file-tailing one.
+//
+// IsClosed may report true while batches are still queued: after it does, a
+// consumer must call ReadBatch until it returns nothing before giving up.
 type Ingestor interface {
 	Accept() error
 	ReadBatch() ([]Request, error)
@@ -93,22 +95,58 @@ type IngestStats struct {
 	QueueDepth           int
 	BatchesTotal         uint64
 	RequestsTotal        uint64
-	ParseErrorsTotal     uint64
+	ParseErrorsTotal     uint64 // events dropped: undecodable, no usable message, or unparseable line
 	MalformedFieldsTotal uint64
 	LastBatchAt          time.Time // zero until the first batch is read
+
+	OpenConnections          int    // client connections open right now
+	ConnectionsTotal         uint64 // connections accepted since start
+	ConnectionsRejectedTotal uint64 // connections closed on accept (connection limit)
+	ProtocolErrorsTotal      uint64 // connections dropped for a protocol or limit violation
 }
 
 var _ Ingestor = (*TCPIngestor)(nil)
 
+// Options configures a TCPIngestor. The zero value is usable.
+type Options struct {
+	// ReadTimeout bounds how long a client may take to deliver one batch
+	// once it has announced it, and how long an ack write may block.
+	// <= 0 selects DefaultReadTimeout.
+	ReadTimeout time.Duration
+	// Limits bounds peer-driven allocations; zero fields select defaults.
+	Limits Limits
+	// TLS, when non-nil, makes the listener speak TLS (set ClientAuth and
+	// ClientCAs on it for mutual TLS).
+	TLS *tls.Config
+	// Logger receives connection lifecycle lines; nil selects slog.Default().
+	Logger *slog.Logger
+}
+
+// DefaultReadTimeout is used when Options.ReadTimeout is unset.
+const DefaultReadTimeout = 30 * time.Second
+
+// eventQueueBatches is the capacity of the batch queue between the
+// connection goroutines and ReadBatch. The queue is additionally bounded in
+// bytes by Limits.MaxQueuedBytes.
+const eventQueueBatches = 1000
+
 type TCPIngestor struct {
 	listener    net.Listener
-	readTimeout time.Duration // for server
-	events      chan *lj.Batch
-	server      *srv2.Server
-	closed      atomic.Bool
-	closeOnce   sync.Once
-	closeErr    error
+	readTimeout time.Duration
+	limits      Limits
+	logger      *slog.Logger
+	events      chan *eventBatch
+	budget      *byteBudget
 
+	lifeMu    sync.Mutex // guards server and closing
+	server    *ljServer
+	closing   bool
+	started   atomic.Bool
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
+
+	conns           connCounters
 	batchesTotal    atomic.Uint64
 	requestsTotal   atomic.Uint64
 	parseErrors     atomic.Uint64
@@ -116,15 +154,35 @@ type TCPIngestor struct {
 	lastBatchUnixNs atomic.Int64
 }
 
+// NewTCPIngestor listens on addr with default limits.
 func NewTCPIngestor(addr string, readTimeout time.Duration) (*TCPIngestor, error) {
+	return NewTCPIngestorWithOptions(addr, Options{ReadTimeout: readTimeout})
+}
+
+// NewTCPIngestorWithOptions listens on addr. Clients are not served until
+// Accept is called.
+func NewTCPIngestorWithOptions(addr string, opts Options) (*TCPIngestor, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
+	if opts.TLS != nil {
+		ln = tls.NewListener(ln, opts.TLS)
+	}
+	if opts.ReadTimeout <= 0 {
+		opts.ReadTimeout = DefaultReadTimeout
+	}
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	limits := opts.Limits.normalized()
 	return &TCPIngestor{
 		listener:    ln,
-		readTimeout: readTimeout,
-		events:      make(chan *lj.Batch, 1000),
+		readTimeout: opts.ReadTimeout,
+		limits:      limits,
+		logger:      opts.Logger,
+		events:      make(chan *eventBatch, eventQueueBatches),
+		budget:      newByteBudget(limits.MaxQueuedBytes),
 	}, nil
 }
 
@@ -134,39 +192,34 @@ func (ing *TCPIngestor) Addr() net.Addr {
 	return ing.listener.Addr()
 }
 
-// Accept starts the lumberjack v2 Server.
+// Accept starts serving Lumberjack clients on the listener. It returns
+// immediately; it does NOT wait for a client. Stats().OpenConnections tells
+// whether one is connected.
+//
+// A batch is acknowledged to its client once it is queued for ReadBatch, not
+// once the live loop has processed it: the loop polls on its own cadence, so
+// holding acks until then would throttle every shipper to one batch per
+// iteration. Batches still queued when the process dies are lost.
 func (ing *TCPIngestor) Accept() error {
-	srv, err := srv2.NewWithListener(
-		ing.listener,
-		srv2.Timeout(ing.readTimeout),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create lumberjack server: %w", err)
+	ing.lifeMu.Lock()
+	defer ing.lifeMu.Unlock()
+	if ing.closing {
+		return errors.New("ingestor is closed")
 	}
-	ing.server = srv
-
-	// Pull batches off ReceiveChan and ack them.
-	go func() {
-		for batch := range ing.server.ReceiveChan() {
-			ing.events <- batch
-			batch.ACK()
-		}
-		ing.closed.Store(true)
-		close(ing.events)
-	}()
-
+	if ing.server != nil {
+		return errors.New("ingestor already accepting")
+	}
+	ing.server = newLJServer(ing.listener, ing.readTimeout, ing.limits, ing.logger,
+		ing.events, ing.budget, &ing.conns)
+	ing.server.start()
+	ing.started.Store(true)
 	return nil
 }
 
-// parseEvent parses one lumberjack event into out. malformed counts
-// non-fatal field corruption (status/bytes kept as zero), mirroring the
-// log-parser's malformed-field accounting.
-func parseEvent(evt map[string]interface{}, out *Request) (malformed int, err error) {
-	msg, ok := evt["message"].(string)
-	if !ok {
-		return 0, errors.New("missing message field")
-	}
-
+// parseLine parses one access-log line (the "message" field of a lumberjack
+// event) into out. malformed counts non-fatal field corruption (status/bytes
+// kept as zero), mirroring the log-parser's malformed-field accounting.
+func parseLine(msg string, out *Request) (malformed int, err error) {
 	// 1. Extract IP
 	spaceIdx := strings.IndexByte(msg, ' ')
 	if spaceIdx == -1 {
@@ -352,35 +405,36 @@ func scanQuotedCloseStr(s string, contentStart, firstQuote int) int {
 	}
 }
 
-// parseEventSafe parses a single event, recovering from any panic in
-// parseEvent so one malformed (untrusted) event can never crash the live-loop
-// goroutine. A recovered panic is surfaced as an error so the caller counts it
-// as a parse error and skips the event (never appended, never zero-valued into
-// output).
-func parseEventSafe(m map[string]interface{}, out *Request) (malformed int, err error) {
+// parseLineSafe parses a single line, recovering from any panic in parseLine
+// so one malformed (untrusted) event can never crash the live-loop goroutine.
+// A recovered panic is surfaced as an error so the caller counts it as a parse
+// error and skips the event (never appended, never zero-valued into output).
+func parseLineSafe(msg string, out *Request) (malformed int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			malformed = 0
-			err = fmt.Errorf("parseEvent panic: %v", r)
+			err = fmt.Errorf("parseLine panic: %v", r)
 		}
 	}()
-	return parseEvent(m, out)
+	return parseLine(msg, out)
 }
 
 // ParseEventForTest parses a single raw log line through the live ingestor's
-// parseEvent and returns the resulting Request. It exists solely so the
+// parseLine and returns the resulting Request. It exists solely so the
 // live<->static UserAgent parity test (logparser/parser_live_ua_parity_test.go)
 // can drive the live parser from a package that ALSO compiles the static format
 // - ingestor is a leaf package that logparser imports, so the parity test cannot
 // live in ingestor (it would have to import logparser, an import cycle). This is
-// a thin wrapper over the unexported parseEvent and is not part of the live data
-// path (ReadBatch uses parseEventSafe directly).
+// a thin wrapper over the unexported parseLine and is not part of the live data
+// path (ReadBatch uses parseLineSafe directly).
 func ParseEventForTest(line string) (Request, error) {
 	var req Request
-	_, err := parseEvent(map[string]interface{}{"message": line}, &req)
+	_, err := parseLine(line, &req)
 	return req, err
 }
 
+// ReadBatch drains every queued batch without blocking and returns the
+// requests parsed from them.
 func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 	var out []Request
 
@@ -390,20 +444,25 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 			if !ok {
 				return out, nil
 			}
+			ing.budget.release(batch.cost)
 			ing.batchesTotal.Add(1)
 			ing.lastBatchUnixNs.Store(time.Now().UnixNano())
-			for _, evt := range batch.Events {
-				if m, ok := evt.(map[string]interface{}); ok {
-					var entry Request
-					if malformed, err := parseEventSafe(m, &entry); err == nil {
-						if malformed > 0 {
-							ing.malformedFields.Add(uint64(malformed))
-						}
-						ing.requestsTotal.Add(1)
-						out = append(out, entry)
-					} else {
-						ing.parseErrors.Add(1)
+			if batch.dropped > 0 {
+				ing.parseErrors.Add(uint64(batch.dropped))
+			}
+			if out == nil {
+				out = make([]Request, 0, len(batch.msgs))
+			}
+			for _, msg := range batch.msgs {
+				var entry Request
+				if malformed, err := parseLineSafe(msg, &entry); err == nil {
+					if malformed > 0 {
+						ing.malformedFields.Add(uint64(malformed))
 					}
+					ing.requestsTotal.Add(1)
+					out = append(out, entry)
+				} else {
+					ing.parseErrors.Add(1)
 				}
 			}
 		default:
@@ -417,11 +476,15 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 // concurrently with ReadBatch.
 func (ing *TCPIngestor) Stats() IngestStats {
 	st := IngestStats{
-		QueueDepth:           len(ing.events),
-		BatchesTotal:         ing.batchesTotal.Load(),
-		RequestsTotal:        ing.requestsTotal.Load(),
-		ParseErrorsTotal:     ing.parseErrors.Load(),
-		MalformedFieldsTotal: ing.malformedFields.Load(),
+		QueueDepth:               len(ing.events),
+		BatchesTotal:             ing.batchesTotal.Load(),
+		RequestsTotal:            ing.requestsTotal.Load(),
+		ParseErrorsTotal:         ing.parseErrors.Load(),
+		MalformedFieldsTotal:     ing.malformedFields.Load(),
+		OpenConnections:          int(ing.conns.open.Load()),
+		ConnectionsTotal:         ing.conns.accepted.Load(),
+		ConnectionsRejectedTotal: ing.conns.rejected.Load(),
+		ProtocolErrorsTotal:      ing.conns.protocolErrors.Load(),
 	}
 	if ns := ing.lastBatchUnixNs.Load(); ns != 0 {
 		st.LastBatchAt = time.Unix(0, ns)
@@ -429,25 +492,33 @@ func (ing *TCPIngestor) Stats() IngestStats {
 	return st
 }
 
+// IsClosed reports whether the ingestor is not (or no longer) accepting
+// clients: before Accept, and once Close has stopped every connection.
+// Batches queued before the close stay readable through ReadBatch.
 func (ing *TCPIngestor) IsClosed() bool {
-	if ing.server == nil {
+	if !ing.started.Load() {
 		return true
 	}
 	return ing.closed.Load()
 }
 
-// Close shuts down the server and listener. It is idempotent: the underlying
-// lumberjack server panics on a second Close, so repeated calls (e.g. a
-// cancellation watcher plus a deferred cleanup) are collapsed into one.
+// Close stops the listener and every open connection, then closes the batch
+// queue. It is idempotent, so repeated calls (e.g. a cancellation watcher plus
+// a deferred cleanup) are collapsed into one.
 func (ing *TCPIngestor) Close() error {
 	ing.closeOnce.Do(func() {
-		// go-lumber's Server.Close() already closes the underlying listener, so
-		// close the server XOR the listener - never both. Closing both stored a
-		// spurious "use of closed network connection" (net.ErrClosed) and
-		// discarded the real server error (URGENT-09).
+		ing.lifeMu.Lock()
+		ing.closing = true
+		srv := ing.server
+		ing.lifeMu.Unlock()
+
 		var err error
-		if ing.server != nil {
-			err = ing.server.Close()
+		if srv != nil {
+			// close waits for every connection goroutine, so nothing can be
+			// sent on events afterwards and closing it is safe.
+			err = srv.close()
+			ing.closed.Store(true)
+			close(ing.events)
 		} else {
 			err = ing.listener.Close()
 		}

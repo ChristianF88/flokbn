@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	lj "github.com/elastic/go-lumber/lj"
 )
 
 func TestParseEvent_MissingMessageField(t *testing.T) {
@@ -73,9 +71,7 @@ func TestParseEvent_RejectsIPv6(t *testing.T) {
 // parse error (the operator-visible reject counter) and never appends it to
 // output or counts it as a successful request.
 func TestReadBatch_RejectsIPv6(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
+	ing := newQueueIngestor(1)
 	ipv6 := `2001:db8::1 - - [12/Mar/2024:15:04:05 -0700] "GET /v6 HTTP/1.1" 200 1 "-" "UA"`
 	valid := `10.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /ok HTTP/1.1" 200 1 "-" "UA"`
 	ing.events <- makeBatch(
@@ -327,9 +323,7 @@ func TestParseEvent_TruncatedAtRequestEndQuote(t *testing.T) {
 // without a status/bytes tail), so it IS included in output and is NOT counted
 // as a parse error.
 func TestReadBatch_SurvivesTruncatedEvent(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
+	ing := newQueueIngestor(1)
 	truncated := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1"`
 	valid := `10.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /ok HTTP/1.1" 200 1 "-" "UA"`
 	ing.events <- makeBatch(
@@ -523,16 +517,8 @@ func BenchmarkParseEvent(b *testing.B) {
 	}
 }
 
-func makeBatch(events ...interface{}) *lj.Batch {
-	return &lj.Batch{
-		Events: events,
-	}
-}
-
 func TestReadBatch_EmptyChannel(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch),
-	}
+	ing := newQueueIngestor(0)
 	// Channel is empty, should return empty slice
 	got, err := ing.ReadBatch()
 	if err != nil {
@@ -544,9 +530,7 @@ func TestReadBatch_EmptyChannel(t *testing.T) {
 }
 
 func TestReadBatch_ClosedChannel(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch),
-	}
+	ing := newQueueIngestor(0)
 	close(ing.events)
 	got, err := ing.ReadBatch()
 	if err != nil {
@@ -558,9 +542,7 @@ func TestReadBatch_ClosedChannel(t *testing.T) {
 }
 
 func TestReadBatch_ValidEvents(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
+	ing := newQueueIngestor(1)
 	log := `127.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /foo HTTP/1.1" 200 123 "-" "TestUA"`
 	evt := map[string]interface{}{"message": log}
 	ing.events <- makeBatch(evt)
@@ -593,9 +575,7 @@ func TestReadBatch_ValidEvents(t *testing.T) {
 }
 
 func TestReadBatch_MultipleEventsAndBatches(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 2),
-	}
+	ing := newQueueIngestor(2)
 	log1 := `10.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "POST /bar HTTP/1.1" 201 10 "-" "UA1"`
 	log2 := `10.0.0.2 - - [12/Mar/2024:15:05:05 -0700] "GET /baz HTTP/1.1" 404 0 "-" "UA2"`
 	evt1 := map[string]interface{}{"message": log1}
@@ -618,9 +598,7 @@ func TestReadBatch_MultipleEventsAndBatches(t *testing.T) {
 }
 
 func TestReadBatch_SkipsInvalidEvents(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
+	ing := newQueueIngestor(1)
 	// First event is invalid (missing message), second is valid
 	evt1 := map[string]interface{}{}
 	log := `127.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /ok HTTP/1.1" 200 1 "-" "UA"`
@@ -638,16 +616,24 @@ func TestReadBatch_SkipsInvalidEvents(t *testing.T) {
 	}
 }
 
-func TestReadBatch_NonMapEventsAreIgnored(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
-	ing.events <- makeBatch("not a map", 123, nil)
+// Events that are not JSON objects carrying a string "message" never become
+// requests. They used to vanish without a trace; each one now counts as a
+// parse error so a misconfigured shipper is visible in the stats.
+func TestReadBatch_NonMapEventsAreCounted(t *testing.T) {
+	ing := newQueueIngestor(1)
+	ing.events <- makeBatch("not a map", 123, nil, []int{1}, map[string]interface{}{"message": 5})
 	got, err := ing.ReadBatch()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 results, got %d", len(got))
+	}
+	st := ing.Stats()
+	if st.ParseErrorsTotal != 5 {
+		t.Errorf("ParseErrorsTotal = %d, want 5 (one per unusable event)", st.ParseErrorsTotal)
+	}
+	if st.RequestsTotal != 0 {
+		t.Errorf("RequestsTotal = %d, want 0", st.RequestsTotal)
 	}
 }
