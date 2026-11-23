@@ -1,6 +1,7 @@
 package trie
 
 import (
+	"math"
 	"math/bits"
 	"net"
 
@@ -445,13 +446,14 @@ func (t *Trie) collectCIDRsNode(node *TrieNode, prefix uint32, depth uint32, res
 			} else {
 				diff = node.Children[1].Count - node.Children[0].Count
 			}
-			// Compare (2000*diff)/node.Count < threshold using cross-multiplication.
-			// Widen both products to uint64: diff, threshold, and node.Count are
-			// uint32, so 2000*diff (max ~2000*2^32) and threshold*node.Count
-			// (max ~2^32*2^32) can overflow uint32 once counts exceed ~2.1M.
-			// uint64 widening keeps the comparison exact (and pure integer math)
+			// Balance test 2*diff/node.Count < meanSubnetDifference, with the
+			// threshold pre-scaled by thresholdScale (see balanceThreshold) and
+			// the division removed by cross-multiplication. Both products are
+			// widened to uint64: diff and node.Count are below 2^32 and
+			// threshold is at most 2*thresholdScale, so each side stays below
+			// 2^32 * 2e6 (about 2^53) - exact, pure integer math, no overflow
 			// for multi-million-request tries.
-			appendCluster = uint64(2000)*uint64(diff) < uint64(threshold)*uint64(node.Count)
+			appendCluster = uint64(2*thresholdScale)*uint64(diff) < uint64(threshold)*uint64(node.Count)
 		}
 	}
 
@@ -468,9 +470,12 @@ func (t *Trie) collectCIDRsNode(node *TrieNode, prefix uint32, depth uint32, res
 		leftCount := node.Children[0].Count
 		rightCount := node.Children[1].Count
 
-		// Recurse into the smaller subtree first for deterministic,
-		// lower-prefix-first result ordering and cache locality; recursion depth
-		// is bounded by trie height (<=32) regardless of child order.
+		// Recurse into the smaller-count subtree first (the left one on a
+		// tie). The result order is therefore deterministic for a given trie
+		// but NOT sorted by prefix: a lighter right half is emitted before a
+		// heavier left half. Callers that need address order must sort
+		// (cidr.MergeIPNets does). Recursion depth is bounded by trie height
+		// (<=32) regardless of child order.
 		// Only process children that meet minimum cluster size requirement
 		if leftCount <= rightCount {
 			if leftCount >= minClusterSize {
@@ -503,6 +508,33 @@ func (t *Trie) collectCIDRsNode(node *TrieNode, prefix uint32, depth uint32, res
 	}
 }
 
+// thresholdScale is the fixed-point scale of the balance threshold used by
+// collectCIDRsNode: meanSubnetDifference is carried as an integer number of
+// millionths so the per-node balance test stays in integer math.
+const thresholdScale = 1_000_000
+
+// balanceThreshold converts meanSubnetDifference to its fixed-point form
+// (millionths, rounded to nearest). It runs once per clustering call.
+//
+// The imbalance 2*diff/count of a node with two children lies in [0, 2), so
+// the input is clamped to [0, 2]: 0 clusters only exactly equal halves, and
+// anything >= 2 clusters every node that has two children. NaN, negative and
+// huge values are clamped BEFORE the float -> integer conversion, which is
+// implementation-defined for out-of-range inputs (the result differs between
+// amd64 and arm64). Rounding (instead of truncating) keeps a decimal literal
+// whose product lands just below the integer, e.g. 1.001*1000 =
+// 1000.9999999999999. For multiples of 0.001 the result is exactly 1000 times
+// the old milli-threshold, so the balance test decides identically.
+func balanceThreshold(meanSubnetDifference float64) uint32 {
+	if !(meanSubnetDifference > 0) { // zero, negative, NaN
+		return 0
+	}
+	if meanSubnetDifference >= 2 {
+		return 2 * thresholdScale
+	}
+	return uint32(math.Round(meanSubnetDifference * thresholdScale))
+}
+
 // prefixToNumericCIDR converts a prefix and depth to numeric CIDR without string allocation
 func prefixToNumericCIDR(prefix uint32, depth uint32) cidr.NumericCIDR {
 	return cidr.NumericCIDR{
@@ -513,29 +545,23 @@ func prefixToNumericCIDR(prefix uint32, depth uint32) cidr.NumericCIDR {
 
 // CollectCIDRsNumeric - Numeric sequential clustering algorithm returning numeric CIDRs
 // Avoids string allocations in hot paths for maximum performance
+//
+// Inputs are clamped defensively (config validation is the first line of
+// defense, this is the last):
+//   - minClusterSize 0 is treated as 1. Every node below the Root has
+//     Count >= 1, so the two differ only at the Root, whose Count is never
+//     incremented (Insert/InsertSorted/BuildSorted leave it at 0 by design). A
+//     minimum of 0 would let that Root pass the size gate and emit 0.0.0.0/0.
+//     With the clamp 0.0.0.0/0 is never emitted, for any input.
+//   - meanSubnetDifference is clamped to [0, 2] (NaN -> 0), see balanceThreshold.
 func (t *Trie) CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth uint32, meanSubnetDifference float64) []cidr.NumericCIDR {
-	// Convert threshold once. Clamp negative inputs first: converting an
-	// out-of-range (negative) float64 to uint32 is implementation-defined in Go
-	// (huge value on amd64, 0 on arm64), so a negative meanSubnetDifference must
-	// deterministically behave like 0.
-	if meanSubnetDifference < 0 {
-		meanSubnetDifference = 0
+	if minClusterSize == 0 {
+		minClusterSize = 1
 	}
-	threshold := uint32(meanSubnetDifference * 1000)
+	threshold := balanceThreshold(meanSubnetDifference)
 
-	// Handle edge cases
-	if t.Root == nil {
-		return []cidr.NumericCIDR{}
-	}
-
-	if t.Root.Children[0] == nil && t.Root.Children[1] == nil {
-		// Require a non-empty root before emitting the /0. Insert/InsertSorted/
-		// BuildSorted never increment Root.Count (left at 0 by design), so on a
-		// completely empty trie this branch would otherwise emit a 0.0.0.0/0
-		// covering zero requests when minClusterSize==0 && minDepth==0.
-		if t.Root.Count > 0 && t.Root.Count >= minClusterSize && 0 >= minDepth {
-			return []cidr.NumericCIDR{{IP: 0, PrefixLen: 0}}
-		}
+	// Empty trie: nothing to cluster.
+	if t.Root == nil || (t.Root.Children[0] == nil && t.Root.Children[1] == nil) {
 		return []cidr.NumericCIDR{}
 	}
 

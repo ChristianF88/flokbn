@@ -139,6 +139,16 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 
 	if len(requests) == 0 {
 		jsonOutput.AddWarning("empty_logfile", "No requests found in logfile", 1)
+		// Nothing to analyse, but the publish step still has work: bans that ran
+		// out since the last run must leave the ban file, and whitelist/blacklist
+		// edits must be picked up. A cancelled (quit) TUI run must not mutate
+		// on-disk jail/ban state.
+		if err := ctx.Err(); err != nil {
+			return jsonOutput, requests, err
+		}
+		if err := publishJailAndBans(cfg, jsonOutput); err != nil {
+			return jsonOutput, requests, err
+		}
 		return jsonOutput, requests, nil
 	}
 
@@ -153,9 +163,21 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 		config *config.TrieConfig
 	}
 
-	// Accumulate User-Agent derived IPs across all tries (thread-safe via triesMutex)
-	globalUserAgentWhitelistIPSet := make(map[string]bool)
-	globalUserAgentBlacklistIPSet := make(map[string]bool)
+	// Accumulate User-Agent derived IPs across all tries (thread-safe via
+	// triesMutex). Each trie contributes its own distinct IPs; the lists are
+	// sorted and de-duplicated once after all tries finished.
+	var globalUserAgentWhitelistIPs, globalUserAgentBlacklistIPs []uint32
+
+	// General.UniqueIPs describes the whole log (distinct client IPs across all
+	// parsed requests), independent of any trie's filters. Counted concurrently
+	// with the trie work; joined right after it.
+	var generalUniqueIPs int
+	var uniqueWG sync.WaitGroup
+	uniqueWG.Add(1)
+	go func() {
+		defer uniqueWG.Done()
+		generalUniqueIPs = countUniqueRequestIPs(requests)
+	}()
 
 	trieWorkChan := make(chan trieWork, len(cfg.StaticTries))
 
@@ -176,12 +198,8 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 				// Thread-safe append to results and merge UA IPs
 				triesMutex.Lock()
 				trieResults = append(trieResults, result)
-				for _, ip := range whitelistIPs {
-					globalUserAgentWhitelistIPSet[ip] = true
-				}
-				for _, ip := range blacklistIPs {
-					globalUserAgentBlacklistIPSet[ip] = true
-				}
+				globalUserAgentWhitelistIPs = append(globalUserAgentWhitelistIPs, whitelistIPs...)
+				globalUserAgentBlacklistIPs = append(globalUserAgentBlacklistIPs, blacklistIPs...)
 				triesMutex.Unlock()
 			}
 		}()
@@ -195,6 +213,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 
 	// Wait for all tries to complete
 	trieWG.Wait()
+	uniqueWG.Wait()
 
 	// Cancellation check after the CPU-bound trie phase, before the jail/ban-file
 	// side effects below. A cancelled (quit) TUI run must not mutate on-disk
@@ -218,35 +237,84 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	// once here; never in the hot loop.
 	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
 
-	// Set General.UniqueIPs to the max across all tries
-	for _, tr := range trieResults {
-		if tr.Stats.UniqueIPs > jsonOutput.General.UniqueIPs {
-			jsonOutput.General.UniqueIPs = tr.Stats.UniqueIPs
-		}
-	}
+	jsonOutput.General.UniqueIPs = generalUniqueIPs
 
-	// Convert global User-Agent IP sets to slices for jail processing
-	for ip := range globalUserAgentWhitelistIPSet {
-		jsonOutput.UserAgentWhitelistIPs = append(jsonOutput.UserAgentWhitelistIPs, ip)
-	}
-	for ip := range globalUserAgentBlacklistIPSet {
-		jsonOutput.UserAgentBlacklistIPs = append(jsonOutput.UserAgentBlacklistIPs, ip)
-	}
+	// Publish the User-Agent derived IPs (also the input of the jail step below)
+	// in a stable order: ascending by address, each IP once.
+	jsonOutput.UserAgentWhitelistIPs = sortedUniqueIPStrings(globalUserAgentWhitelistIPs)
+	jsonOutput.UserAgentBlacklistIPs = sortedUniqueIPStrings(globalUserAgentBlacklistIPs)
 
 	// Process jail with whitelist/blacklist if configured
-	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
-		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
-			// Fail loud: a jail/ban processing failure must not exit 0 with no ban
-			// file. The barrier (Config.Validate) catches an unloadable jail before
-			// this; this propagation is defense-in-depth for the remaining causes
-			// (jail save / ban-file write).
-			jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
-			return jsonOutput, requests, err
-		}
+	if err := publishJailAndBans(cfg, jsonOutput); err != nil {
+		return jsonOutput, requests, err
 	}
 
 	jsonOutput.UpdateDuration(analysisStart)
 	return jsonOutput, requests, nil
+}
+
+// countUniqueRequestIPs returns the number of distinct client IPs across all
+// parsed requests. Zero IPs (invalid/unparseable host field) are not counted,
+// matching the IP-only fast path, whose IP slice never contains them.
+func countUniqueRequestIPs(requests []ingestor.Request) int {
+	ips := make([]uint32, 0, len(requests))
+	for i := range requests {
+		if ip := requests[i].IPUint32; ip != 0 {
+			ips = append(ips, ip)
+		}
+	}
+	iputils.RadixSortUint32(ips)
+	return iputils.CountDistinctSorted(ips)
+}
+
+// sortedUniqueIPStrings sorts ips ascending (in place), drops duplicates and
+// renders the dotted-quad strings. Returns nil for an empty input so the JSON
+// field stays omitted.
+func sortedUniqueIPStrings(ips []uint32) []string {
+	if len(ips) == 0 {
+		return nil
+	}
+	iputils.RadixSortUint32(ips)
+	out := make([]string, 0, iputils.CountDistinctSorted(ips))
+	for i, ip := range ips {
+		if i > 0 && ip == ips[i-1] {
+			continue
+		}
+		out = append(out, ingestor.Uint32ToIPString(ip))
+	}
+	return out
+}
+
+// ipSetToSlice returns the members of set in unspecified order.
+func ipSetToSlice(set map[uint32]struct{}) []uint32 {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]uint32, 0, len(set))
+	for ip := range set {
+		out = append(out, ip)
+	}
+	return out
+}
+
+// publishJailAndBans runs the jail update and ban-file publish step when both a
+// jail file and a ban file are configured; otherwise it is a no-op. Shared by
+// every successful exit of both static entrypoints (including the empty-log
+// exits) so the ban file is refreshed on each run.
+//
+// Fail loud: a jail/ban processing failure must not exit 0 with no ban file.
+// The barrier (Config.Validate) catches an unloadable jail before this; the
+// propagation is defense-in-depth for the remaining causes (jail save /
+// ban-file write).
+func publishJailAndBans(cfg *config.Config, jsonOutput *output.JSONOutput) error {
+	if cfg.Global == nil || cfg.Global.JailFile == "" || cfg.Global.BanFile == "" {
+		return nil
+	}
+	if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
+		jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
+		return err
+	}
+	return nil
 }
 
 // computeGlobalFilters loads the globally-configured whitelists and records
@@ -276,11 +344,13 @@ func computeGlobalFilters(cfg *config.Config) output.GlobalFilters {
 }
 
 // processTrie builds and analyzes a single trie; callers run one goroutine per trie.
-// Returns the trie result along with collected User-Agent whitelist/blacklist IPs.
+// Returns the trie result along with the distinct IPs this trie saw with a
+// whitelisted / blacklisted User-Agent (numeric, unspecified order - the
+// caller merges and sorts them across tries).
 // userAgentMatcher is built once by the caller and shared across all tries (it
 // depends only on global config), so processTrie never rebuilds it per trie.
 func processTrie(trieName string, trieConfig *config.TrieConfig, requests []ingestor.Request,
-	userAgentMatcher *cidr.UserAgentMatcher, jsonOutput *output.JSONOutput) (output.TrieResult, []string, []string) {
+	userAgentMatcher *cidr.UserAgentMatcher, jsonOutput *output.JSONOutput) (output.TrieResult, []uint32, []uint32) {
 
 	insertStart := time.Now()
 
@@ -350,11 +420,10 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	var filteredRequestCount int
 	var ipsToInsertUint32 []uint32
 
-	// User-Agent tracking
-	userAgentWhitelistIPs := make([]string, 0)
-	userAgentBlacklistIPs := make([]string, 0)
-	userAgentWhitelistIPSet := make(map[string]bool)
-	userAgentBlacklistIPSet := make(map[string]bool)
+	// User-Agent tracking: distinct IPs seen with a whitelisted / blacklisted
+	// UA. Keyed by the numeric IP - no per-request string conversion.
+	userAgentWhitelistIPSet := make(map[uint32]struct{})
+	userAgentBlacklistIPSet := make(map[uint32]struct{})
 
 	// Check if we have any filters that require per-request processing
 	// Only consider User-Agent matcher a filter if it actually has patterns
@@ -409,7 +478,6 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 				requests, trieConfig, bounds,
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
-				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
 				&filteredRequestCount, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded); err != nil {
 				jsonOutput.AddError("concurrent_filtering", fmt.Sprintf("Failed to process requests concurrently: %v", err), 1)
 			}
@@ -419,7 +487,6 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 				requests, trieConfig, bounds,
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
-				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
 				&filteredRequestCount, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded)
 		}
 
@@ -437,7 +504,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	if invalidIPCount > 0 {
 		percentage := float64(invalidIPCount) / float64(len(requests)) * 100
 		jsonOutput.AddWarning("invalid_ips_skipped",
-			fmt.Sprintf("%d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", invalidIPCount, percentage), 1)
+			fmt.Sprintf("Trie %q: %d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", trieName, invalidIPCount, percentage), 1)
 	}
 
 	// Set trie stats
@@ -488,7 +555,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	// Clustering (same as original but with parallel trie)
 	processClustering(trieConfig, trieInstance.Trie, jsonOutput, &trieResult)
 
-	return trieResult, userAgentWhitelistIPs, userAgentBlacklistIPs
+	return trieResult, ipSetToSlice(userAgentWhitelistIPSet), ipSetToSlice(userAgentBlacklistIPSet)
 }
 
 // Static runs static analysis from config and returns
@@ -591,6 +658,11 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 
 	if totalRequests == 0 {
 		jsonOutput.AddWarning("empty_logfile", "No requests found in logfile", 1)
+		// Still run the publish step (expired bans, list edits) - see the same
+		// branch in StaticWithRequestsCtx.
+		if err := publishJailAndBans(cfg, jsonOutput); err != nil {
+			return jsonOutput, err
+		}
 		return jsonOutput, nil
 	}
 
@@ -650,24 +722,16 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	// so this only feeds the informational JSON count, never an active filter.
 	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
 
-	// Set General.UniqueIPs to the max across all tries.
-	for _, tr := range trieResults {
-		if tr.Stats.UniqueIPs > jsonOutput.General.UniqueIPs {
-			jsonOutput.General.UniqueIPs = tr.Stats.UniqueIPs
-		}
-	}
+	// General.UniqueIPs is the distinct-IP count of the whole log - here the
+	// same number every (unfiltered) trie reports.
+	jsonOutput.General.UniqueIPs = uniqueIPs
 
 	// No filters => no User-Agent derived IP sets; UserAgentWhitelistIPs /
 	// UserAgentBlacklistIPs stay empty, exactly as the full path produces here.
 
 	// Process jail with whitelist/blacklist if configured.
-	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
-		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
-			// Fail loud (see the fast-path site above): defense-in-depth behind the
-			// barrier's jail validation.
-			jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
-			return jsonOutput, err
-		}
+	if err := publishJailAndBans(cfg, jsonOutput); err != nil {
+		return jsonOutput, err
 	}
 
 	jsonOutput.UpdateDuration(analysisStart)
@@ -717,11 +781,12 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 	insertDuration := time.Since(insertStart)
 
 	// Invalid-IP warning: identical message and denominator (totalRequests ==
-	// len(requests) in the full path).
+	// len(requests) in the full path). Emitted per trie and naming the trie,
+	// like processTrie (where the count depends on the trie's filters).
 	if invalidCount > 0 {
 		percentage := float64(invalidCount) / float64(totalRequests) * 100
 		jsonOutput.AddWarning("invalid_ips_skipped",
-			fmt.Sprintf("%d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", invalidCount, percentage), 1)
+			fmt.Sprintf("Trie %q: %d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", trieName, invalidCount, percentage), 1)
 	}
 
 	// Stats: in the unfiltered branch TotalRequestsAfterFiltering == number of
@@ -765,8 +830,7 @@ func filterRequestsConcurrent(
 	trieConfig *config.TrieConfig,
 	bounds timeBounds,
 	userAgentMatcher *cidr.UserAgentMatcher,
-	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[string]bool,
-	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
+	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[uint32]struct{},
 	filteredRequestCount *int,
 	ipsToInsert *[]uint32,
 	invalidIPCount *int,
@@ -797,8 +861,8 @@ func filterRequestsConcurrent(
 	}
 
 	// Start result collector. Only this single goroutine touches the UA
-	// whitelist/blacklist sets/slices and the local counters, so no mutex is
-	// needed around them.
+	// whitelist/blacklist sets and the local counters, so no mutex is needed
+	// around them.
 	var collectorWG sync.WaitGroup
 
 	// Track invalid IPs in collector
@@ -832,20 +896,12 @@ func filterRequestsConcurrent(
 
 			// Collect User-Agent whitelist IPs
 			if result.isWhitelistedUA {
-				ipStr := ingestor.Uint32ToIPString(result.request.IPUint32)
-				if !userAgentWhitelistIPSet[ipStr] {
-					userAgentWhitelistIPSet[ipStr] = true
-					*userAgentWhitelistIPs = append(*userAgentWhitelistIPs, ipStr)
-				}
+				userAgentWhitelistIPSet[result.request.IPUint32] = struct{}{}
 			}
 
 			// Collect User-Agent blacklist IPs
 			if result.isBlacklistedUA {
-				ipStr := ingestor.Uint32ToIPString(result.request.IPUint32)
-				if !userAgentBlacklistIPSet[ipStr] {
-					userAgentBlacklistIPSet[ipStr] = true
-					*userAgentBlacklistIPs = append(*userAgentBlacklistIPs, ipStr)
-				}
+				userAgentBlacklistIPSet[result.request.IPUint32] = struct{}{}
 			}
 		}
 		// Update the shared counts
@@ -891,8 +947,7 @@ func filterRequests(
 	trieConfig *config.TrieConfig,
 	bounds timeBounds,
 	userAgentMatcher *cidr.UserAgentMatcher,
-	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[string]bool,
-	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
+	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[uint32]struct{},
 	filteredRequestCount *int,
 	ipsToInsert *[]uint32,
 	invalidIPCount *int,
@@ -916,9 +971,6 @@ func filterRequests(
 			continue
 		}
 
-		// Only convert IP to string if we need it for User-Agent pattern processing
-		var ipStr string
-		var ipStrComputed bool
 		isWhitelistedUA := false
 		isBlacklistedUA := false
 
@@ -929,25 +981,10 @@ func filterRequests(
 			isBlacklistedUA = (uaResult == cidr.UserAgentBlacklist)
 
 			if isWhitelistedUA {
-				if !ipStrComputed {
-					ipStr = ingestor.Uint32ToIPString(r.IPUint32)
-					ipStrComputed = true
-				}
-				if !userAgentWhitelistIPSet[ipStr] {
-					userAgentWhitelistIPSet[ipStr] = true
-					*userAgentWhitelistIPs = append(*userAgentWhitelistIPs, ipStr)
-				}
+				userAgentWhitelistIPSet[r.IPUint32] = struct{}{}
 			}
-
 			if isBlacklistedUA {
-				if !ipStrComputed {
-					ipStr = ingestor.Uint32ToIPString(r.IPUint32)
-					ipStrComputed = true
-				}
-				if !userAgentBlacklistIPSet[ipStr] {
-					userAgentBlacklistIPSet[ipStr] = true
-					*userAgentBlacklistIPs = append(*userAgentBlacklistIPs, ipStr)
-				}
+				userAgentBlacklistIPSet[r.IPUint32] = struct{}{}
 			}
 		}
 
@@ -969,21 +1006,12 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 	}
 
 	for _, argSet := range trieConfig.ClusterArgSets {
-		if argSet.MinDepth > argSet.MaxDepth {
-			jsonOutput.AddError("invalid_depth_params",
-				fmt.Sprintf("minDepth (%d) must be <= maxDepth (%d)", argSet.MinDepth, argSet.MaxDepth), 1)
-			continue
-		}
-		if argSet.MaxDepth > 32 {
-			jsonOutput.AddError("invalid_depth_params",
-				fmt.Sprintf("maxDepth (%d) must be <= 32", argSet.MaxDepth), 1)
-			continue
-		}
-
-		clusterStart := time.Now()
-		cidrs := trieInstance.CollectCIDRs(argSet.MinClusterSize, argSet.MinDepth, argSet.MaxDepth, argSet.MeanSubnetDifference)
-		clusterDuration := time.Since(clusterStart)
-
+		// TrieResult.Data must hold exactly one entry per configured arg set, in
+		// config order: ProcessJailWithWhitelist pairs Data[i] with UseForJail[i]
+		// by position (and the renderers number the sets the same way). An
+		// invalid set therefore still gets an entry - an empty placeholder with
+		// its parameters - instead of being skipped, which would shift every
+		// later set onto its left neighbour's useForJail flag.
 		clusterResult := output.ClusterResult{
 			Parameters: output.ClusterParameters{
 				MinClusterSize:       argSet.MinClusterSize,
@@ -991,10 +1019,26 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 				MaxDepth:             argSet.MaxDepth,
 				MeanSubnetDifference: argSet.MeanSubnetDifference,
 			},
-			ExecutionTimeUS: clusterDuration.Microseconds(),
-			DetectedRanges:  []output.CIDRRange{},
-			MergedRanges:    []output.CIDRRange{},
+			DetectedRanges: []output.CIDRRange{},
+			MergedRanges:   []output.CIDRRange{},
 		}
+
+		if argSet.MinDepth > argSet.MaxDepth {
+			jsonOutput.AddError("invalid_depth_params",
+				fmt.Sprintf("minDepth (%d) must be <= maxDepth (%d)", argSet.MinDepth, argSet.MaxDepth), 1)
+			trieResult.Data = append(trieResult.Data, clusterResult)
+			continue
+		}
+		if argSet.MaxDepth > 32 {
+			jsonOutput.AddError("invalid_depth_params",
+				fmt.Sprintf("maxDepth (%d) must be <= 32", argSet.MaxDepth), 1)
+			trieResult.Data = append(trieResult.Data, clusterResult)
+			continue
+		}
+
+		clusterStart := time.Now()
+		cidrs := trieInstance.CollectCIDRs(argSet.MinClusterSize, argSet.MinDepth, argSet.MaxDepth, argSet.MeanSubnetDifference)
+		clusterResult.ExecutionTimeUS = time.Since(clusterStart).Microseconds()
 
 		// Parse CIDRs once for reuse across operations
 		var cidrIPNets []*net.IPNet
@@ -1115,12 +1159,25 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 		filteredJailCIDRs = append(filteredJailCIDRs, userAgentBlacklistCIDRs...)
 	}
 
+	// Expire run-out bans on EVERY run, not only when there is something to add:
+	// ListActiveBans below trusts the BanActive flags, and jail.Update (the only
+	// other caller of UpdateBanActiveStatus) is skipped when nothing was
+	// detected - a quiet run would otherwise republish expired bans from the
+	// persisted flags indefinitely. Expiry only flips active -> inactive, so a
+	// count delta is an exact change signal (same check as the live heartbeat).
+	activeBefore := len(jailInstance.ListActiveBans())
+	jailInstance.UpdateBanActiveStatus()
+	bansExpired := len(jailInstance.ListActiveBans()) != activeBefore
+
 	// Update jail with filtered CIDRs
 	if len(filteredJailCIDRs) > 0 {
 		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
 			jsonOutput.AddWarning("jail_update", fmt.Sprintf("Some CIDRs failed during jail update: %v", err), 1)
 		}
+	}
 
+	// Persist when the jail changed: new detections, or bans that just expired.
+	if len(filteredJailCIDRs) > 0 || bansExpired {
 		err = jail.JailToFile(jailInstance, cfg.GetJailFile())
 		if err != nil {
 			jsonOutput.AddError("jail_save", fmt.Sprintf("Failed to save jail %q: %v", cfg.GetJailFile(), err), 1)

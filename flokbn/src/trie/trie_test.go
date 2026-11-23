@@ -609,6 +609,9 @@ func TestCollectCIDRs(t *testing.T) {
 // meanSubnetDifference -> uint32 threshold conversion and the integer
 // cross-multiplication test in collectCIDRsNode:
 // appendCluster = (2000*diff) < (threshold*count), strict less-than.
+// The arithmetic in the comments below is written in thousandths
+// (threshold = meanSubnetDifference*1000); the implementation carries
+// millionths (thresholdScale), which decides identically for these values.
 func TestCollectCIDRsThresholdBoundaries(t *testing.T) {
 	// insertIPs maps dotted IP -> insert count.
 	tests := []struct {
@@ -669,7 +672,8 @@ func TestCollectCIDRsThresholdBoundaries(t *testing.T) {
 		{
 			// Huge threshold makes any imbalance cluster at the shallowest
 			// allowed depth: the depth-1 node (0.0.0.0/1, count 3) with
-			// children 2 vs 1 passes 2000*1 < 1e9*3 and is emitted as
+			// children 2 vs 1 passes 2000*1 < 2000*3 (the threshold is clamped
+			// to 2.0, which every two-child node satisfies) and is emitted as
 			// 0.0.0.0/1. Note 0.0.0.0/0 itself is unreachable here: Insert
 			// never increments Root.Count (left at 0 by design, see
 			// BuildSorted docs), so the depth-0 emission check

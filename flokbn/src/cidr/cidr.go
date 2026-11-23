@@ -200,8 +200,22 @@ func removeContained(nets []*net.IPNet) []*net.IPNet {
 	return result
 }
 
-// collapseCIDRs merges adjacent CIDR ranges using optimized O(n) single-pass algorithm
-// Eliminates iterative passes for true O(n) performance after initial O(n log n) sort
+// collapseCIDRs merges sibling CIDR ranges (two equal-size halves of the same
+// parent block) into their parent until no such pair is left. For disjoint
+// input (MergeIPNets runs removeContained first) the result is the unique
+// minimal CIDR set covering the same addresses.
+//
+// One sort plus one pass over a stack: each range is pushed, and while the two
+// topmost entries are siblings they are replaced by their parent. A merge can
+// make the new parent a sibling of the entry below it, so the check repeats
+// down the stack - this is what a fixed number of left-to-right passes misses
+// (10.0.0.0/24, 10.0.1.0/25, 10.0.1.128/26, 10.0.1.192/26 needs three
+// cascading merges to become 10.0.0.0/23). Every merge shrinks the stack by
+// one, so the pass is O(n) after the O(n log n) sort.
+//
+// nets is sorted and compacted IN PLACE and the returned slice aliases it.
+// Unmerged ranges keep their original *net.IPNet; an IPNet is only allocated
+// for a parent that survives to the output.
 func collapseCIDRs(nets []*net.IPNet) []*net.IPNet {
 	if len(nets) <= 1 {
 		return nets
@@ -220,74 +234,49 @@ func collapseCIDRs(nets []*net.IPNet) []*net.IPNet {
 		return m1 < m2
 	})
 
-	// Single-pass merge algorithm with greedy approach
-	// Instead of multiple passes, merge greedily in one pass
-	result := make([]*net.IPNet, 0, len(nets))
-	current := nets[0]
-
-	for i := 1; i < len(nets); i++ {
-		// Try to merge current with next network
-		if merged := tryMerge(current, nets[i]); merged != nil {
-			current = merged
-			// Continue trying to merge the new larger network
-			continue
-		}
-
-		// Can't merge, add current to result and move to next
-		result = append(result, current)
-		current = nets[i]
+	// stack[k] is the numeric form of output entry k. The matching pointer
+	// lives in nets[k] (nil = a parent synthesized by a merge, materialized
+	// below). The stack never outgrows the number of ranges consumed, so
+	// writing nets[k] never clobbers an unread input.
+	type block struct {
+		start  uint32
+		prefix int
 	}
+	stack := make([]block, 0, len(nets))
 
-	// Add the final network
-	result = append(result, current)
-
-	// Single additional pass to catch any merges created by the greedy approach
-	// This handles cases where A+B creates C that can merge with D
-	if len(result) > 1 {
-		final := make([]*net.IPNet, 0, len(result))
-		current = result[0]
-
-		for i := 1; i < len(result); i++ {
-			if merged := tryMerge(current, result[i]); merged != nil {
-				current = merged
-			} else {
-				final = append(final, current)
-				current = result[i]
+	for _, n := range nets {
+		cur := block{start: iputils.IPToUint32(n.IP), prefix: maskLen(n)}
+		curNet := n
+		for len(stack) > 0 {
+			top := stack[len(stack)-1]
+			// Siblings have the same prefix length. /0 has no parent; a
+			// prefix outside 1..32 is not an IPv4 block (defensive).
+			if top.prefix != cur.prefix || cur.prefix < 1 || cur.prefix > 32 {
+				break
 			}
+			size := uint32(1) << (32 - cur.prefix)
+			// top must be the LOWER half of the parent block (aligned to
+			// 2*size; for a /1 the mask wraps to all ones, i.e. start == 0)
+			// and cur the upper half right behind it. The alignment check
+			// also guarantees top.start+size cannot overflow.
+			if top.start&(size<<1-1) != 0 || top.start+size != cur.start {
+				break
+			}
+			stack = stack[:len(stack)-1]
+			cur = block{start: top.start, prefix: cur.prefix - 1}
+			curNet = nil
 		}
-		final = append(final, current)
-		return final
+		nets[len(stack)] = curNet
+		stack = append(stack, cur)
 	}
 
+	result := nets[:len(stack)]
+	for i, b := range stack {
+		if result[i] == nil {
+			result[i] = &net.IPNet{IP: iputils.Uint32ToIP(b.start), Mask: net.CIDRMask(b.prefix, 32)}
+		}
+	}
 	return result
-}
-
-// tryMerge attempts to merge two adjacent CIDR ranges
-func tryMerge(a, b *net.IPNet) *net.IPNet {
-	aIP := iputils.IPToUint32(a.IP)
-	bIP := iputils.IPToUint32(b.IP)
-
-	aMaskLen := maskLen(a)
-	if aMaskLen != maskLen(b) {
-		return nil
-	}
-
-	blockSize := uint32(1) << (32 - aMaskLen)
-	if aIP+blockSize != bIP {
-		return nil
-	}
-
-	newMaskLen := aMaskLen - 1
-	newMask := net.CIDRMask(newMaskLen, 32)
-	mergedIP := aIP &^ (1 << (32 - aMaskLen))
-
-	ip := iputils.Uint32ToIP(mergedIP)
-	newNet := &net.IPNet{IP: ip, Mask: newMask}
-
-	if newNet.Contains(a.IP) && newNet.Contains(b.IP) {
-		return newNet
-	}
-	return nil
 }
 
 // maskLen returns the prefix length of a network mask

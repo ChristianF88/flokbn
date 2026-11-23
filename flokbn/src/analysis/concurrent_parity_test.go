@@ -19,20 +19,28 @@ type filterCounts struct {
 	ipsToInsert          []uint32
 }
 
+// ipSetStrings renders a collected UA IP set as dotted-quad strings (order
+// unspecified; the assertions below compare them as sets).
+func ipSetStrings(set map[uint32]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for ip := range set {
+		out = append(out, ingestor.Uint32ToIPString(ip))
+	}
+	return out
+}
+
 // runSequential drives filterRequests over reqs and returns the resulting counts.
 func runSequential(reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
 	var fc filterCounts
-	wlSet := make(map[string]bool)
-	blSet := make(map[string]bool)
-	wlIPs := make([]string, 0)
-	blIPs := make([]string, 0)
+	wlSet := make(map[uint32]struct{})
+	blSet := make(map[uint32]struct{})
 	var ips []uint32
 	var noBounds timeBounds // no time filters in this test
 	filterRequests(reqs, tc, noBounds, m,
-		wlSet, blSet, &wlIPs, &blIPs,
+		wlSet, blSet,
 		&fc.filteredRequestCount, &ips, &fc.invalidIPCount, &fc.uaWhitelistExcluded)
-	fc.whitelistIPs = wlIPs
-	fc.blacklistIPs = blIPs
+	fc.whitelistIPs = ipSetStrings(wlSet)
+	fc.blacklistIPs = ipSetStrings(blSet)
 	fc.ipsToInsert = ips
 	return fc
 }
@@ -41,19 +49,17 @@ func runSequential(reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserA
 func runConcurrent(t *testing.T, reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
 	t.Helper()
 	var fc filterCounts
-	wlSet := make(map[string]bool)
-	blSet := make(map[string]bool)
-	wlIPs := make([]string, 0)
-	blIPs := make([]string, 0)
+	wlSet := make(map[uint32]struct{})
+	blSet := make(map[uint32]struct{})
 	var ips []uint32
 	var noBounds timeBounds // no time filters in this test
 	if err := filterRequestsConcurrent(reqs, tc, noBounds, m,
-		wlSet, blSet, &wlIPs, &blIPs,
+		wlSet, blSet,
 		&fc.filteredRequestCount, &ips, &fc.invalidIPCount, &fc.uaWhitelistExcluded); err != nil {
 		t.Fatalf("filterRequestsConcurrent error: %v", err)
 	}
-	fc.whitelistIPs = wlIPs
-	fc.blacklistIPs = blIPs
+	fc.whitelistIPs = ipSetStrings(wlSet)
+	fc.blacklistIPs = ipSetStrings(blSet)
 	fc.ipsToInsert = ips
 	return fc
 }

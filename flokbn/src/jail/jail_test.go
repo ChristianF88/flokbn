@@ -302,6 +302,54 @@ func TestCidrBounds_RejectsIPv6(t *testing.T) {
 	}
 }
 
+// TestCidrBounds_UsesNetworkAddress: a CIDR written with host bits set
+// (10.0.0.77/24) denotes the same range as its canonical form (10.0.0.0/24).
+// cidrBounds used the host address as the range start, so the cached bounds
+// were [.77,.255] and the sub/parent range scans missed everything below .77.
+func TestCidrBounds_UsesNetworkAddress(t *testing.T) {
+	tests := []struct {
+		cidr               string
+		wantStart, wantEnd uint32
+	}{
+		{"10.0.0.77/24", 0x0A000000, 0x0A0000FF},
+		{"10.0.0.0/24", 0x0A000000, 0x0A0000FF},
+		{"192.168.200.3/16", 0xC0A80000, 0xC0A8FFFF},
+		{"255.255.255.255/0", 0x00000000, 0xFFFFFFFF},
+		{"10.1.2.3/32", 0x0A010203, 0x0A010203},
+		{"10.1.2.3/31", 0x0A010202, 0x0A010203},
+	}
+	for _, tc := range tests {
+		s, e, ok := cidrBounds(tc.cidr)
+		if !ok {
+			t.Errorf("cidrBounds(%q) ok = false; want true", tc.cidr)
+			continue
+		}
+		if s != tc.wantStart || e != tc.wantEnd {
+			t.Errorf("cidrBounds(%q) = (%#x,%#x); want (%#x,%#x)", tc.cidr, s, e, tc.wantStart, tc.wantEnd)
+		}
+	}
+}
+
+// TestRangeScans_HostBitsCIDR exercises the two scans that read cidrBounds
+// with a non-canonical CIDR on either side of the comparison.
+func TestRangeScans_HostBitsCIDR(t *testing.T) {
+	t.Run("ParentRangeInJail finds a prisoner stored with host bits", func(t *testing.T) {
+		j := NewJail()
+		ThrowPrisonerInCell(&j, 0, Prisoner{CIDR: "10.0.0.77/24"})
+		if found, _, _ := j.ParentRangeInJail("10.0.0.5/32"); !found {
+			t.Error("10.0.0.5/32 lies inside prisoner 10.0.0.77/24 (= 10.0.0.0/24) but no parent was found")
+		}
+	})
+	t.Run("SubRangesInJail with a host-bits query", func(t *testing.T) {
+		j := NewJail()
+		ThrowPrisonerInCell(&j, 0, Prisoner{CIDR: "10.0.0.0/25"})
+		found, cells, prisoners := j.SubRangesInJail("10.0.0.77/24")
+		if !found || len(cells) != 1 || len(prisoners) != 1 {
+			t.Errorf("prisoner 10.0.0.0/25 lies inside query 10.0.0.77/24 (= 10.0.0.0/24); got found=%v cells=%v prisoners=%v", found, cells, prisoners)
+		}
+	})
+}
+
 func TestIsSubRange(t *testing.T) {
 	tests := []struct {
 		cidr1    string
