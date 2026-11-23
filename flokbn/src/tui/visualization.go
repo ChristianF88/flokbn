@@ -312,9 +312,19 @@ func (v *VisualizationView) clusteredCacheKey() clusterKey {
 
 // ensureClusteredData makes v.clusteredData reflect the current (trie, cluster
 // set). It reuses the cached per-(trie,set) clustered grid when available;
-// otherwise it does a single clustered-only pass over the (already filtered)
-// requests and caches the result. trafficData is NOT recomputed here - it is
-// the same for a trie across all cluster sets.
+// otherwise it does a single clustered-only pass over v.requests and caches the
+// result. trafficData is NOT recomputed here - it is the same for a trie across
+// all cluster sets.
+//
+// v.requests holds ALL parsed requests, not the trie's filtered subset (the TUI
+// is never handed per-trie request sets). The overlay therefore counts every
+// parsed request whose IP lies inside the set's detected ranges, including
+// requests the trie's own filters (User-Agent, endpoint, time range, UA
+// whitelist) excluded from detection. That matches the heatmap it is drawn on,
+// which is all traffic too, so the dot stays a true share of the cell: "how
+// much of what this cell received would a ban on these ranges hit". It is NOT
+// the request count the range was detected with; that number is the per-range
+// "requests" figure listed below the map.
 func (v *VisualizationView) ensureClusteredData() {
 	key := v.clusteredCacheKey()
 	if v.cachedClusteredData != nil {
