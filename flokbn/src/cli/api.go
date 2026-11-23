@@ -460,6 +460,16 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			return fmt.Errorf("reading batch: %w", err)
 		}
 
+		if len(batch) == 0 && ing.IsClosed() {
+			// A batch can be queued between the empty read above and the
+			// close. Read once more now that nothing can be added, so the
+			// last batch before shutdown is processed instead of dropped.
+			batch, err = ing.ReadBatch()
+			if err != nil {
+				return fmt.Errorf("reading batch: %w", err)
+			}
+		}
+
 		if len(batch) == 0 {
 			if ing.IsClosed() {
 				logger.Info("ingestor closed, exiting loop")
