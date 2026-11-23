@@ -2,6 +2,7 @@ package logparser
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,6 +155,95 @@ func TestLineParser_OverwritesRequest(t *testing.T) {
 	}
 }
 
+// A free-text field in front of the timestamp that holds a space (the user
+// name is whatever the client sent as its basic-auth name), or a log with more
+// or fewer such fields than the format, must not get the line dropped: the
+// line is re-aligned on its bracketed timestamp.
+func TestLineParser_RealignsOnTimestamp(t *testing.T) {
+	want := time.Date(2024, 3, 12, 15, 4, 5, 0, time.UTC)
+	ip := uint32(203)<<24 | 113<<8 | 7
+	cases := []struct {
+		name, format, line string
+	}{
+		{"user with a space", DefaultLiveLogFormat,
+			`203.0.113.7 - john doe [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" 200 10 "-" "UA"`},
+		{"user with several spaces", DefaultLiveLogFormat,
+			`203.0.113.7 - a b c d [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" 200 10 "-" "UA"`},
+		{"user with a space and an open bracket", DefaultLiveLogFormat,
+			`203.0.113.7 - x [y [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" 200 10 "-" "UA"`},
+		{"user that looks like an invalid timestamp", DefaultLiveLogFormat,
+			`203.0.113.7 - [31/Feb/2024:15:04:05 +0000] x [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" 200 10 "-" "UA"`},
+		{"no ident and user fields", DefaultLiveLogFormat,
+			`203.0.113.7 [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" 200 10 "-" "UA"`},
+		{"one field before the timestamp", DefaultLiveLogFormat,
+			`203.0.113.7 - [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" 200 10 "-" "UA"`},
+		{"three fields before the timestamp", DefaultLiveLogFormat,
+			`203.0.113.7 - - - [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" 200 10 "-" "UA"`},
+		{"zone-less timestamp", DefaultLiveLogFormat,
+			`203.0.113.7 - john doe [12/Mar/2024:15:04:05] "GET /x HTTP/1.1" 200 10 "-" "UA"`},
+		{"client address behind the timestamp", DefaultLogFormat,
+			`10.0.0.1 - john doe [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" 200 10 "-" "UA" "203.0.113.7"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lp := mustLineParser(t, tc.format)
+			var req accesslog.Request
+			if err := lp.ParseLine(tc.line, &req); err != nil {
+				t.Fatalf("line dropped: %v", err)
+			}
+			if req.IPUint32 != ip || !req.Timestamp.Equal(want) {
+				t.Errorf("IP = %s, Timestamp = %v; want %s, %v",
+					accesslog.Uint32ToIPString(req.IPUint32), req.Timestamp, accesslog.Uint32ToIPString(ip), want)
+			}
+			if req.Method != accesslog.GET || req.URI != "/x" || req.Status != 200 || req.Bytes != 10 || req.UserAgent != "UA" {
+				t.Errorf("fields behind the timestamp misparsed: %+v", req)
+			}
+			// The misread first pass must not leave anything in the counters.
+			if got := lp.Stats(); got != (ParseStats{}) {
+				t.Errorf("Stats() = %+v after a clean re-aligned line, want zero", got)
+			}
+		})
+	}
+
+	t.Run("malformed fields of the re-aligned line are counted once", func(t *testing.T) {
+		lp := mustLineParser(t, DefaultLiveLogFormat)
+		var req accesslog.Request
+		line := `203.0.113.7 - john doe [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1" oops 12x4 "-" "UA"`
+		if err := lp.ParseLine(line, &req); err != nil {
+			t.Fatalf("line dropped: %v", err)
+		}
+		if got, want := lp.Stats(), (ParseStats{MalformedStatus: 1, MalformedBytes: 1}); got != want {
+			t.Errorf("Stats() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("no bracket holds a timestamp", func(t *testing.T) {
+		lp := mustLineParser(t, DefaultLiveLogFormat)
+		var req accesslog.Request
+		for _, line := range []string{
+			`203.0.113.7 - john doe [badtime] "GET /x[1] HTTP/1.1" 200 10 "-" "UA"`,
+			`203.0.113.7 - john doe 12/Mar/2024:15:04:05 "GET /x HTTP/1.1" 200 10 "-" "UA"`,
+			`203.0.113.7 - john doe [12/Mar/2024:15:04:05 +0000`,
+			`203.0.113.7 - ` + strings.Repeat("[", 5000) + ` "GET /x HTTP/1.1" 200 10 "-" "UA"`,
+			// The closing bracket is too far away to belong to a timestamp.
+			`203.0.113.7 - john doe [12/Mar/2024:15:04:05 +0000` + strings.Repeat(" ", 80) + `] "GET /x HTTP/1.1" 200 10 "-" "UA"`,
+		} {
+			if err := lp.ParseLine(line, &req); !errors.Is(err, ErrInvalidTimestamp) {
+				t.Errorf("ParseLine(%.60q...) = %v, want %v", line, err, ErrInvalidTimestamp)
+			}
+		}
+	})
+
+	t.Run("only a bracketed timestamp is searched for", func(t *testing.T) {
+		lp := mustLineParser(t, `%h %^ %t "%r"`)
+		var req accesslog.Request
+		line := `203.0.113.7 john doe [12/Mar/2024:15:04:05 +0000] "GET /x HTTP/1.1"`
+		if err := lp.ParseLine(line, &req); !errors.Is(err, ErrInvalidTimestamp) {
+			t.Errorf("ParseLine = %v, want %v", err, ErrInvalidTimestamp)
+		}
+	})
+}
+
 func TestLineParser_Stats(t *testing.T) {
 	lp := mustLineParser(t, DefaultLiveLogFormat)
 	var req accesslog.Request
@@ -179,6 +269,7 @@ func TestLineParser_DoesNotAllocate(t *testing.T) {
 		`1.2.3.4 - - [12/Mar/2024:15:04:05 +0000] "GET /a\"b HTTP/1.1" 200 1024 "ref\"erer" "Mozilla/5.0"`,
 		`2001:db8::1 - - [12/Mar/2024:15:04:05 +0000] "GET / HTTP/1.1" 200 1 "-" "UA"`,
 		`1.2.3.4 - - [badtime] "GET / HTTP/1.1" 200 1 "-" "UA"`,
+		`1.2.3.4 - john doe [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" oops 1 "-" "UA"`, // re-aligned
 	}
 	var req accesslog.Request
 	for _, line := range lines {

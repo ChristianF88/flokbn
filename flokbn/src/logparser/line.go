@@ -1,7 +1,9 @@
 package logparser
 
 import (
+	"bytes"
 	"errors"
+	"strings"
 	"unsafe"
 
 	"github.com/ChristianF88/flokbn/accesslog"
@@ -34,10 +36,18 @@ var (
 // from the shipper); Parser is the one for files. Both run the same compiled
 // extractors, so a format means the same thing in either mode.
 //
+// One thing is added on top: a line whose bracketed timestamp is not where the
+// format puts it is re-aligned on that timestamp (see realign) instead of
+// being rejected.
+//
 // A LineParser is safe for concurrent use.
 type LineParser struct {
 	compiled     *CompiledFormat
 	hasTimestamp bool
+	// head and tail are the extractors before the timestamp field and from it
+	// on. They are set only when the format brackets its timestamp ("[%t]"),
+	// which is what makes the timestamp findable in a misaligned line.
+	head, tail *CompiledFormat
 }
 
 // NewLineParser compiles format. It fails exactly when ValidateFormat does.
@@ -48,8 +58,15 @@ func NewLineParser(format string) (*LineParser, error) {
 	}
 	lp := &LineParser{compiled: compiled}
 	for i := range compiled.extractors {
-		if compiled.extractors[i].FieldType == 1 {
-			lp.hasTimestamp = true
+		if compiled.extractors[i].FieldType != 1 {
+			continue
+		}
+		lp.hasTimestamp = true
+		if strings.Contains(format, "[%t]") {
+			head, tail := *compiled, *compiled // share the counters
+			head.extractors = compiled.extractors[:i]
+			tail.extractors = compiled.extractors[i:]
+			lp.head, lp.tail = &head, &tail
 		}
 	}
 	return lp, nil
@@ -78,18 +95,86 @@ func (lp *LineParser) ParseLine(line string, req *accesslog.Request) error {
 	if err := lp.compiled.parseLineReuseOpt(raw, req, false, false); err != nil {
 		return err
 	}
+	if lp.hasTimestamp && req.Timestamp.IsZero() {
+		if lp.tail != nil {
+			lp.realign(raw, req) // slow path
+		}
+		if req.IPUint32 != 0 && req.Timestamp.IsZero() {
+			return ErrInvalidTimestamp
+		}
+	}
 	if req.IPUint32 == 0 {
 		return ErrInvalidIP
-	}
-	if lp.hasTimestamp && req.Timestamp.IsZero() {
-		return ErrInvalidTimestamp
 	}
 	return nil
 }
 
+// maxTimestampLen bounds how far realign looks for the "]" that closes a
+// timestamp candidate. A timestamp with a zone offset is 26 bytes.
+const maxTimestampLen = 64
+
+// realign is the slow path for a line whose timestamp did not parse at the
+// position the format gives it. The usual cause is a free-text field in front
+// of it that holds a space - the user name of the common log format is
+// whatever the client sent as its basic-auth name - or a log that has more or
+// fewer such fields than the format says. Every field behind it then sits one
+// slot off and the line would be dropped: a client could hide from live mode
+// with a space in its user name.
+//
+// The timestamp is the one field that can be recognised by its content, so the
+// line is re-anchored on it: the first "[...]" that holds a valid timestamp is
+// taken as the %t field, the extractors in front of %t parse what precedes it
+// and the extractors from %t on parse the rest. If no bracket holds a valid
+// timestamp, req is left as the first pass filled it.
+//
+// The work is linear in the line length: each "[" costs one bounded search for
+// its "]" and one timestamp check that fails within the first few bytes.
+func (lp *LineParser) realign(raw []byte, req *accesslog.Request) {
+	for open := 0; ; open++ {
+		i := bytes.IndexByte(raw[open:], '[')
+		if i < 0 {
+			return
+		}
+		open += i
+		window := raw[open+1:]
+		if len(window) > maxTimestampLen {
+			window = window[:maxTimestampLen]
+		}
+		n := bytes.IndexByte(window, ']')
+		if n < 0 || parseTimestamp(raw, open+1, open+1+n).IsZero() {
+			continue
+		}
+		lp.uncount(raw)
+		*req = accesslog.Request{}
+		_ = lp.head.parseLineReuseOpt(raw[:open], req, false, false)
+		_ = lp.tail.parseLineReuseOpt(raw[open:], req, false, false)
+		return
+	}
+}
+
+// uncount takes back what the first pass over a misaligned line added to the
+// malformed-field counters: it read status and bytes from the wrong slots, and
+// the re-aligned parse counts them again from the right ones. The first pass
+// is repeated against private counters to learn its exact contribution, which
+// keeps this correct when several goroutines share the parser.
+func (lp *LineParser) uncount(raw []byte) {
+	var seen parseCounters
+	first := *lp.compiled
+	first.counters = &seen
+	var discard accesslog.Request
+	_ = first.parseLineReuseOpt(raw, &discard, true, false)
+	if n := seen.malformedStatus.Load(); n != 0 {
+		lp.compiled.counters.malformedStatus.Add(-n)
+	}
+	if n := seen.malformedBytes.Load(); n != 0 {
+		lp.compiled.counters.malformedBytes.Add(-n)
+	}
+}
+
 // Stats returns the malformed-field counters, cumulative over every ParseLine
-// call including lines that were rejected. OversizedLines is always zero: the
-// caller frames the lines.
+// call. The fields are counted as they are scanned, so a line that ends up
+// rejected is included, as it is in a file parse. OversizedLines is always
+// zero: the caller frames the lines.
 func (lp *LineParser) Stats() ParseStats {
 	return ParseStats{
 		MalformedStatus: lp.compiled.counters.malformedStatus.Load(),
