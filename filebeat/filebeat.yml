@@ -1,20 +1,8 @@
-# filebeat.autodiscover:
-#   providers:
-#     - type: docker
-#       host: "unix:///var/run/docker.sock"
-#       templates:
-#         - condition:
-#             contains:
-#               docker.container.name: "${PROXY_CONTAINER_NAME}"
-#           config:
-#             - type: container          # use the container helper
-#               paths:
-#                 - /var/lib/docker/containers/${data.docker.container.id}/*.log
-#               processors:
-#                 - add_docker_metadata:
-#                     host: "unix:///var/run/docker.sock"
-#                 - add_host_metadata: ~
-
+# Ships the proxy's access log to flokbn over the Lumberjack protocol.
+#
+# flokbn reads only the raw `message` field of each event and parses the log
+# line itself, so there is nothing to dissect or convert here - any field
+# Filebeat adds is ignored on the other side.
 filebeat.inputs:
 - type: log
   enabled: true
@@ -26,42 +14,21 @@ filebeat.inputs:
   scan_frequency: 1s
 
   processors:
-    - dissect:
-        tokenizer: "%{remote} - - [%{timestamp}] \"%{method} %{uri} HTTP/%{httpversion}\" %{status} %{bytes} \"%{referrer}\" \"%{useragent}\" \"%{extra}\""
-        field: "message"
-        target_prefix: ""
-    - timestamp:
-        field: timestamp
-        target_field: timestamp
-        layouts:
-          - "02/Jan/2006:15:04:05 Z0700"
-        # overwrite the original string field with a proper date value
-        replace: true
-    - convert:
-        fields:
-          - {from: "status", type: "integer"}
-          - {from: "bytes",  type: "integer"}
+    # Trim metadata flokbn never looks at; keeps the batches small.
     - drop_fields:
-        fields: ["httpversion", "referrer", "extra", "@metadata", "log", "agent", "ecs", "host", "input"]
-
+        fields: ["@metadata", "log", "agent", "ecs", "host", "input"]
 
 # disable modules entirely
 filebeat.config.modules:
   path: ${path.config}/modules.d/*.yml
   reload.enabled: false
 
-# send to Logstash over TCP with JSON codec
+# flokbn speaks the Lumberjack v2 protocol, i.e. Filebeat's Logstash output.
 output.logstash:
   hosts: ["${INGESTOR_HOST}"]
   codec.json:
     pretty: false
 
-# debug logging to verify harvests
-logging.level: debug
-logging.selectors: ["*"]
-
-
-#output.logstash:
-#  hosts: ["172.17.0.1:9001"]
-#  codec.json:
-#    pretty: false
+# Set to debug (optionally with logging.selectors: ["harvester", "publisher"])
+# to verify harvests while troubleshooting.
+logging.level: info
