@@ -126,6 +126,7 @@ type StaticConfig struct {
 
 type LiveConfig struct {
 	Port        string        `toml:"port"`
+	Listen      string        `toml:"listen"` // address the Lumberjack listener binds; empty = DefaultLiveListen
 	ReadTimeout time.Duration `toml:"readTimeout"`
 	StatsListen string        `toml:"statsListen"` // host:port for the /stats HTTP server; empty = off
 	TopTalkers  int           `toml:"topTalkers"`  // top-N IPs per window in /stats; 0 = off
@@ -137,6 +138,12 @@ type LogConfig struct {
 	Level  string `toml:"level"`  // debug, info, warn, error
 	Format string `toml:"format"` // text, json
 }
+
+// DefaultLiveListen is the address the Lumberjack listener binds when the
+// [live] section (or --listen) does not name one. The port is unauthenticated
+// - whoever reaches it can inject log events - so the default is loopback;
+// receiving from other hosts is an explicit opt-in (e.g. listen = "0.0.0.0").
+const DefaultLiveListen = "127.0.0.1"
 
 // DefaultLiveReadTimeout is the TCP ingestor read timeout used when the
 // [live] section does not specify a readTimeout.
@@ -171,6 +178,7 @@ var staticScalarKeys = map[string]struct{}{
 // parseLiveConfig's strict unknown-key check uses the narrower liveSectionKeys.
 var liveScalarKeys = map[string]struct{}{
 	"port":                   {},
+	"listen":                 {},
 	"readTimeout":            {},
 	"statsListen":            {},
 	"topTalkers":             {},
@@ -185,6 +193,7 @@ var liveScalarKeys = map[string]struct{}{
 // the valid-set hint on parseLiveConfig's unknown-key rejection.
 var liveSectionKeys = map[string]struct{}{
 	"port":        {},
+	"listen":      {},
 	"readTimeout": {},
 	"statsListen": {},
 	"topTalkers":  {},
@@ -680,6 +689,12 @@ func parseLiveConfig(m map[string]any, diags *ConfigDiagnostics) (*LiveConfig, e
 				return nil, fmt.Errorf("port must be a string, got %T", value)
 			}
 			config.Port = v
+		case "listen":
+			v, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("listen must be a string, got %T", value)
+			}
+			config.Listen = v
 		case "readTimeout":
 			v, ok := value.(string)
 			if !ok {
@@ -1156,6 +1171,20 @@ func (c *Config) GetBanFile() string {
 	return BanFile
 }
 
+// GetListenAddr returns the host:port the Lumberjack listener binds: the
+// configured [live] listen address (DefaultLiveListen when unset) joined with
+// the port.
+func (c *Config) GetListenAddr() string {
+	host, port := DefaultLiveListen, ""
+	if c.Live != nil {
+		if c.Live.Listen != "" {
+			host = c.Live.Listen
+		}
+		port = c.Live.Port
+	}
+	return net.JoinHostPort(host, port)
+}
+
 // GetReadTimeout returns the configured live TCP read timeout, falling back
 // to DefaultLiveReadTimeout when unset.
 func (c *Config) GetReadTimeout() time.Duration {
@@ -1195,6 +1224,12 @@ func (c *Config) validateLiveInto(diags *ConfigDiagnostics) {
 	} else {
 		if c.Live.Port == "" {
 			diags.AddRaw("port is required in live config")
+		}
+		// listen is an address only; the port has its own key. A value that is
+		// not an IP literal may be a host name, but never carries a port, a
+		// path or whitespace.
+		if l := c.Live.Listen; l != "" && net.ParseIP(l) == nil && strings.ContainsAny(l, ":/[] \t") {
+			diags.AddRaw(fmt.Sprintf("invalid listen %s (want an IP address or host name without a port, e.g. 127.0.0.1 or 0.0.0.0; the port is set with port)", quoteCapped(l)))
 		}
 		if c.Live.StatsListen != "" {
 			if _, _, err := net.SplitHostPort(c.Live.StatsListen); err != nil {

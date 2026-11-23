@@ -213,6 +213,12 @@ useForJail = [true, true, true]
 # REQUIRED: Network configuration (global settings only)
 port = "8080"                           # Port to listen for incoming log streams
 
+# OPTIONAL: Address the log-stream (Lumberjack) listener binds. Default 127.0.0.1.
+# The port is unauthenticated: whoever can reach it can inject log events and
+# get ranges banned. Set "0.0.0.0" only when the shipper runs on another host
+# AND the port is firewalled to it.
+# listen = "127.0.0.1"
+
 # NOTE: Sliding window parameters are now per-window, not global
 # Each [live.X] section below defines its own sliding window
 

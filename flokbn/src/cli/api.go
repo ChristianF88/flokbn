@@ -202,10 +202,13 @@ func executeLiveAnalysis(cfg *config.Config) error {
 
 	logger := slog.Default()
 
-	ing, err := ingestor.NewTCPIngestor(
-		":"+cfg.Live.Port,
-		cfg.GetReadTimeout(), // read timeout: avoid client disconnects
-	)
+	// The Lumberjack port is unauthenticated: it binds [live] listen
+	// (loopback unless configured otherwise), never all interfaces implicitly.
+	listenAddr := cfg.GetListenAddr()
+	ing, err := ingestor.NewTCPIngestorWithOptions(listenAddr, ingestor.Options{
+		ReadTimeout: cfg.GetReadTimeout(), // read timeout: avoid client disconnects
+		Logger:      logger,
+	})
 
 	if err != nil {
 		return fmt.Errorf("creating ingestor: %w", err)
@@ -223,12 +226,17 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	}
 	logger.Info("starting live loop",
 		"version", version.Version,
-		"listen", ":"+cfg.Live.Port,
+		"listen", listenAddr,
 		"jail_file", cfg.GetJailFile(),
 		"ban_file", cfg.GetBanFile(),
 		"windows", len(cfg.LiveTries),
 		"cluster_sets", totalClusterSets,
 	)
+
+	if !isLoopbackHost(cfg.Live.Listen) {
+		logger.Warn("ingest listener is reachable from other hosts; the Lumberjack port is unauthenticated, so anyone who can reach it can inject log events and get ranges banned - restrict it with a firewall or bind it to loopback",
+			"listen", listenAddr)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -257,6 +265,19 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	}
 
 	return runLiveLoop(ctx, ing, cfg, logger, stats)
+}
+
+// isLoopbackHost reports whether a [live] listen value keeps the listener on
+// this machine. Empty means the default (config.DefaultLiveListen).
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		host = config.DefaultLiveListen
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // newStatsServerFromConfig binds the stats listener when [live] statsListen

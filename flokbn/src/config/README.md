@@ -313,6 +313,7 @@ useForJail = [true, false]
 ```toml
 [live]
 port = "8080"        # Required: Port to listen on
+listen = "127.0.0.1" # Optional: address to listen on (default "127.0.0.1"; the port is unauthenticated)
 readTimeout = "5s"   # Optional: TCP read timeout (duration string, default "5s")
 ```
 
