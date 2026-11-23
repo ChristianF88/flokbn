@@ -12,7 +12,7 @@ import (
 )
 
 // parseIPv4ToUint32_ref is an independent, deliberately plain reference for
-// parseIPv4ToUint32: split on dots, then check every octet. The differential
+// parseIPv4ToUint32: cut at the dots, then check every octet. The differential
 // tests assert the hand-optimised implementation returns the identical uint32
 // for every input.
 //
@@ -29,12 +29,19 @@ func parseIPv4ToUint32_ref(line []byte, start, end int) uint32 {
 		return 0
 	}
 
-	octets := bytes.Split(line[start:end], []byte{'.'})
-	if len(octets) != 4 {
-		return 0
-	}
+	// Cut the text at the first three dots; whatever remains is the last
+	// octet (a 4th dot ends up inside it and fails the digit check).
+	rest := line[start:end]
 	var result uint32
-	for _, octet := range octets {
+	for part := 0; part < 4; part++ {
+		octet := rest
+		if part < 3 {
+			dot := bytes.IndexByte(rest, '.')
+			if dot < 0 {
+				return 0
+			}
+			octet, rest = rest[:dot], rest[dot+1:]
+		}
 		if len(octet) < 1 || len(octet) > 3 {
 			return 0
 		}
