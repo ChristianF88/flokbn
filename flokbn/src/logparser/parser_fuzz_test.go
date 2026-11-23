@@ -26,6 +26,8 @@ func FuzzParser(f *testing.F) {
 		`192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] "GET /path HTTP/1.1" 200 10 "-" "Mozilla \"Edge\" Browser" "192.168.1.1"`,
 		// Non-numeric status field (FLOKBN-039)
 		`192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] "GET / HTTP/1.1" 2XX 10 "-" "test" "192.168.1.1"`,
+		// Quoted referer containing a space (must stay one field)
+		`10.0.0.1 - - [23/Nov/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 123 "http://a b" "8.8.8.7" "203.0.113.9"`,
 		// CRLF line ending (FLOKBN-039)
 		"192.168.1.1 - - [01/Jan/2025:00:00:00 +0000] \"GET / HTTP/1.1\" 200 10 \"-\" \"test\" \"192.168.1.1\"\r\n",
 	}
@@ -34,8 +36,7 @@ func FuzzParser(f *testing.F) {
 		f.Add([]byte(s))
 	}
 
-	format := `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
-	parser, err := NewParser(format)
+	parser, err := NewParser(DefaultLogFormat)
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -55,6 +56,7 @@ func FuzzParser(f *testing.F) {
 func FuzzLogFormatParsing(f *testing.F) {
 	// Seed with known valid formats
 	seeds := []string{
+		DefaultLogFormat,
 		`%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`,
 		`%h %^ %^ [%t] "%r" %s %b "%^" "%u"`,
 		`%h [%t] %m %U %^ %s %b "%u"`,

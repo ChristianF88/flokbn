@@ -21,6 +21,12 @@ type FieldExtractor struct {
 	Delimiter byte // delimiter to find (space, quote, bracket)
 	Quoted    bool // whether field is in quotes
 	Brackets  bool // whether field is in brackets
+	// autoQuote: scan the value as a quoted string whenever it starts with a
+	// double quote, whether or not the format quotes this slot. It is false only
+	// for the first field of a quoted GROUP ("%^ %r %^"), where the leading quote
+	// is a format literal and the value is a bare token. Computed at compile time
+	// so the per-field cost is the same single flag test as before.
+	autoQuote bool
 }
 
 // CompiledFormat represents a pre-compiled log format for fast parsing
@@ -992,8 +998,9 @@ var codeFieldNames = map[byte]string{
 // is configured. It is the SINGLE source of truth referenced by the static
 // analysis entry points (analysis/static.go), the CLI --logFormat flag default,
 // and config.Validate's empty->default fallback, so the three cannot drift.
-// %h is last (the static default convention).
-const DefaultLogFormat = `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
+// %h is last (the static default convention). Every slot that a combined log
+// quotes (request, referer, User-Agent, client IP) is quoted here too.
+const DefaultLogFormat = `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"`
 
 // ValidateFormat is the exported, side-effect-free precondition check for a log
 // format string. It is a THIN wrapper over the unexported validateFormat, which
@@ -1108,9 +1115,25 @@ func compileFormat(format string) (*CompiledFormat, error) {
 				if nextChar == '"' {
 					extractor.Quoted = true
 				}
+				if nextChar == 0 {
+					// A NUL after the specifier never worked as a delimiter (the
+					// scan fell back to space); normalise here so the hot loop
+					// does not have to.
+					extractor.Delimiter = ' '
+				}
 			} else {
 				extractor.Delimiter = ' ' // default
 			}
+
+			// A value that starts with a double quote is a quoted string even when
+			// the format leaves the slot bare (`%^` for a referer): scanning it as
+			// a bare token would split it at the first space and shift every later
+			// field, letting a client-controlled Referer or User-Agent supply %h.
+			// The one exception is a format literal quote that opens a group of
+			// fields (`"%^ %r %^"`): there the quote belongs to the format, not to
+			// this field's value.
+			opensGroup := i > 0 && format[i-1] == '"' && extractor.Delimiter != '"'
+			extractor.autoQuote = extractor.Quoted || !opensGroup
 
 			extractors = append(extractors, extractor)
 			i++ // Skip format character
@@ -1142,23 +1165,30 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 	pos := 0
 
 	for _, extractor := range cf.extractors {
+		// Skip whitespace; a line that ends here leaves the remaining fields unset.
+		for pos < len(line) && line[pos] == ' ' {
+			pos++
+		}
 		if pos >= len(line) {
 			break
 		}
 
-		// Skip whitespace
-		for pos < len(line) && line[pos] == ' ' {
-			pos++
-		}
-
 		start := pos
 
-		// Handle quoted/bracketed fields
+		// Scan the field. Each arm leaves pos on the field's exclusive end and
+		// sets next to where the following field starts (past the closing quote,
+		// bracket or delimiter). The first byte is tested before the per-format
+		// flag so a bare token pays two byte compares and nothing else.
 		// bytes.IndexByte uses SIMD (SSE2/AVX2) on amd64 for 8-16x faster scanning
-		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
+		var next int
+		quoted := false
+		if c := line[pos]; c == '"' && extractor.autoQuote {
+			quoted = true
 			pos++ // skip opening quote
 			start = pos
-			if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
+			if pos+1 < len(line) && line[pos] == '-' && line[pos+1] == '"' {
+				pos++ // "-" (absent value): cheaper than the IndexByte call
+			} else if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
 				if idx > 0 && line[pos+idx-1] == '\\' {
 					pos = scanQuotedClose(line, pos, pos+idx) // rare slow path: escaped quote
 				} else {
@@ -1167,8 +1197,11 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 			} else {
 				pos = len(line)
 			}
-			// Don't skip closing quote yet - we'll handle it after field extraction
-		} else if extractor.Brackets && pos < len(line) && line[pos] == '[' {
+			next = pos
+			if pos < len(line) {
+				next++ // closing quote
+			}
+		} else if c == '[' && extractor.Brackets {
 			pos++ // skip opening bracket
 			start = pos
 			if idx := bytes.IndexByte(line[pos:], ']'); idx >= 0 {
@@ -1176,15 +1209,19 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 			} else {
 				pos = len(line)
 			}
-			// Don't skip closing bracket yet
+			next = pos
+			if pos < len(line) {
+				next++ // closing bracket
+			}
 		} else {
 			// Regular field - scan until delimiter or space
 			delimiter := extractor.Delimiter
-			if delimiter == 0 {
-				delimiter = ' ' // default to space
-			}
 			for pos < len(line) && line[pos] != delimiter && line[pos] != ' ' {
 				pos++
+			}
+			next = pos
+			if pos < len(line) && line[pos] == delimiter {
+				next++ // the delimiter itself
 			}
 		}
 
@@ -1202,7 +1239,7 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 				case 2: // Method (standalone)
 					req.Method = parseMethod(line, start, pos)
 				case 3: // Request line (%r) - extracts METHOD and URI, ignores HTTP version
-					if extractor.Quoted {
+					if extractor.Quoted || quoted {
 						// Parse "METHOD URI HTTP/VERSION" format efficiently
 						methodEnd := start
 						for methodEnd < pos && line[methodEnd] != ' ' {
@@ -1279,13 +1316,7 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 		}
 
 		// Advance past closing quotes/brackets/delimiters
-		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
-			pos++
-		} else if extractor.Brackets && pos < len(line) && line[pos] == ']' {
-			pos++
-		} else if pos < len(line) && line[pos] == extractor.Delimiter {
-			pos++ // Skip the delimiter
-		}
+		pos = next
 	}
 
 	return nil
@@ -1310,23 +1341,27 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 
 	for ei := range cf.extractors {
 		extractor := &cf.extractors[ei]
+
+		// Skip whitespace; a line that ends here has no IP field.
+		for pos < len(line) && line[pos] == ' ' {
+			pos++
+		}
 		if pos >= len(line) {
 			break
 		}
 
-		// Skip whitespace
-		for pos < len(line) && line[pos] == ' ' {
-			pos++
-		}
-
 		start := pos
 
-		// Handle quoted/bracketed fields - identical boundary logic to
-		// parseUsingCompiledFormatOpt so that pos lands on the same offsets.
-		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
+		// Scan the field - identical boundary logic to
+		// parseUsingCompiledFormatOpt so that pos and next land on the same
+		// offsets.
+		var next int
+		if c := line[pos]; c == '"' && extractor.autoQuote {
 			pos++ // skip opening quote
 			start = pos
-			if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
+			if pos+1 < len(line) && line[pos] == '-' && line[pos+1] == '"' {
+				pos++ // "-" (absent value): cheaper than the IndexByte call
+			} else if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
 				if idx > 0 && line[pos+idx-1] == '\\' {
 					pos = scanQuotedClose(line, pos, pos+idx) // rare slow path: escaped quote
 				} else {
@@ -1335,7 +1370,11 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 			} else {
 				pos = len(line)
 			}
-		} else if extractor.Brackets && pos < len(line) && line[pos] == '[' {
+			next = pos
+			if pos < len(line) {
+				next++ // closing quote
+			}
+		} else if c == '[' && extractor.Brackets {
 			pos++ // skip opening bracket
 			start = pos
 			if idx := bytes.IndexByte(line[pos:], ']'); idx >= 0 {
@@ -1343,13 +1382,18 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 			} else {
 				pos = len(line)
 			}
+			next = pos
+			if pos < len(line) {
+				next++ // closing bracket
+			}
 		} else {
 			delimiter := extractor.Delimiter
-			if delimiter == 0 {
-				delimiter = ' '
-			}
 			for pos < len(line) && line[pos] != delimiter && line[pos] != ' ' {
 				pos++
+			}
+			next = pos
+			if pos < len(line) && line[pos] == delimiter {
+				next++ // the delimiter itself
 			}
 		}
 
@@ -1366,13 +1410,7 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 
 		// Advance past closing quotes/brackets/delimiters - identical to
 		// parseUsingCompiledFormatOpt so subsequent field boundaries align.
-		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
-			pos++
-		} else if extractor.Brackets && pos < len(line) && line[pos] == ']' {
-			pos++
-		} else if pos < len(line) && line[pos] == extractor.Delimiter {
-			pos++
-		}
+		pos = next
 	}
 
 	return 0

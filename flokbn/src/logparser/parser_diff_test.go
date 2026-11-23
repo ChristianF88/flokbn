@@ -212,6 +212,11 @@ func TestDiffExtractIPOnly(t *testing.T) {
 		`- - - [01/Jan/2025:10:15:31 +0000] "POST /b HTTP/1.1" 401 512 "-" "curl" "10.0.0.1"`,
 		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "-" "x" "999.1.1.1"`,
 		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "-" "x" "-"`,
+		// quoted referer containing spaces / an escaped quote, and a bare one
+		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "http://a b" "8.8.8.7" "203.0.113.9"`,
+		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "a \" b c" "x y" "203.0.113.9"`,
+		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 - "x y" "203.0.113.9"`,
+		`- - - [01/Jan/2025:10:15:32 +0000] "GET /c HTTP/1.1" 200 0 "unterminated "x" "203.0.113.9"`,
 	}
 
 	check := func(t *testing.T, format string, ls []string) {
@@ -238,6 +243,8 @@ func TestDiffExtractIPOnly(t *testing.T) {
 	}
 	// IP-last formats validated against the IP-last lines.
 	check(t, `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`, ipLastLines)
+	check(t, DefaultLogFormat, ipLastLines)
+	check(t, DefaultLogFormat, lines)
 }
 
 // ---------------------------------------------------------------------------

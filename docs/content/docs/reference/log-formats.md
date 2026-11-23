@@ -47,7 +47,7 @@ log_format combined '$remote_addr - $remote_user [$time_local] '
 ```
 
 ```
---logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+--logFormat "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 ```
 
 ### Nginx with X-Forwarded-For
@@ -63,7 +63,7 @@ log_format proxy '$remote_addr $http_x_forwarded_for - [$time_local] '
 Place `%h` at the position of the real client IP:
 
 ```
---logFormat "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+--logFormat "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 ```
 
 This is the compiled-in default format.
@@ -75,7 +75,7 @@ LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-agent}i\"" combine
 ```
 
 ```
---logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+--logFormat "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 ```
 
 ### Apache Common (no User-Agent)
@@ -91,7 +91,7 @@ LogFormat "%h %l %u %t \"%r\" %>s %b" common
 ### Nginx Behind CloudFlare
 
 ```
---logFormat "%^ %h %^ [%t] \"%r\" %s %b %^ \"%u\""
+--logFormat "%^ %h %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 ```
 
 ### Apache Behind AWS ALB
@@ -145,10 +145,12 @@ Parses the User-Agent string. Must be quoted in the format string if quoted in t
 
 Use `%^` for any field you don't need. Can appear unlimited times.
 
+Write `\"%^\"` for a field the log quotes (the Referer in a combined log) so the format documents the real layout. As a safety net, a value that starts with a double quote is always read up to its closing quote, even when the format leaves that slot bare: a Referer such as `"http://a b"` is one field, never two. Without that rule a space inside a quoted, client-controlled field would shift every later field and a client could choose the address that `%h` reads.
+
 ## Format String Rules
 
 1. **Whitespace** in the format string must match whitespace in the log
-2. **Quotes** in the format string must match quotes in the log (`\"%r\"` for `"GET /"`)
+2. **Quotes** in the format string must match quotes in the log (`\"%r\"` for `"GET /"`, `\"%^\"` for a quoted field you skip)
 3. **Brackets** must be included if present (`[%t]` for `[timestamp]`)
 4. **Delimiters** must match (spaces, pipes, etc.)
 
@@ -160,7 +162,7 @@ echo '192.0.2.1 - - [09/Oct/2025:10:15:23 +0000] "GET / HTTP/1.1" 200 1234 "-" "
 
 # Test parsing
 flokbn static --logfile test.log \
-  --logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"" \
+  --logFormat "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"" \
   --clusterArgSets 1,32,32,0.01 \
   --plain
 ```
@@ -180,7 +182,7 @@ In TOML, specify the format in the `[static]` section:
 ```toml
 [static]
 logFile = "/var/log/nginx/access.log"
-logFormat = "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 ```
 
 ## Performance
