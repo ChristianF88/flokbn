@@ -1520,10 +1520,13 @@ func (c *Config) LoadUserAgentBlacklistPatterns() ([]string, error) {
 	return loadPatternFile(c.Global.UserAgentBlacklist)
 }
 
-// stripCommentLine normalizes one raw line from a pattern/CIDR list file:
-// trims surrounding whitespace, drops a full-line comment (empty or leading
-// '#'), strips a trailing inline '#...' comment, and re-trims. It returns the
-// cleaned token and whether the line carries content (false = skip this line).
+// stripCommentLine normalizes one raw line from a CIDR list file: trims
+// surrounding whitespace, drops a full-line comment (empty or leading '#'),
+// strips a trailing inline '#...' comment, and re-trims. It returns the cleaned
+// token and whether the line carries content (false = skip this line).
+//
+// CIDR files only: a CIDR can never contain '#'. User-Agent pattern files use
+// patternLine, which keeps an inner '#'.
 func stripCommentLine(raw string) (string, bool) {
 	line := strings.TrimSpace(raw)
 	if line == "" || strings.HasPrefix(line, "#") {
@@ -1534,6 +1537,20 @@ func stripCommentLine(raw string) (string, bool) {
 		if line == "" {
 			return "", false
 		}
+	}
+	return line, true
+}
+
+// patternLine normalizes one raw line from a User-Agent pattern file: trims
+// surrounding whitespace and drops an empty line or a comment line (first
+// non-blank character is '#'). Unlike stripCommentLine it does NOT treat an
+// inner '#' as a comment: entries are exact User-Agent strings and real
+// User-Agents contain '#' ("Mozilla/5.0 (compatible; Foo #1)"), so cutting at
+// it would store a truncated entry that never matches.
+func patternLine(raw string) (string, bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", false
 	}
 	return line, true
 }
@@ -1550,7 +1567,7 @@ func loadPatternFile(filename string) ([]string, error) {
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
-		pattern, ok := stripCommentLine(scanner.Text())
+		pattern, ok := patternLine(scanner.Text())
 		if !ok {
 			continue
 		}

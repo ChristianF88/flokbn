@@ -405,11 +405,14 @@ useForJail = [true]
 	}
 }
 
-// Inline '#' comments after a value in pattern/CIDR list files are stripped,
-// leaving the bare value.
-func TestLoadPatternFile_StripsInlineComment(t *testing.T) {
+// User-Agent pattern files: only a line that STARTS with '#' is a comment. A
+// '#' inside an entry is part of the User-Agent (entries are exact strings, and
+// real User-Agents contain '#'), so it must not truncate the entry. This test
+// used to assert the opposite (inline stripping), which silently turned
+// "Mozilla/5.0 (compatible; Foo #1)" into "Mozilla/5.0 (compatible; Foo".
+func TestLoadPatternFile_HashInsideEntryIsKept(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ua.txt")
-	content := "# header\nGooglebot   # the google crawler\n\nbingbot#no space before hash\n"
+	content := "# header\n   # indented comment\nMozilla/5.0 (compatible; Foo #1)\n\n  bingbot#no space before hash  \nGooglebot   # not a comment\n"
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +420,7 @@ func TestLoadPatternFile_StripsInlineComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadPatternFile: %v", err)
 	}
-	want := []string{"Googlebot", "bingbot"}
+	want := []string{"Mozilla/5.0 (compatible; Foo #1)", "bingbot#no space before hash", "Googlebot   # not a comment"}
 	if len(patterns) != len(want) {
 		t.Fatalf("expected %d patterns, got %d: %v", len(want), len(patterns), patterns)
 	}
