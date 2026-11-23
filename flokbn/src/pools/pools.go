@@ -10,12 +10,13 @@ type TrieNode struct {
 	Count    uint32
 }
 
-// NodeAllocator pre-allocates chunks of nodes for better performance.
-// The mutex is retained for API safety, but in production it is not
-// contended: its sole remaining production user is NewTrie() (the
-// static/test build path), where the trie is built and queried from a
-// single goroutine. The sliding-window live path uses the lock-free
-// SeqNodeAllocator instead (see NewTrieSeq).
+// NodeAllocator pre-allocates chunks of nodes for better performance and
+// is safe for concurrent GetNode calls (mutex-guarded). Its only user is
+// trie.NewTrie(), which no production path calls any more: both the static
+// pipeline (trie.NewLockedTrieSeq) and the live sliding window
+// (trie.NewTrieSeq) build their tries from a single goroutine on the
+// lock-free SeqNodeAllocator below. NewTrie() remains for tests and
+// benchmarks.
 type NodeAllocator struct {
 	mu           sync.Mutex
 	chunks       [][]TrieNode

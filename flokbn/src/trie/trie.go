@@ -470,9 +470,12 @@ func (t *Trie) collectCIDRsNode(node *TrieNode, prefix uint32, depth uint32, res
 		leftCount := node.Children[0].Count
 		rightCount := node.Children[1].Count
 
-		// Recurse into the smaller subtree first for deterministic,
-		// lower-prefix-first result ordering and cache locality; recursion depth
-		// is bounded by trie height (<=32) regardless of child order.
+		// Recurse into the smaller-count subtree first (the left one on a
+		// tie). The result order is therefore deterministic for a given trie
+		// but NOT sorted by prefix: a lighter right half is emitted before a
+		// heavier left half. Callers that need address order must sort
+		// (cidr.MergeIPNets does). Recursion depth is bounded by trie height
+		// (<=32) regardless of child order.
 		// Only process children that meet minimum cluster size requirement
 		if leftCount <= rightCount {
 			if leftCount >= minClusterSize {
