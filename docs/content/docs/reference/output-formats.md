@@ -325,12 +325,12 @@ The file is written atomically, so readers never observe a partial file. **Filte
 
 ```bash
 # iptables
-grep -v '^#' /tmp/ban.txt | while read -r cidr; do
+grep -v '^#' /var/lib/flokbn/ban.txt | while read -r cidr; do
   [ -n "$cidr" ] && iptables -I INPUT -s "$cidr" -j DROP
 done
 
 # nginx format
-grep -v '^#' /tmp/ban.txt | sed 's/^/deny /; s/$/;/' > /etc/nginx/flokbn-bans.conf
+grep -v '^#' /var/lib/flokbn/ban.txt | sed 's/^/deny /; s/$/;/' > /etc/nginx/flokbn-bans.conf
 ```
 
 In live mode the same content is served over HTTP as `GET /bans`, which avoids file-distribution entirely - poll the endpoint instead of shipping the file.

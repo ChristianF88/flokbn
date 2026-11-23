@@ -30,8 +30,8 @@ Live mode provides real-time detection by continuously monitoring incoming logs 
 
 ```bash
 flokbn live --port 8080 \
-  --jailFile /etc/flokbn/jail.json \
-  --banFile /etc/flokbn/ban.txt \
+  --jailFile /var/lib/flokbn/jail.json \
+  --banFile /var/lib/flokbn/ban.txt \
   --slidingWindowMaxTime 2h \
   --slidingWindowMaxSize 100000
 ```
@@ -135,7 +135,7 @@ Monitor the ban file and update iptables rules when it changes:
 ```bash
 #!/bin/bash
 # watch-banfile.sh
-BANFILE="/etc/flokbn/ban.txt"
+BANFILE="/var/lib/flokbn/ban.txt"
 LAST_HASH=""
 
 while true; do
@@ -178,7 +178,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/flokbn /etc/flokbn
+ReadWritePaths=/var/lib/flokbn
 
 [Install]
 WantedBy=multi-user.target
@@ -187,7 +187,9 @@ WantedBy=multi-user.target
 ```bash
 sudo useradd -r -s /bin/false flokbn
 sudo mkdir -p /var/lib/flokbn /etc/flokbn
-sudo chown flokbn:flokbn /var/lib/flokbn /etc/flokbn
+sudo chown flokbn:flokbn /var/lib/flokbn   # state: jail and ban file
+sudo chmod 750 /var/lib/flokbn
+# /etc/flokbn (config, list files) stays root-owned: the service only reads it
 sudo systemctl daemon-reload
 sudo systemctl enable flokbn
 sudo systemctl start flokbn
@@ -243,10 +245,10 @@ All three return `503` with a `Retry-After` header until the loop has completed 
 journalctl -u flokbn -f
 
 # Monitor ban file
-tail -f /etc/flokbn/ban.txt
+tail -f /var/lib/flokbn/ban.txt
 
 # Check jail state
-cat /etc/flokbn/jail.json | jq '.Cells | length'
+cat /var/lib/flokbn/jail.json | jq '.Cells | length'
 ```
 
 The jail file uses a tiered cell structure with escalating bans (stage 1-5: 10 minutes, 4 hours, 7 days, 30 days, 180 days; re-detection after expiry moves a range to the next stage). See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the jail data model.

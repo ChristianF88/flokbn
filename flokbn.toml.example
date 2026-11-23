@@ -18,8 +18,11 @@
 [global]
 # REQUIRED: Core jail and ban file configuration
 # These files are used by both static and live modes
-jailFile = "/tmp/flokbn_jail.json"        # Jail state persistence file
-banFile = "/tmp/flokbn_ban.txt"           # Output file for banned IPs/CIDRs
+# Keep them in a directory only flokbn can write, never in /tmp or another
+# world-writable location: the ban file feeds your firewall. The directory must
+# exist before the first run (flokbn does not create it).
+jailFile = "/var/lib/flokbn/jail.json"    # Jail state persistence file
+banFile = "/var/lib/flokbn/ban.txt"       # Output file for banned IPs/CIDRs
 
 # OPTIONAL: Whitelist and blacklist files for IP filtering
 # Relative paths are supported and resolved from the current working directory
