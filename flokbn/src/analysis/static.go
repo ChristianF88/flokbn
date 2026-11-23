@@ -139,6 +139,16 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 
 	if len(requests) == 0 {
 		jsonOutput.AddWarning("empty_logfile", "No requests found in logfile", 1)
+		// Nothing to analyse, but the publish step still has work: bans that ran
+		// out since the last run must leave the ban file, and whitelist/blacklist
+		// edits must be picked up. A cancelled (quit) TUI run must not mutate
+		// on-disk jail/ban state.
+		if err := ctx.Err(); err != nil {
+			return jsonOutput, requests, err
+		}
+		if err := publishJailAndBans(cfg, jsonOutput); err != nil {
+			return jsonOutput, requests, err
+		}
 		return jsonOutput, requests, nil
 	}
 
@@ -234,19 +244,32 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	}
 
 	// Process jail with whitelist/blacklist if configured
-	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
-		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
-			// Fail loud: a jail/ban processing failure must not exit 0 with no ban
-			// file. The barrier (Config.Validate) catches an unloadable jail before
-			// this; this propagation is defense-in-depth for the remaining causes
-			// (jail save / ban-file write).
-			jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
-			return jsonOutput, requests, err
-		}
+	if err := publishJailAndBans(cfg, jsonOutput); err != nil {
+		return jsonOutput, requests, err
 	}
 
 	jsonOutput.UpdateDuration(analysisStart)
 	return jsonOutput, requests, nil
+}
+
+// publishJailAndBans runs the jail update and ban-file publish step when both a
+// jail file and a ban file are configured; otherwise it is a no-op. Shared by
+// every successful exit of both static entrypoints (including the empty-log
+// exits) so the ban file is refreshed on each run.
+//
+// Fail loud: a jail/ban processing failure must not exit 0 with no ban file.
+// The barrier (Config.Validate) catches an unloadable jail before this; the
+// propagation is defense-in-depth for the remaining causes (jail save /
+// ban-file write).
+func publishJailAndBans(cfg *config.Config, jsonOutput *output.JSONOutput) error {
+	if cfg.Global == nil || cfg.Global.JailFile == "" || cfg.Global.BanFile == "" {
+		return nil
+	}
+	if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
+		jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
+		return err
+	}
+	return nil
 }
 
 // computeGlobalFilters loads the globally-configured whitelists and records
@@ -591,6 +614,11 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 
 	if totalRequests == 0 {
 		jsonOutput.AddWarning("empty_logfile", "No requests found in logfile", 1)
+		// Still run the publish step (expired bans, list edits) - see the same
+		// branch in StaticWithRequestsCtx.
+		if err := publishJailAndBans(cfg, jsonOutput); err != nil {
+			return jsonOutput, err
+		}
 		return jsonOutput, nil
 	}
 
@@ -661,13 +689,8 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	// UserAgentBlacklistIPs stay empty, exactly as the full path produces here.
 
 	// Process jail with whitelist/blacklist if configured.
-	if cfg.Global != nil && cfg.Global.JailFile != "" && cfg.Global.BanFile != "" {
-		if err := ProcessJailWithWhitelist(cfg, jsonOutput); err != nil {
-			// Fail loud (see the fast-path site above): defense-in-depth behind the
-			// barrier's jail validation.
-			jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
-			return jsonOutput, err
-		}
+	if err := publishJailAndBans(cfg, jsonOutput); err != nil {
+		return jsonOutput, err
 	}
 
 	jsonOutput.UpdateDuration(analysisStart)
@@ -1115,12 +1138,25 @@ func ProcessJailWithWhitelist(cfg *config.Config, jsonOutput *output.JSONOutput)
 		filteredJailCIDRs = append(filteredJailCIDRs, userAgentBlacklistCIDRs...)
 	}
 
+	// Expire run-out bans on EVERY run, not only when there is something to add:
+	// ListActiveBans below trusts the BanActive flags, and jail.Update (the only
+	// other caller of UpdateBanActiveStatus) is skipped when nothing was
+	// detected - a quiet run would otherwise republish expired bans from the
+	// persisted flags indefinitely. Expiry only flips active -> inactive, so a
+	// count delta is an exact change signal (same check as the live heartbeat).
+	activeBefore := len(jailInstance.ListActiveBans())
+	jailInstance.UpdateBanActiveStatus()
+	bansExpired := len(jailInstance.ListActiveBans()) != activeBefore
+
 	// Update jail with filtered CIDRs
 	if len(filteredJailCIDRs) > 0 {
 		if err := jailInstance.Update(filteredJailCIDRs); err != nil {
 			jsonOutput.AddWarning("jail_update", fmt.Sprintf("Some CIDRs failed during jail update: %v", err), 1)
 		}
+	}
 
+	// Persist when the jail changed: new detections, or bans that just expired.
+	if len(filteredJailCIDRs) > 0 || bansExpired {
 		err = jail.JailToFile(jailInstance, cfg.GetJailFile())
 		if err != nil {
 			jsonOutput.AddError("jail_save", fmt.Sprintf("Failed to save jail %q: %v", cfg.GetJailFile(), err), 1)
