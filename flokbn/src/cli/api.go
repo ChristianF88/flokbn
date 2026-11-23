@@ -287,6 +287,11 @@ const (
 	// liveIdlePoll is how long the loop sleeps after an empty ReadBatch
 	// before polling again (ReadBatch is non-blocking).
 	liveIdlePoll = time.Second
+	// liveTimestampSkewInterval rate-limits the per-window warning about
+	// request timestamps that disagree with the wall clock.
+	liveTimestampSkewInterval = time.Minute
+	// liveTimestampSkewMsg is that warning's message.
+	liveTimestampSkewMsg = "most request timestamps fall outside the sliding window on arrival"
 )
 
 // sleepOrDone sleeps for d, returning early when ctx is cancelled.
@@ -429,6 +434,8 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 	// Last iteration's per-window cluster stats, re-served by heartbeat
 	// snapshots (no traffic means no new clustering result).
 	var lastWinClusterStats [][]clusterSetStats
+	// Per-window time of the last timestamp-skew warning (rate limit).
+	lastSkewWarn := make([]time.Time, len(windows))
 
 	for {
 		loopStart := time.Now()
@@ -554,6 +561,26 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 			// Update this specific window
 			winInst.window.Update(timedIps)
 			totalWindowSize += len(winInst.window.IPQueue)
+
+			// Time-based expiry compares log time with the wall clock. When
+			// most of a batch is already outside the window on arrival the
+			// two disagree: stale requests expire before clustering sees
+			// them (nothing is ever detected), future-stamped ones are
+			// clamped to their arrival time. Say so instead of staying
+			// silent; the usual cause is a zone-less log format on a host
+			// that is not on UTC.
+			if arr := winInst.window.LastArrival(); (arr.Stale+arr.Future)*2 > arr.Inserted &&
+				loopStart.Sub(lastSkewWarn[wi]) >= liveTimestampSkewInterval {
+				lastSkewWarn[wi] = loopStart
+				logger.Warn(liveTimestampSkewMsg,
+					"window", winInst.name,
+					"batch", arr.Inserted,
+					"stale", arr.Stale,
+					"future", arr.Future,
+					"window_max_time", winInst.config.SlidingWindowMaxTime.String(),
+					"hint", "timestamps without a UTC offset are read as UTC; log the offset or check the clock on the log host",
+				)
+			}
 
 			// Run clustering for each ClusterArgSet on this window
 			for i, argSet := range winInst.config.ClusterArgSets {
