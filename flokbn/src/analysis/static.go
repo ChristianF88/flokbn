@@ -163,9 +163,21 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 		config *config.TrieConfig
 	}
 
-	// Accumulate User-Agent derived IPs across all tries (thread-safe via triesMutex)
-	globalUserAgentWhitelistIPSet := make(map[string]bool)
-	globalUserAgentBlacklistIPSet := make(map[string]bool)
+	// Accumulate User-Agent derived IPs across all tries (thread-safe via
+	// triesMutex). Each trie contributes its own distinct IPs; the lists are
+	// sorted and de-duplicated once after all tries finished.
+	var globalUserAgentWhitelistIPs, globalUserAgentBlacklistIPs []uint32
+
+	// General.UniqueIPs describes the whole log (distinct client IPs across all
+	// parsed requests), independent of any trie's filters. Counted concurrently
+	// with the trie work; joined right after it.
+	var generalUniqueIPs int
+	var uniqueWG sync.WaitGroup
+	uniqueWG.Add(1)
+	go func() {
+		defer uniqueWG.Done()
+		generalUniqueIPs = countUniqueRequestIPs(requests)
+	}()
 
 	trieWorkChan := make(chan trieWork, len(cfg.StaticTries))
 
@@ -186,12 +198,8 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 				// Thread-safe append to results and merge UA IPs
 				triesMutex.Lock()
 				trieResults = append(trieResults, result)
-				for _, ip := range whitelistIPs {
-					globalUserAgentWhitelistIPSet[ip] = true
-				}
-				for _, ip := range blacklistIPs {
-					globalUserAgentBlacklistIPSet[ip] = true
-				}
+				globalUserAgentWhitelistIPs = append(globalUserAgentWhitelistIPs, whitelistIPs...)
+				globalUserAgentBlacklistIPs = append(globalUserAgentBlacklistIPs, blacklistIPs...)
 				triesMutex.Unlock()
 			}
 		}()
@@ -205,6 +213,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 
 	// Wait for all tries to complete
 	trieWG.Wait()
+	uniqueWG.Wait()
 
 	// Cancellation check after the CPU-bound trie phase, before the jail/ban-file
 	// side effects below. A cancelled (quit) TUI run must not mutate on-disk
@@ -228,20 +237,12 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 	// once here; never in the hot loop.
 	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
 
-	// Set General.UniqueIPs to the max across all tries
-	for _, tr := range trieResults {
-		if tr.Stats.UniqueIPs > jsonOutput.General.UniqueIPs {
-			jsonOutput.General.UniqueIPs = tr.Stats.UniqueIPs
-		}
-	}
+	jsonOutput.General.UniqueIPs = generalUniqueIPs
 
-	// Convert global User-Agent IP sets to slices for jail processing
-	for ip := range globalUserAgentWhitelistIPSet {
-		jsonOutput.UserAgentWhitelistIPs = append(jsonOutput.UserAgentWhitelistIPs, ip)
-	}
-	for ip := range globalUserAgentBlacklistIPSet {
-		jsonOutput.UserAgentBlacklistIPs = append(jsonOutput.UserAgentBlacklistIPs, ip)
-	}
+	// Publish the User-Agent derived IPs (also the input of the jail step below)
+	// in a stable order: ascending by address, each IP once.
+	jsonOutput.UserAgentWhitelistIPs = sortedUniqueIPStrings(globalUserAgentWhitelistIPs)
+	jsonOutput.UserAgentBlacklistIPs = sortedUniqueIPStrings(globalUserAgentBlacklistIPs)
 
 	// Process jail with whitelist/blacklist if configured
 	if err := publishJailAndBans(cfg, jsonOutput); err != nil {
@@ -250,6 +251,50 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 
 	jsonOutput.UpdateDuration(analysisStart)
 	return jsonOutput, requests, nil
+}
+
+// countUniqueRequestIPs returns the number of distinct client IPs across all
+// parsed requests. Zero IPs (invalid/unparseable host field) are not counted,
+// matching the IP-only fast path, whose IP slice never contains them.
+func countUniqueRequestIPs(requests []ingestor.Request) int {
+	ips := make([]uint32, 0, len(requests))
+	for i := range requests {
+		if ip := requests[i].IPUint32; ip != 0 {
+			ips = append(ips, ip)
+		}
+	}
+	iputils.RadixSortUint32(ips)
+	return iputils.CountDistinctSorted(ips)
+}
+
+// sortedUniqueIPStrings sorts ips ascending (in place), drops duplicates and
+// renders the dotted-quad strings. Returns nil for an empty input so the JSON
+// field stays omitted.
+func sortedUniqueIPStrings(ips []uint32) []string {
+	if len(ips) == 0 {
+		return nil
+	}
+	iputils.RadixSortUint32(ips)
+	out := make([]string, 0, iputils.CountDistinctSorted(ips))
+	for i, ip := range ips {
+		if i > 0 && ip == ips[i-1] {
+			continue
+		}
+		out = append(out, ingestor.Uint32ToIPString(ip))
+	}
+	return out
+}
+
+// ipSetToSlice returns the members of set in unspecified order.
+func ipSetToSlice(set map[uint32]struct{}) []uint32 {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]uint32, 0, len(set))
+	for ip := range set {
+		out = append(out, ip)
+	}
+	return out
 }
 
 // publishJailAndBans runs the jail update and ban-file publish step when both a
@@ -299,11 +344,13 @@ func computeGlobalFilters(cfg *config.Config) output.GlobalFilters {
 }
 
 // processTrie builds and analyzes a single trie; callers run one goroutine per trie.
-// Returns the trie result along with collected User-Agent whitelist/blacklist IPs.
+// Returns the trie result along with the distinct IPs this trie saw with a
+// whitelisted / blacklisted User-Agent (numeric, unspecified order - the
+// caller merges and sorts them across tries).
 // userAgentMatcher is built once by the caller and shared across all tries (it
 // depends only on global config), so processTrie never rebuilds it per trie.
 func processTrie(trieName string, trieConfig *config.TrieConfig, requests []ingestor.Request,
-	userAgentMatcher *cidr.UserAgentMatcher, jsonOutput *output.JSONOutput) (output.TrieResult, []string, []string) {
+	userAgentMatcher *cidr.UserAgentMatcher, jsonOutput *output.JSONOutput) (output.TrieResult, []uint32, []uint32) {
 
 	insertStart := time.Now()
 
@@ -373,11 +420,10 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	var filteredRequestCount int
 	var ipsToInsertUint32 []uint32
 
-	// User-Agent tracking
-	userAgentWhitelistIPs := make([]string, 0)
-	userAgentBlacklistIPs := make([]string, 0)
-	userAgentWhitelistIPSet := make(map[string]bool)
-	userAgentBlacklistIPSet := make(map[string]bool)
+	// User-Agent tracking: distinct IPs seen with a whitelisted / blacklisted
+	// UA. Keyed by the numeric IP - no per-request string conversion.
+	userAgentWhitelistIPSet := make(map[uint32]struct{})
+	userAgentBlacklistIPSet := make(map[uint32]struct{})
 
 	// Check if we have any filters that require per-request processing
 	// Only consider User-Agent matcher a filter if it actually has patterns
@@ -432,7 +478,6 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 				requests, trieConfig, bounds,
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
-				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
 				&filteredRequestCount, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded); err != nil {
 				jsonOutput.AddError("concurrent_filtering", fmt.Sprintf("Failed to process requests concurrently: %v", err), 1)
 			}
@@ -442,7 +487,6 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 				requests, trieConfig, bounds,
 				userAgentMatcher,
 				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
-				&userAgentWhitelistIPs, &userAgentBlacklistIPs,
 				&filteredRequestCount, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded)
 		}
 
@@ -460,7 +504,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	if invalidIPCount > 0 {
 		percentage := float64(invalidIPCount) / float64(len(requests)) * 100
 		jsonOutput.AddWarning("invalid_ips_skipped",
-			fmt.Sprintf("%d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", invalidIPCount, percentage), 1)
+			fmt.Sprintf("Trie %q: %d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", trieName, invalidIPCount, percentage), 1)
 	}
 
 	// Set trie stats
@@ -511,7 +555,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	// Clustering (same as original but with parallel trie)
 	processClustering(trieConfig, trieInstance.Trie, jsonOutput, &trieResult)
 
-	return trieResult, userAgentWhitelistIPs, userAgentBlacklistIPs
+	return trieResult, ipSetToSlice(userAgentWhitelistIPSet), ipSetToSlice(userAgentBlacklistIPSet)
 }
 
 // Static runs static analysis from config and returns
@@ -678,12 +722,9 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	// so this only feeds the informational JSON count, never an active filter.
 	jsonOutput.GlobalFilters = computeGlobalFilters(cfg)
 
-	// Set General.UniqueIPs to the max across all tries.
-	for _, tr := range trieResults {
-		if tr.Stats.UniqueIPs > jsonOutput.General.UniqueIPs {
-			jsonOutput.General.UniqueIPs = tr.Stats.UniqueIPs
-		}
-	}
+	// General.UniqueIPs is the distinct-IP count of the whole log - here the
+	// same number every (unfiltered) trie reports.
+	jsonOutput.General.UniqueIPs = uniqueIPs
 
 	// No filters => no User-Agent derived IP sets; UserAgentWhitelistIPs /
 	// UserAgentBlacklistIPs stay empty, exactly as the full path produces here.
@@ -740,11 +781,12 @@ func processTrieFromSortedIPs(trieName string, trieConfig *config.TrieConfig, so
 	insertDuration := time.Since(insertStart)
 
 	// Invalid-IP warning: identical message and denominator (totalRequests ==
-	// len(requests) in the full path).
+	// len(requests) in the full path). Emitted per trie and naming the trie,
+	// like processTrie (where the count depends on the trie's filters).
 	if invalidCount > 0 {
 		percentage := float64(invalidCount) / float64(totalRequests) * 100
 		jsonOutput.AddWarning("invalid_ips_skipped",
-			fmt.Sprintf("%d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", invalidCount, percentage), 1)
+			fmt.Sprintf("Trie %q: %d requests (%.1f%%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format", trieName, invalidCount, percentage), 1)
 	}
 
 	// Stats: in the unfiltered branch TotalRequestsAfterFiltering == number of
@@ -788,8 +830,7 @@ func filterRequestsConcurrent(
 	trieConfig *config.TrieConfig,
 	bounds timeBounds,
 	userAgentMatcher *cidr.UserAgentMatcher,
-	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[string]bool,
-	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
+	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[uint32]struct{},
 	filteredRequestCount *int,
 	ipsToInsert *[]uint32,
 	invalidIPCount *int,
@@ -820,8 +861,8 @@ func filterRequestsConcurrent(
 	}
 
 	// Start result collector. Only this single goroutine touches the UA
-	// whitelist/blacklist sets/slices and the local counters, so no mutex is
-	// needed around them.
+	// whitelist/blacklist sets and the local counters, so no mutex is needed
+	// around them.
 	var collectorWG sync.WaitGroup
 
 	// Track invalid IPs in collector
@@ -855,20 +896,12 @@ func filterRequestsConcurrent(
 
 			// Collect User-Agent whitelist IPs
 			if result.isWhitelistedUA {
-				ipStr := ingestor.Uint32ToIPString(result.request.IPUint32)
-				if !userAgentWhitelistIPSet[ipStr] {
-					userAgentWhitelistIPSet[ipStr] = true
-					*userAgentWhitelistIPs = append(*userAgentWhitelistIPs, ipStr)
-				}
+				userAgentWhitelistIPSet[result.request.IPUint32] = struct{}{}
 			}
 
 			// Collect User-Agent blacklist IPs
 			if result.isBlacklistedUA {
-				ipStr := ingestor.Uint32ToIPString(result.request.IPUint32)
-				if !userAgentBlacklistIPSet[ipStr] {
-					userAgentBlacklistIPSet[ipStr] = true
-					*userAgentBlacklistIPs = append(*userAgentBlacklistIPs, ipStr)
-				}
+				userAgentBlacklistIPSet[result.request.IPUint32] = struct{}{}
 			}
 		}
 		// Update the shared counts
@@ -914,8 +947,7 @@ func filterRequests(
 	trieConfig *config.TrieConfig,
 	bounds timeBounds,
 	userAgentMatcher *cidr.UserAgentMatcher,
-	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[string]bool,
-	userAgentWhitelistIPs, userAgentBlacklistIPs *[]string,
+	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[uint32]struct{},
 	filteredRequestCount *int,
 	ipsToInsert *[]uint32,
 	invalidIPCount *int,
@@ -939,9 +971,6 @@ func filterRequests(
 			continue
 		}
 
-		// Only convert IP to string if we need it for User-Agent pattern processing
-		var ipStr string
-		var ipStrComputed bool
 		isWhitelistedUA := false
 		isBlacklistedUA := false
 
@@ -952,25 +981,10 @@ func filterRequests(
 			isBlacklistedUA = (uaResult == cidr.UserAgentBlacklist)
 
 			if isWhitelistedUA {
-				if !ipStrComputed {
-					ipStr = ingestor.Uint32ToIPString(r.IPUint32)
-					ipStrComputed = true
-				}
-				if !userAgentWhitelistIPSet[ipStr] {
-					userAgentWhitelistIPSet[ipStr] = true
-					*userAgentWhitelistIPs = append(*userAgentWhitelistIPs, ipStr)
-				}
+				userAgentWhitelistIPSet[r.IPUint32] = struct{}{}
 			}
-
 			if isBlacklistedUA {
-				if !ipStrComputed {
-					ipStr = ingestor.Uint32ToIPString(r.IPUint32)
-					ipStrComputed = true
-				}
-				if !userAgentBlacklistIPSet[ipStr] {
-					userAgentBlacklistIPSet[ipStr] = true
-					*userAgentBlacklistIPs = append(*userAgentBlacklistIPs, ipStr)
-				}
+				userAgentBlacklistIPSet[r.IPUint32] = struct{}{}
 			}
 		}
 
