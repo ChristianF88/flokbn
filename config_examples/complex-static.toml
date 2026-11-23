@@ -108,7 +108,11 @@ useForJail = [false, true, false]
 
 # ------------------------------------------------------------------------------
 # Trie 4 - everything combined: bot UAs + hot endpoints + a 24h window
-# (the log spans 2026-02-03T23:56Z to 2026-02-06T23:58Z; RFC3339 only).
+# (the log spans 2026-02-03T23:56Z to 2026-02-06T23:58Z).
+# startTime/endTime accept RFC3339 or the short forms of --startTime/--endTime
+# ("YYYY-MM-DD", "YYYY-MM-DD HH", "YYYY-MM-DD HH:MM", optionally " +0100"). The
+# RFC3339 values below carry a zone and are compared as TRUE INSTANTS; a value
+# without an offset would match each log line's local wall-clock instead.
 # ~39k requests survive all three filters; hotspot /16s carry ~310-760.
 # ------------------------------------------------------------------------------
 [static.t4_targeted_window]
