@@ -992,21 +992,12 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 	}
 
 	for _, argSet := range trieConfig.ClusterArgSets {
-		if argSet.MinDepth > argSet.MaxDepth {
-			jsonOutput.AddError("invalid_depth_params",
-				fmt.Sprintf("minDepth (%d) must be <= maxDepth (%d)", argSet.MinDepth, argSet.MaxDepth), 1)
-			continue
-		}
-		if argSet.MaxDepth > 32 {
-			jsonOutput.AddError("invalid_depth_params",
-				fmt.Sprintf("maxDepth (%d) must be <= 32", argSet.MaxDepth), 1)
-			continue
-		}
-
-		clusterStart := time.Now()
-		cidrs := trieInstance.CollectCIDRs(argSet.MinClusterSize, argSet.MinDepth, argSet.MaxDepth, argSet.MeanSubnetDifference)
-		clusterDuration := time.Since(clusterStart)
-
+		// TrieResult.Data must hold exactly one entry per configured arg set, in
+		// config order: ProcessJailWithWhitelist pairs Data[i] with UseForJail[i]
+		// by position (and the renderers number the sets the same way). An
+		// invalid set therefore still gets an entry - an empty placeholder with
+		// its parameters - instead of being skipped, which would shift every
+		// later set onto its left neighbour's useForJail flag.
 		clusterResult := output.ClusterResult{
 			Parameters: output.ClusterParameters{
 				MinClusterSize:       argSet.MinClusterSize,
@@ -1014,10 +1005,26 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 				MaxDepth:             argSet.MaxDepth,
 				MeanSubnetDifference: argSet.MeanSubnetDifference,
 			},
-			ExecutionTimeUS: clusterDuration.Microseconds(),
-			DetectedRanges:  []output.CIDRRange{},
-			MergedRanges:    []output.CIDRRange{},
+			DetectedRanges: []output.CIDRRange{},
+			MergedRanges:   []output.CIDRRange{},
 		}
+
+		if argSet.MinDepth > argSet.MaxDepth {
+			jsonOutput.AddError("invalid_depth_params",
+				fmt.Sprintf("minDepth (%d) must be <= maxDepth (%d)", argSet.MinDepth, argSet.MaxDepth), 1)
+			trieResult.Data = append(trieResult.Data, clusterResult)
+			continue
+		}
+		if argSet.MaxDepth > 32 {
+			jsonOutput.AddError("invalid_depth_params",
+				fmt.Sprintf("maxDepth (%d) must be <= 32", argSet.MaxDepth), 1)
+			trieResult.Data = append(trieResult.Data, clusterResult)
+			continue
+		}
+
+		clusterStart := time.Now()
+		cidrs := trieInstance.CollectCIDRs(argSet.MinClusterSize, argSet.MinDepth, argSet.MaxDepth, argSet.MeanSubnetDifference)
+		clusterResult.ExecutionTimeUS = time.Since(clusterStart).Microseconds()
 
 		// Parse CIDRs once for reuse across operations
 		var cidrIPNets []*net.IPNet
