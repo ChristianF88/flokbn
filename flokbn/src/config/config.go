@@ -126,7 +126,10 @@ type StaticConfig struct {
 
 type LiveConfig struct {
 	Port        string        `toml:"port"`
-	Listen      string        `toml:"listen"` // address the Lumberjack listener binds; empty = DefaultLiveListen
+	Listen      string        `toml:"listen"`      // address the Lumberjack listener binds; empty = DefaultLiveListen
+	TLSCert     string        `toml:"tlsCert"`     // PEM certificate of the Lumberjack listener; with tlsKey enables TLS
+	TLSKey      string        `toml:"tlsKey"`      // PEM private key for tlsCert
+	TLSClientCA string        `toml:"tlsClientCA"` // PEM CA bundle; when set, clients must present a certificate it signed (mTLS)
 	ReadTimeout time.Duration `toml:"readTimeout"`
 	StatsListen string        `toml:"statsListen"` // host:port for the /stats HTTP server; empty = off
 	TopTalkers  int           `toml:"topTalkers"`  // top-N IPs per window in /stats; 0 = off
@@ -179,6 +182,9 @@ var staticScalarKeys = map[string]struct{}{
 var liveScalarKeys = map[string]struct{}{
 	"port":                   {},
 	"listen":                 {},
+	"tlsCert":                {},
+	"tlsKey":                 {},
+	"tlsClientCA":            {},
 	"readTimeout":            {},
 	"statsListen":            {},
 	"topTalkers":             {},
@@ -194,6 +200,9 @@ var liveScalarKeys = map[string]struct{}{
 var liveSectionKeys = map[string]struct{}{
 	"port":        {},
 	"listen":      {},
+	"tlsCert":     {},
+	"tlsKey":      {},
+	"tlsClientCA": {},
 	"readTimeout": {},
 	"statsListen": {},
 	"topTalkers":  {},
@@ -695,6 +704,19 @@ func parseLiveConfig(m map[string]any, diags *ConfigDiagnostics) (*LiveConfig, e
 				return nil, fmt.Errorf("listen must be a string, got %T", value)
 			}
 			config.Listen = v
+		case "tlsCert", "tlsKey", "tlsClientCA":
+			v, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s must be a string, got %T", key, value)
+			}
+			switch key {
+			case "tlsCert":
+				config.TLSCert = v
+			case "tlsKey":
+				config.TLSKey = v
+			default:
+				config.TLSClientCA = v
+			}
 		case "readTimeout":
 			v, ok := value.(string)
 			if !ok {
@@ -1230,6 +1252,11 @@ func (c *Config) validateLiveInto(diags *ConfigDiagnostics) {
 		// path or whitespace.
 		if l := c.Live.Listen; l != "" && net.ParseIP(l) == nil && strings.ContainsAny(l, ":/[] \t") {
 			diags.AddRaw(fmt.Sprintf("invalid listen %s (want an IP address or host name without a port, e.g. 127.0.0.1 or 0.0.0.0; the port is set with port)", quoteCapped(l)))
+		}
+		// Load the listener certificate (and client CA) now, so a missing or
+		// mismatched file is reported here and not after the port is bound.
+		if _, err := c.IngestTLSConfig(); err != nil {
+			diags.AddRaw("invalid ingest TLS settings: " + err.Error())
 		}
 		if c.Live.StatsListen != "" {
 			if _, _, err := net.SplitHostPort(c.Live.StatsListen); err != nil {

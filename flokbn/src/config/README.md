@@ -315,6 +315,9 @@ useForJail = [true, false]
 port = "8080"        # Required: Port to listen on
 listen = "127.0.0.1" # Optional: address to listen on (default "127.0.0.1"; the port is unauthenticated)
 readTimeout = "5s"   # Optional: TCP read timeout (duration string, default "5s")
+tlsCert = "/etc/flokbn/tls/server.crt"          # Optional: with tlsKey, serve TLS
+tlsKey = "/etc/flokbn/tls/server.key"
+tlsClientCA = "/etc/flokbn/tls/shippers-ca.crt" # Optional: require client certificates (mTLS)
 ```
 
 #### Live Sliding Windows

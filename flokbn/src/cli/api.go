@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -205,8 +206,13 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	// The Lumberjack port is unauthenticated: it binds [live] listen
 	// (loopback unless configured otherwise), never all interfaces implicitly.
 	listenAddr := cfg.GetListenAddr()
+	tlsConfig, err := cfg.IngestTLSConfig()
+	if err != nil {
+		return fmt.Errorf("ingest TLS: %w", err)
+	}
 	ing, err := ingestor.NewTCPIngestorWithOptions(listenAddr, ingestor.Options{
 		ReadTimeout: cfg.GetReadTimeout(), // read timeout: avoid client disconnects
+		TLS:         tlsConfig,
 		Logger:      logger,
 	})
 
@@ -227,14 +233,17 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	logger.Info("starting live loop",
 		"version", version.Version,
 		"listen", listenAddr,
+		"tls", ingestTLSMode(tlsConfig),
 		"jail_file", cfg.GetJailFile(),
 		"ban_file", cfg.GetBanFile(),
 		"windows", len(cfg.LiveTries),
 		"cluster_sets", totalClusterSets,
 	)
 
-	if !isLoopbackHost(cfg.Live.Listen) {
-		logger.Warn("ingest listener is reachable from other hosts; the Lumberjack port is unauthenticated, so anyone who can reach it can inject log events and get ranges banned - restrict it with a firewall or bind it to loopback",
+	// Mutual TLS is the only authentication the port has; without it an
+	// exposed listener deserves a loud line.
+	if !isLoopbackHost(cfg.Live.Listen) && ingestTLSMode(tlsConfig) != "mutual" {
+		logger.Warn("ingest listener is reachable from other hosts and does not authenticate clients: anyone who can reach it can inject log events and get ranges banned - restrict it with a firewall, bind it to loopback, or require client certificates (tlsClientCA)",
 			"listen", listenAddr)
 	}
 
@@ -273,6 +282,20 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// ingestTLSMode names how the ingest listener is protected: "off" (plain
+// TCP), "server" (encrypted, any client) or "mutual" (client certificates
+// required).
+func ingestTLSMode(c *tls.Config) string {
+	switch {
+	case c == nil:
+		return "off"
+	case c.ClientAuth == tls.RequireAndVerifyClientCert:
+		return "mutual"
+	default:
+		return "server"
+	}
 }
 
 // watchShutdownSignals turns the first signal on sig into a graceful shutdown
