@@ -42,7 +42,8 @@ type statsSnapshot struct {
 }
 
 type ingestStats struct {
-	Connected            bool      `json:"connected"`
+	Connected            bool      `json:"connected"`        // at least one client connection is open
+	OpenConnections      int       `json:"open_connections"` // client connections open right now
 	QueueDepth           int       `json:"queue_depth"`
 	LastBatchAt          time.Time `json:"last_batch_at"`
 	BatchesTotal         uint64    `json:"batches_total"`
@@ -307,7 +308,8 @@ func buildSnapshot(
 		GeneratedAt:   now,
 		UptimeS:       int64(now.Sub(st.startTime).Seconds()),
 		Ingest: ingestStats{
-			Connected:            !ing.IsClosed(),
+			Connected:            ingSt.OpenConnections > 0,
+			OpenConnections:      ingSt.OpenConnections,
 			QueueDepth:           ingSt.QueueDepth,
 			LastBatchAt:          ingSt.LastBatchAt,
 			BatchesTotal:         ingSt.BatchesTotal,

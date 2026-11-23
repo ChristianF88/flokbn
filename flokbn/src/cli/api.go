@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -216,10 +217,18 @@ func executeLiveAnalysis(cfg *config.Config) error {
 
 	logger := slog.Default()
 
-	ing, err := ingestor.NewTCPIngestor(
-		":"+cfg.Live.Port,
-		cfg.GetReadTimeout(), // read timeout: avoid client disconnects
-	)
+	// The Lumberjack port is unauthenticated: it binds [live] listen
+	// (loopback unless configured otherwise), never all interfaces implicitly.
+	listenAddr := cfg.GetListenAddr()
+	tlsConfig, err := cfg.IngestTLSConfig()
+	if err != nil {
+		return fmt.Errorf("ingest TLS: %w", err)
+	}
+	ing, err := ingestor.NewTCPIngestorWithOptions(listenAddr, ingestor.Options{
+		ReadTimeout: cfg.GetReadTimeout(), // read timeout: avoid client disconnects
+		TLS:         tlsConfig,
+		Logger:      logger,
+	})
 
 	if err != nil {
 		return fmt.Errorf("creating ingestor: %w", err)
@@ -237,28 +246,31 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	}
 	logger.Info("starting live loop",
 		"version", version.Version,
-		"listen", ":"+cfg.Live.Port,
+		"listen", listenAddr,
+		"tls", ingestTLSMode(tlsConfig),
 		"jail_file", cfg.GetJailFile(),
 		"ban_file", cfg.GetBanFile(),
 		"windows", len(cfg.LiveTries),
 		"cluster_sets", totalClusterSets,
 	)
 
+	// Mutual TLS is the only authentication the port has; without it an
+	// exposed listener deserves a loud line.
+	if !isLoopbackHost(cfg.Live.Listen) && ingestTLSMode(tlsConfig) != "mutual" {
+		logger.Warn("ingest listener is reachable from other hosts and does not authenticate clients: anyone who can reach it can inject log events and get ranges banned - restrict it with a firewall, bind it to loopback, or require client certificates (tlsClientCA)",
+			"listen", listenAddr)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Graceful shutdown
-	stop := make(chan os.Signal, 1)
+	// Graceful shutdown on the first SIGINT/SIGTERM, forced exit on the second.
+	stop := make(chan os.Signal, 2)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(stop)
-	go func() {
-		select {
-		case <-stop:
-			logger.Info("received shutdown signal")
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	finished := make(chan struct{})
+	defer close(finished)
+	go watchShutdownSignals(stop, finished, cancel, logger, os.Exit)
 
 	stats, err := newStatsServerFromConfig(cfg)
 	if err != nil {
@@ -271,6 +283,56 @@ func executeLiveAnalysis(cfg *config.Config) error {
 	}
 
 	return runLiveLoop(ctx, ing, cfg, logger, stats)
+}
+
+// isLoopbackHost reports whether a [live] listen value keeps the listener on
+// this machine. Empty means the default (config.DefaultLiveListen).
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		host = config.DefaultLiveListen
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// ingestTLSMode names how the ingest listener is protected: "off" (plain
+// TCP), "server" (encrypted, any client) or "mutual" (client certificates
+// required).
+func ingestTLSMode(c *tls.Config) string {
+	switch {
+	case c == nil:
+		return "off"
+	case c.ClientAuth == tls.RequireAndVerifyClientCert:
+		return "mutual"
+	default:
+		return "server"
+	}
+}
+
+// watchShutdownSignals turns the first signal on sig into a graceful shutdown
+// (cancel) and the second into an immediate exit. The handler has to outlive
+// the first signal: signal.Notify stays registered for the whole shutdown, so
+// with nobody reading sig a second Ctrl-C would be swallowed and a stalled
+// shutdown could only be ended with SIGKILL. It returns when finished is
+// closed (the live loop has returned).
+func watchShutdownSignals(sig <-chan os.Signal, finished <-chan struct{}, cancel context.CancelFunc, logger *slog.Logger, exit func(int)) {
+	select {
+	case <-sig:
+	case <-finished:
+		return
+	}
+	logger.Info("received shutdown signal, shutting down (signal again to exit immediately)")
+	cancel()
+
+	select {
+	case <-sig:
+		logger.Error("received second shutdown signal, exiting immediately")
+		exit(1)
+	case <-finished:
+	}
 }
 
 // newStatsServerFromConfig binds the stats listener when [live] statsListen
@@ -393,13 +455,14 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		statsState = newLiveStatsState(cfg, whitelistCIDRs, blacklistCIDRs)
 	}
 
-	logger.Info("waiting for Filebeat to connect")
-
+	// Accept only starts serving the listener; it does not wait for a client.
+	// Real connects and disconnects are logged by the ingestor ("Filebeat
+	// connected" / "Filebeat disconnected") and counted in its stats.
 	if err := ing.Accept(); err != nil {
 		return fmt.Errorf("accepting connection: %w", err)
 	}
 
-	logger.Info("Filebeat connected")
+	logger.Info("waiting for Filebeat to connect")
 
 	// Cancellation watcher: closing the ingestor unblocks the loop below.
 	// Started only after Accept so ing's internal state is never written
@@ -459,6 +522,16 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		batch, err := ing.ReadBatch()
 		if err != nil {
 			return fmt.Errorf("reading batch: %w", err)
+		}
+
+		if len(batch) == 0 && ing.IsClosed() {
+			// A batch can be queued between the empty read above and the
+			// close. Read once more now that nothing can be added, so the
+			// last batch before shutdown is processed instead of dropped.
+			batch, err = ing.ReadBatch()
+			if err != nil {
+				return fmt.Errorf("reading batch: %w", err)
+			}
 		}
 
 		if len(batch) == 0 {

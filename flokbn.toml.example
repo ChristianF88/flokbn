@@ -237,6 +237,19 @@ useForJail = [true, true, true]
 # REQUIRED: Network configuration (global settings only)
 port = "8080"                           # Port to listen for incoming log streams
 
+# OPTIONAL: Address the log-stream (Lumberjack) listener binds. Default 127.0.0.1.
+# The port is unauthenticated: whoever can reach it can inject log events and
+# get ranges banned. Set "0.0.0.0" only when the shipper runs on another host
+# AND the port is firewalled to it, or protect it with client certificates below.
+# listen = "127.0.0.1"
+
+# OPTIONAL: TLS for the listener (PEM files, read at startup).
+# tlsCert + tlsKey encrypt the stream; tlsClientCA additionally requires every
+# shipper to present a certificate signed by that CA (mutual TLS).
+# tlsCert = "/etc/flokbn/tls/server.crt"
+# tlsKey = "/etc/flokbn/tls/server.key"
+# tlsClientCA = "/etc/flokbn/tls/shippers-ca.crt"
+
 # OPTIONAL: TCP read timeout for the log ingestor (duration string, default "5s")
 # readTimeout = "5s"
 

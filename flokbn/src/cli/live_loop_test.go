@@ -82,7 +82,12 @@ func (f *fakeIngestor) Close() error {
 func (f *fakeIngestor) Stats() ingestor.IngestStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return ingestor.IngestStats{QueueDepth: len(f.batches)}
+	st := ingestor.IngestStats{QueueDepth: len(f.batches)}
+	if !f.closed {
+		// The fake stands for one connected shipper until it is closed.
+		st.OpenConnections = 1
+	}
+	return st
 }
 
 func (f *fakeIngestor) closeCallCount() int {
@@ -831,7 +836,7 @@ func TestRunLiveLoop_ContextCancelClosesIngestorAndReturns(t *testing.T) {
 	})
 
 	h := startLoop(t, fake, cfg)
-	h.awaitMessage("Filebeat connected")
+	h.awaitMessage("waiting for Filebeat to connect")
 
 	h.cancel()
 	if err := h.wait(2 * time.Second); err != nil {

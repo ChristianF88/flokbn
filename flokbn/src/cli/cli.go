@@ -96,6 +96,11 @@ var (
 		Name:  "port",
 		Usage: "Port to listen on",
 	}
+	listenFlag = &cli.StringFlag{
+		Name:  "listen",
+		Usage: "Address to listen on; the port is unauthenticated, so pass 0.0.0.0 only on a trusted network",
+		Value: config.DefaultLiveListen,
+	}
 	logLevelFlag = &cli.StringFlag{
 		Name:  "logLevel",
 		Usage: "Log verbosity (debug, info, warn, error); overrides the [log] level from the config file",
@@ -162,7 +167,7 @@ func validateConfigModeFlags(c *cli.Context, allowedFlags []string) error {
 
 	// Check all possible flags
 	flagsToCheck := []string{
-		"port", "jailFile", "banFile", "slidingWindowMaxTime", "slidingWindowMaxSize",
+		"port", "listen", "jailFile", "banFile", "slidingWindowMaxTime", "slidingWindowMaxSize",
 		"sleepBetweenIterations", "clusterArgSet", "useragentRegex", "endpointRegex",
 		"rangesCidr", "plotPath", "whitelist", "blacklist", "userAgentWhitelist",
 		"userAgentBlacklist", "logfile", "logFormat", "startTime", "endTime",
@@ -323,7 +328,8 @@ func handleLiveFlagsMode(c *cli.Context) error {
 			UserAgentBlacklist: c.String("userAgentBlacklist"),
 		},
 		Live: &config.LiveConfig{
-			Port: c.String("port"),
+			Port:   c.String("port"),
+			Listen: c.String("listen"),
 		},
 		LiveTries: make(map[string]*config.SlidingTrieConfig),
 	}
@@ -525,6 +531,7 @@ var App = &cli.App{
 				configFlag,
 				// Live-specific flags
 				portFlag,
+				listenFlag,
 				logLevelFlag,
 				slidingWindowMaxTimeFlag,
 				slidingWindowMaxSizeFlag,
