@@ -26,13 +26,9 @@ const concurrentZeroCopyFormat = `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
 // paths (see TestConcurrentCRLF_ParityWithStreaming). The lineEnding parameter
 // of genConcurrentTestLogLE selects "\n" or "\r\n".
 //
-// No blank lines are emitted either: the concurrent reader skips empty lines
-// (continue), whereas the streaming reader hands them to the parser which treats
-// "" as a (zero-IP) Request. That divergence is a long-standing, pre-existing
-// property of the two readers and is orthogonal to the zero-copy change under
-// test (both the old slab-copy and the new zero-copy concurrent code skip empty
-// lines identically). Real Apache logs contain no blank lines, so excluding them
-// keeps the differential comparison faithful to the change being validated.
+// No blank lines are emitted here. Both readers skip them identically (see
+// TestFraming_BlankLinesSkippedOnBothPaths, which covers them explicitly);
+// leaving them out keeps this generator focused on the zero-copy comparison.
 //
 // withTrailingNewline controls whether the file ends in '\n'. The no-trailing
 // case specifically exercises readChunkBatched's EOF trailing-line handling.

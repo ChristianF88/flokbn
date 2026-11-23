@@ -167,6 +167,14 @@ Use `%^` for any field you don't need. Can appear unlimited times.
 
 Write `\"%^\"` for a field the log quotes (the Referer in a combined log) so the format documents the real layout. As a safety net, a value that starts with a double quote is always read up to its closing quote, even when the format leaves that slot bare: a Referer such as `"http://a b"` is one field, never two. Without that rule a space inside a quoted, client-controlled field would shift every later field and a client could choose the address that `%h` reads.
 
+## Lines
+
+One request per line, terminated by `\n` or `\r\n`. The rules are the same for small and large files:
+
+- **Blank lines** are skipped. They are not requests and are not counted as invalid.
+- **Lines longer than 2 MiB** are skipped and reported in an `oversized_lines` warning; the rest of the file is analysed normally.
+- A line whose `%h` field is not a valid IPv4 address is counted under `skipped_invalid_ips`.
+
 ## Format String Rules
 
 1. **Whitespace** in the format string must match whitespace in the log

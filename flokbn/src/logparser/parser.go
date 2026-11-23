@@ -49,6 +49,7 @@ type CompiledFormat struct {
 type parseCounters struct {
 	malformedStatus atomic.Uint64
 	malformedBytes  atomic.Uint64
+	oversizedLines  atomic.Uint64
 }
 
 // ParseStats is a snapshot of malformed-field counters, cumulative across
@@ -56,7 +57,18 @@ type parseCounters struct {
 type ParseStats struct {
 	MalformedStatus uint64
 	MalformedBytes  uint64
+	// OversizedLines is the number of lines longer than MaxLineLen. Such a line
+	// is skipped by every I/O path: it is not a request and is not part of the
+	// invalid-IP count either.
+	OversizedLines uint64
 }
+
+// MaxLineLen is the longest line, in bytes before its "\n" terminator, that
+// the file parsers accept (2 MiB). A longer line is skipped and counted in
+// ParseStats.OversizedLines; the rest of the file is parsed normally. The
+// limit bounds the memory one line can pin and is the same on the streaming
+// (<500MB) and the chunked (>=500MB) reader.
+const MaxLineLen = 2 * 1024 * 1024
 
 // Parser provides high-performance log parsing with adaptive I/O strategies
 // Combines parallel processing, object pooling, and minimal-allocation field extraction
@@ -101,12 +113,17 @@ func (pp *Parser) Stats() ParseStats {
 	return ParseStats{
 		MalformedStatus: pp.compiled.counters.malformedStatus.Load(),
 		MalformedBytes:  pp.compiled.counters.malformedBytes.Load(),
+		OversizedLines:  pp.compiled.counters.oversizedLines.Load(),
 	}
 }
 
 // ParseFile parses a log file using adaptive I/O strategy (primary interface)
 // Automatically chooses between streaming I/O (small files) and chunked I/O (large files)
 // This is the recommended method for all file parsing operations.
+//
+// Both strategies frame lines identically: "\n" or "\r\n" terminated, blank
+// lines skipped, lines longer than MaxLineLen skipped and counted in
+// Stats().OversizedLines.
 func (pp *Parser) ParseFile(filename string) ([]ingestor.Request, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -141,7 +158,9 @@ func (pp *Parser) ParseFile(filename string) ([]ingestor.Request, error) {
 //
 // Returns the slice of nonzero IPs (lines whose IP parsed successfully) and
 // invalidCount = the number of lines whose IP failed to parse (extractIPOnly
-// returned 0). This matches the downstream "invalid/missing IP" semantics:
+// returned 0). Blank lines and lines longer than MaxLineLen are not lines in
+// this sense: they are skipped (the latter counted in Stats().OversizedLines)
+// and appear in neither number. This matches the downstream "invalid/missing IP" semantics:
 // nonzero IPs flow into the trie, zero IPs are counted invalid. Order is not
 // preserved (downstream radix-sorts), but the multiset of nonzero IPs and the
 // invalid count are identical to ParseFile's req.IPUint32 stream.
@@ -224,8 +243,7 @@ func (pp *Parser) parseFileIPsStreamingIO(file *os.File, fileSize int64) ([]uint
 		}
 	}()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 256*1024), 2*1024*1024)
+	scanner, splitter := newLineScanner(file)
 
 	const slabSize = 256 * 1024
 	batch := make([][]byte, 0, parseBatchSize)
@@ -260,6 +278,8 @@ func (pp *Parser) parseFileIPsStreamingIO(file *os.File, fileSize int64) ([]uint
 	wg.Wait()
 	close(resultsChan)
 	collectorWG.Wait()
+
+	pp.compiled.counters.oversizedLines.Add(splitter.oversized)
 
 	if err := scanner.Err(); err != nil {
 		return nil, 0, err
@@ -389,6 +409,103 @@ func (pp *Parser) parseFileIPsConcurrentIOChunked(file io.ReaderAt, name string,
 	return ips, invalidCount, nil
 }
 
+// lineSplitter is the bufio.SplitFunc state of the streaming readers. It frames
+// lines exactly like the chunked reader (readChunkBatched), so a file parses
+// the same way on either side of the 500MB switch:
+//
+//   - a line ends at "\n"; one trailing "\r" is stripped (CRLF);
+//   - a blank line is skipped: it is not a request and not an invalid line;
+//   - a line longer than MaxLineLen is skipped and counted in oversized, and the
+//     scan resumes after its newline. bufio.ScanLines would instead fail the
+//     whole parse with ErrTooLong once the line outgrew the buffer.
+//
+// It is used by one goroutine (the reader loop), so it needs no locking.
+type lineSplitter struct {
+	discarding bool   // inside an oversized line: drop bytes up to its newline
+	oversized  uint64 // lines skipped for exceeding MaxLineLen
+}
+
+// newLineScanner returns a Scanner over r that yields the non-blank lines of at
+// most MaxLineLen bytes, plus the splitter holding its oversized-line count.
+// The buffer may grow to MaxLineLen+1 bytes: enough to hold a line of exactly
+// MaxLineLen with its newline, and enough for split to see that a longer line
+// has passed the limit before the Scanner would give up on it.
+func newLineScanner(r io.Reader) (*bufio.Scanner, *lineSplitter) {
+	ls := &lineSplitter{}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 256*1024), MaxLineLen+1) // 256KB initial
+	// The split function runs once per line, so the ordinary case is handled
+	// right here in the closure the Scanner calls (no second call): a non-empty
+	// LF-terminated line within the limit, not inside an oversized line.
+	// Everything else - CRLF, blank, oversized, end of input - goes to
+	// ls.split, which handles the ordinary case identically.
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, '\n'); i > 0 && i <= MaxLineLen && data[i-1] != '\r' && !ls.discarding {
+			return i + 1, data[:i], nil
+		}
+		return ls.split(data, atEOF)
+	})
+	return scanner, ls
+}
+
+// split implements bufio.SplitFunc in full (newLineScanner short-circuits the
+// ordinary line before calling it). It returns the next acceptable line and
+// advances past any blank or oversized lines in front of it.
+//
+// Skipped lines are consumed inside this call, by looping, instead of being
+// returned as a nil token with a positive advance: once the Scanner has seen
+// EOF it stops at the first nil token even when more data is still buffered,
+// which would silently drop every line after a blank one in the last buffer.
+// A nil token is therefore only returned when more input is needed or all of
+// data has been consumed.
+func (ls *lineSplitter) split(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	pos := 0 // start of the line under inspection; everything before it is consumed
+	for {
+		rest := data[pos:]
+		i := bytes.IndexByte(rest, '\n')
+
+		if ls.discarding {
+			// Tail of an oversized line that was already counted.
+			if i < 0 {
+				return len(data), nil, nil
+			}
+			ls.discarding = false
+			pos += i + 1
+			continue
+		}
+
+		end := i // exclusive end of the line within rest
+		next := pos + i + 1
+		if i < 0 {
+			if len(rest) > MaxLineLen {
+				// No newline within the limit: oversized however long it turns
+				// out to be. Drop what is buffered and keep dropping to its end.
+				ls.oversized++
+				ls.discarding = true
+				return len(data), nil, nil
+			}
+			if !atEOF || len(rest) == 0 {
+				return pos, nil, nil // need more data, or nothing left
+			}
+			end = len(rest) // final line without a newline
+			next = len(data)
+		} else if i > MaxLineLen {
+			ls.oversized++
+			pos = next
+			continue
+		}
+
+		if end > 0 && rest[end-1] == '\r' {
+			end--
+		}
+		if end == 0 {
+			pos = next // blank line
+			continue
+		}
+		return next, rest[:end], nil
+	}
+}
+
 // parseBatchSize is the number of lines per batch sent through channels.
 // Batching amortizes channel lock/unlock overhead: 1M lines = ~1K channel ops instead of 1M.
 const parseBatchSize = 1024
@@ -471,8 +588,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 	// I/O reader - accumulate lines into batches before sending
 	// Uses a slab allocator: one contiguous []byte per batch instead of one per line.
 	// Reduces allocations from O(lines) to O(lines/batchSize).
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 256*1024), 2*1024*1024) // 256KB initial, 2MB max
+	scanner, splitter := newLineScanner(file)
 
 	const slabSize = 256 * 1024 // 256KB slab per batch (~250 bytes/line * 1024 lines)
 	batch := make([][]byte, 0, parseBatchSize)
@@ -511,6 +627,8 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 	wg.Wait()          // Wait for all workers to finish
 	close(resultsChan) // Signal collector to stop
 	collectorWG.Wait() // Wait for collector to finish
+
+	pp.compiled.counters.oversizedLines.Add(splitter.oversized)
 
 	if err := scanner.Err(); err != nil {
 		return nil, err
@@ -796,6 +914,7 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 	// Extract lines as zero-copy sub-slices of `buffer`. The whole chunk is one
 	// allocation shared by every line slice; no per-line slab copy is done.
 	batch := make([][]byte, 0, parseBatchSize)
+	oversized := uint64(0)
 
 	for i := start; i < len(buffer); i++ {
 		if buffer[i] == '\n' {
@@ -807,6 +926,12 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 
 			lineData := buffer[start:i]
 			start = i + 1
+
+			// Same limit as the streaming reader (lineSplitter): skip and count.
+			if len(lineData) > MaxLineLen {
+				oversized++
+				continue
+			}
 
 			// Strip a trailing '\r' (CRLF line endings) to match the streaming
 			// path's bufio.Scanner behavior.
@@ -833,6 +958,10 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 	// reached EOF and whose range contains the line's start (start < chunkEnd).
 	if readEnd == fileSize && start < len(buffer) && start < chunkEnd {
 		lineData := buffer[start:]
+		if len(lineData) > MaxLineLen {
+			oversized++
+			lineData = nil
+		}
 		// Strip a trailing '\r' (file ending in "...\r" with no final '\n').
 		if n := len(lineData); n > 0 && lineData[n-1] == '\r' {
 			lineData = lineData[:n-1]
@@ -860,40 +989,23 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 		}
 	}
 
+	// Cold: only touched when this chunk actually held an oversized line.
+	if oversized > 0 {
+		pp.compiled.counters.oversizedLines.Add(oversized)
+	}
+
 	// Send remaining lines
 	if len(batch) > 0 {
 		linesChan <- batch
 	}
 }
 
-// maxRecoverLineLen caps recovery of a boundary-straddling long line at the
-// streaming path's 2MB token cap (bufio.Scanner, scanner.Buffer(..., 2*1024*1024)).
-// We stop reading once a line would exceed this cap so the chunked path never emits
-// a line that the streaming path's 2MB Scanner buffer could not hold.
-//
-// PARITY SCOPE: the two I/O paths emit the identical line multiset (and identical
-// error: nil) ONLY for line lengths strictly BELOW this cap. At or above it the
-// paths DIVERGE by design and must not be assumed byte-identical:
-//
-//   - Streaming: bufio.Scanner.Scan returns false on the over-long line and
-//     scanner.Err returns bufio.ErrTooLong, so the streaming entry point returns
-//     (nil, err) - the WHOLE parse aborts and EVERY line is discarded.
-//   - Chunked: recoverLongLine drops only that one over-long line (ok=false) and
-//     the parse continues, returning the remaining lines with a nil error.
-//
-// Genuine I/O failures during recovery ARE surfaced: a non-EOF ReadAt error is
-// recorded via the shared errCap seam through the concurrent orchestrators, so a
-// real read failure fails the parse loud. The too-long-line DROP is deliberately
-// NOT surfaced - a >=2MB line is pathological and we do not abort the whole chunked
-// parse over one such line. That single divergence from streaming's whole-parse
-// abort is the documented contract.
-const maxRecoverLineLen = 2 * 1024 * 1024
-
 // recoverLongLine re-reads, starting at the absolute file offset `lineStart` of an
 // owned line whose terminating '\n' fell beyond this chunk's overlap window, with
-// a GROWING window (doubling from the default overlap) until the '\n' is found or
-// EOF is reached. It returns the line bytes (trailing '\r' stripped to match the
-// streaming path) and ok=true when a complete owned line was recovered.
+// a GROWING window (doubling from the default overlap) until the '\n' is found,
+// EOF is reached, or the line is known to exceed MaxLineLen. It returns the line
+// bytes (trailing '\r' stripped to match the streaming path) and ok=true when a
+// complete owned line was recovered.
 //
 // Cold path only: invoked at most once per chunk (a single physical line can
 // straddle a boundary at most once for the owning chunk), so the extra ReadAt and
@@ -902,23 +1014,25 @@ const maxRecoverLineLen = 2 * 1024 * 1024
 // the zero-copy unsafe.String lifetime invariant documented on readChunkBatched
 // still holds (the recovery buffer is never reused or mutated after this read).
 //
-// Lines at/above maxRecoverLineLen are dropped (return ok=false). This is NOT
-// byte-identical to streaming at the cap: streaming raises bufio.ErrTooLong and
-// aborts the whole parse, whereas this drops only the one over-long line and
-// continues (see maxRecoverLineLen for the precise, deliberately divergent scope).
+// PARITY with the streaming reader (lineSplitter) is exact, including at the
+// limit: a line of up to MaxLineLen bytes before its '\n' is recovered, a longer
+// one is skipped and counted in ParseStats.OversizedLines, and the parse goes on.
+// The window therefore grows to at most MaxLineLen+1 bytes - one more than the
+// longest acceptable line, so its newline (or the proof that there is none) is
+// always inside the window.
 //
-// errCap is the shared store-once error seam: a genuine non-EOF ReadAt failure
-// here records the error (so the orchestrator surfaces it) AND returns ok=false.
-// The too-long-line drop above is a DIFFERENT ok=false reason and deliberately does
-// NOT record an error - that divergence from streaming's abort is the documented
-// contract, not an I/O failure. The read source is io.ReaderAt for the same
-// test-injection reason as readChunkBatched (cold path, one ReadAt per grow step).
+// ok=false has three causes: a blank line, an oversized line (counted), and a
+// genuine non-EOF ReadAt failure, which is recorded on errCap (the shared
+// store-once error seam) so the orchestrator fails the parse loud. The read
+// source is io.ReaderAt for the same test-injection reason as readChunkBatched
+// (cold path, one ReadAt per grow step).
 func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, errCap *chunkErrCapture) ([]byte, bool) {
+	const maxWindow = MaxLineLen + 1
 	window := int64(8192) // current overlap; double until '\n' found or capped
 	for {
 		window *= 2
-		if window > maxRecoverLineLen {
-			window = maxRecoverLineLen
+		if window > maxWindow {
+			window = maxWindow
 		}
 		readEnd := lineStart + window
 		atEOF := false
@@ -934,7 +1048,7 @@ func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, e
 		buf := make([]byte, readSize)
 		n, err := file.ReadAt(buf, lineStart)
 		if err != nil && err != io.EOF {
-			// Genuine I/O failure (distinct from the too-long-line drop below):
+			// Genuine I/O failure (distinct from the oversized-line skip below):
 			// record it (store-once) so the orchestrator surfaces a non-nil error,
 			// then drop this line. io.EOF is normal end-of-file and excluded above.
 			errCap.record(fmt.Errorf("recoverLongLine: ReadAt %q offset %d: %w", errCap.name, lineStart, err))
@@ -942,39 +1056,34 @@ func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, e
 		}
 		buf = buf[:n]
 
+		lineData := buf
 		if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
 			// Found the terminating newline: this is the complete owned line.
-			lineData := buf[:idx]
-			if m := len(lineData); m > 0 && lineData[m-1] == '\r' {
-				lineData = lineData[:m-1]
-			}
-			if len(lineData) == 0 {
+			lineData = buf[:idx]
+		} else if !atEOF {
+			if window >= maxWindow {
+				// MaxLineLen+1 bytes without a newline: oversized. Skip just
+				// this line; the chunk that owns the next line picks up after
+				// its newline.
+				pp.compiled.counters.oversizedLines.Add(1)
 				return nil, false
 			}
-			return lineData, true
+			continue // grow the window and re-read
 		}
+		// else: no trailing '\n' before EOF - the file's final line; the whole
+		// remaining tail is the line (matches the EOF handler).
 
-		if atEOF {
-			// No trailing '\n' before EOF: this is the file's final line with no
-			// newline. Emit the whole remaining tail (matches the EOF handler).
-			lineData := buf
-			if m := len(lineData); m > 0 && lineData[m-1] == '\r' {
-				lineData = lineData[:m-1]
-			}
-			if len(lineData) == 0 {
-				return nil, false
-			}
-			return lineData, true
-		}
-
-		if window >= maxRecoverLineLen {
-			// Line exceeds the streaming path's 2MB token cap (no '\n' within the
-			// cap and not at EOF). Drop just this line and keep parsing. This is a
-			// DELIBERATE divergence from streaming, which instead raises
-			// bufio.ErrTooLong and aborts the entire parse - see maxRecoverLineLen.
+		if len(lineData) > MaxLineLen {
+			pp.compiled.counters.oversizedLines.Add(1)
 			return nil, false
 		}
-		// Otherwise grow the window and re-read.
+		if m := len(lineData); m > 0 && lineData[m-1] == '\r' {
+			lineData = lineData[:m-1]
+		}
+		if len(lineData) == 0 {
+			return nil, false
+		}
+		return lineData, true
 	}
 }
 
