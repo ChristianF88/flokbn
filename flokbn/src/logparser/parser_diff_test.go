@@ -1,6 +1,7 @@
 package logparser
 
 import (
+	"bytes"
 	"math/rand"
 	"os"
 	"sort"
@@ -10,9 +11,16 @@ import (
 	"github.com/ChristianF88/flokbn/testutil"
 )
 
-// parseIPv4ToUint32_ref is a VERBATIM copy of the original parseIPv4ToUint32
-// implementation (before the branch-light rewrite). The differential tests
-// assert the new implementation returns the identical uint32 for every input.
+// parseIPv4ToUint32_ref is an independent, deliberately plain reference for
+// parseIPv4ToUint32: split on dots, then check every octet. The differential
+// tests assert the hand-optimised implementation returns the identical uint32
+// for every input.
+//
+// It used to be a verbatim copy of the original implementation, which read an
+// EMPTY octet as 0 ("1.2..34" -> 1.2.0.34, "1.2.34." -> 1.2.34.0) and accepted
+// octets of any digit count. That leniency was the bug, so the reference now
+// states the strict contract: total length 7..15, exactly four octets, each of
+// one to three ASCII digits and at most 255 (leading zeros allowed).
 func parseIPv4ToUint32_ref(line []byte, start, end int) uint32 {
 	if end-start < 7 || end-start > 15 {
 		return 0
@@ -21,33 +29,27 @@ func parseIPv4ToUint32_ref(line []byte, start, end int) uint32 {
 		return 0
 	}
 
-	dots := 0
-	partIdx := 0
-	current := 0
-	var result uint32
-
-	for i := start; i < end; i++ {
-		b := line[i]
-		if b == '.' {
-			if current > 255 || partIdx >= 3 {
-				return 0
-			}
-			result |= uint32(current) << (24 - 8*partIdx)
-			partIdx++
-			current = 0
-			dots++
-		} else if b >= '0' && b <= '9' {
-			current = current*10 + int(b&0x0F)
-		} else {
-			return 0
-		}
-	}
-
-	if dots != 3 || current > 255 || partIdx != 3 {
+	octets := bytes.Split(line[start:end], []byte{'.'})
+	if len(octets) != 4 {
 		return 0
 	}
-	result |= uint32(current)
-
+	var result uint32
+	for _, octet := range octets {
+		if len(octet) < 1 || len(octet) > 3 {
+			return 0
+		}
+		value := 0
+		for _, c := range octet {
+			if c < '0' || c > '9' {
+				return 0
+			}
+			value = value*10 + int(c-'0')
+		}
+		if value > 255 {
+			return 0
+		}
+		result = result<<8 | uint32(value)
+	}
 	return result
 }
 
@@ -80,6 +82,12 @@ func TestDiffParseIPv4_HandPickedEdges(t *testing.T) {
 		"1.2.3.4567",
 		"0000.0.0.0",
 		"1.2.3.4.",
+		"1.2..34",
+		"1.2.34.",
+		".1.2.34",
+		"001.002.003.004",
+		"0001.2.3.4",
+		"1.2.3.0004",
 		"a.b.c.d",
 		"1.2.3.4a",
 		"1234567",         // 7 chars, no dots

@@ -132,11 +132,17 @@ Log: `Oct  9 10:15:23 webserver nginx: 192.0.2.1 - - [09/Oct/2025:10:15:23] "GET
 
 ## Field Details
 
+### IP Address (%h)
+
+A dotted IPv4 address with four octets of one to three digits each, every octet at most 255. Anything else (`1.2..34`, `1.2.34.`, IPv6, a hostname, `-`) is counted under `skipped_invalid_ips` and reported in the `invalid_ips_skipped` warning; it is never repaired into an address.
+
 ### Timestamp (%t)
 
 Expected format: `DD/MMM/YYYY:HH:MM:SS ±ZZZZ`
 
 Months: Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec. Timezone is optional.
+
+The value is validated, not guessed: every digit position must hold a digit and the date and time must exist (`31/Apr`, `29/Feb` outside a leap year, hour `24`, minute or second `60` are rejected). A line with an invalid timestamp is kept but carries no timestamp: it sorts before every real time, so a trie with a `startTime` excludes it (a trie with only an `endTime` does not).
 
 **Timezone handling is identical in both modes.** When the `±ZZZZ` offset is present (a 26-byte field like `06/Jul/2025:19:57:26 +0200`), both the static parser and live mode parse it and the timestamp is the true instant it denotes. When the offset is absent (a 20-byte field like `06/Jul/2025:19:57:26`), both modes treat the wall-clock as **UTC**. So static and live agree byte-for-byte on the same line. Practical rule: an offset-less log is interpreted as UTC, so keep offset-less timestamps and your `--startTime`/`--endTime` values both in UTC, or include the `±ZZZZ` offset in your log so the instant is unambiguous.
 

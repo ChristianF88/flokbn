@@ -59,7 +59,8 @@ func BenchmarkParseFileIPs(b *testing.B) {
 
 var ipSink uint32
 
-// BenchmarkParseIPv4Old benchmarks the verbatim reference implementation.
+// BenchmarkParseIPv4Old benchmarks the plain split-based reference the
+// differential tests compare against (it allocates; not a production path).
 func BenchmarkParseIPv4Old(b *testing.B) {
 	line := []byte("192.168.123.231")
 	b.ReportAllocs()

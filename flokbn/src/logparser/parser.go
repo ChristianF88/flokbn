@@ -1498,11 +1498,19 @@ func forwardedTailIP(line []byte, start, end int) uint32 {
 
 // parseIPv4ToUint32 extracts IPv4 address directly as uint32 - zero allocation
 //
-// Performance optimizations:
-//   - Single-pass parsing with dot counting
-//   - Bit masking for digit extraction: (b & 0x0F) converts ASCII digit to int
-//   - Returns uint32 directly - NO net.IP heap allocation
-//   - Bounds checking for IPv4 format (7-15 characters)
+// Contract:
+//   - exactly 4 octets separated by exactly 3 dots, nothing before or after
+//   - every octet has 1 to 3 ASCII digits: an empty octet ("1.2..34",
+//     "1.2.34.") is malformed, not a zero
+//   - every octet is <= 255
+//   - leading zeros within those 3 digits are accepted ("010" is 10)
+//   - any violation -> 0
+//
+// Performance: the four octets are parsed by one unrolled "digit, optional
+// digit, optional digit" sequence, so the strictness costs no per-byte state
+// (no digit counter, no dot counter). One compare per digit, a constant shift
+// per octet, no heap allocation. Measured faster than the previous lenient
+// single loop on both uniform and mixed-width addresses.
 //
 // Input: line[start:end] should contain IPv4 like "192.168.1.1"
 // Returns: uint32 IP or 0 if invalid format
@@ -1511,64 +1519,70 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 	if n < 7 || n > 15 {
 		return 0
 	}
-	// BCE hint: prove line[start:end] is fully in bounds, eliminating the
-	// per-iteration bounds check in the loop below.
+	// BCE hint: prove line[start:end] is fully in bounds.
 	if start < 0 || end > len(line) {
 		return 0
 	}
 
-	// Single-pass parse. We accumulate each octet into current and commit it on
-	// a dot. The loop is branch-light: the dot test and the digit test are the
-	// only data-dependent branches, and any deviation funnels into a single
-	// `return 0`.
-	//
-	// Correctness contract (identical to the previous implementation):
-	//   - exactly 3 dots, exactly 4 parts
-	//   - every non-dot byte must be an ASCII digit
-	//   - each committed octet (current at a dot, and the final part) must be <=255
-	//   - leading zeros are accepted (current = current*10 + digit, no rejection)
-	//   - any violation -> 0
-	//
-	// We never need partIdx>=3 as a guard the way the old loop did: with the
-	// dots!=3 check at the end, a 4th dot would push dots to 4 and be rejected,
-	// but the old code returned 0 *immediately* on the 4th dot (partIdx>=3).
-	// To preserve that exact early-out semantics for the >255-then-extra-dot
-	// edge, we cap commits at 4 parts via partIdx and reject a 4th dot.
-	current := 0
-	partIdx := 0
-	var result uint32
-	dots := 0
-
 	sub := line[start:end]
-	for i := 0; i < len(sub); i++ {
-		b := sub[i]
-		d := b - '0'
-		if d <= 9 {
-			// ASCII digit fast path (b in '0'..'9' => b-'0' in 0..9, unsigned).
-			current = current*10 + int(d)
-			continue
-		}
-		if b != '.' {
+	var result uint32
+	i := 0
+	for part := 0; part < 4; part++ {
+		// First digit of the octet is mandatory.
+		if i >= len(sub) {
 			return 0
 		}
-		// Dot: commit the current octet. Identical guard order to the original:
-		// reject if the octet overflows 255 or we already have 3 committed parts.
-		if current > 255 || partIdx >= 3 {
+		d := sub[i] - '0' // unsigned: any non-digit wraps above 9
+		if d > 9 {
 			return 0
 		}
-		result |= uint32(current) << (24 - 8*partIdx)
-		partIdx++
-		current = 0
-		dots++
+		v := uint32(d)
+		i++
+		// Second and third digits are optional.
+		if i < len(sub) {
+			if d = sub[i] - '0'; d <= 9 {
+				v = v*10 + uint32(d)
+				i++
+				if i < len(sub) {
+					if d = sub[i] - '0'; d <= 9 {
+						v = v*10 + uint32(d)
+						i++
+					}
+				}
+			}
+		}
+		if v > 255 {
+			return 0
+		}
+		result = result<<8 | v
+		// Octets 0..2 must be followed by a dot; a 4th digit lands here and is
+		// rejected because it is not one.
+		if part < 3 {
+			if i >= len(sub) || sub[i] != '.' {
+				return 0
+			}
+			i++
+		}
 	}
-
-	if dots != 3 || current > 255 || partIdx != 3 {
-		return 0
+	if i != len(sub) {
+		return 0 // trailing bytes after the 4th octet
 	}
-	result |= uint32(current)
 
 	return result
 }
+
+// notDigitBits returns a value with a bit set in its high nibble iff d, a byte
+// minus '0', is NOT in 0..9. For a digit both d and d+6 stay below 16; any
+// other value has a high-nibble bit in d itself (16..255) or in d+6 (10..15).
+// OR-ing the results of several bytes and testing & 0xF0 once validates them
+// all with a single branch.
+func notDigitBits(d byte) byte {
+	return d | (d + 6)
+}
+
+// daysInMonth is indexed by time.Month; February holds 29 and the leap-year
+// rule is applied separately.
+var daysInMonth = [13]uint8{0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 // parseTimestamp extracts timestamp from Apache Common Log format with maximum performance
 //
@@ -1583,8 +1597,14 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 // offset is present (the 20-byte EOL forms), the wall-clock is returned as UTC
 // (unchanged behavior).
 //
+// Validation: the 12 digit positions must hold ASCII digits and the values must
+// be in range (day valid for the month and year, hour <= 23, minute and second
+// <= 59), which is what time.Parse accepts for the same text. Anything else
+// yields the zero time instead of being masked or normalised into some other
+// instant. The separators between the fields are not inspected.
+//
 // Performance optimizations:
-//   - Direct byte-to-int conversion using bit masking: (b & 0x0F)
+//   - Digits validated together with one branch (see notDigitBits)
 //   - 3-byte month lookup using bitwise operations
 //   - Hardcoded month codes eliminate string comparisons
 //   - Single bounds check, then direct array access for all fields
@@ -1597,12 +1617,23 @@ func parseTimestamp(line []byte, start, end int) time.Time {
 	}
 
 	// BCE hint: prove all accesses up to line[start+19] are in bounds,
-	// eliminating 14 individual bounds checks in the code below.
+	// eliminating the individual bounds checks in the code below.
 	_ = line[start+19]
 
-	// Parse "06/Jul/2025:19:57:26 +0000" directly from line buffer
-	// Use bit operations for faster digit parsing
-	day := int(line[start]&0x0F)*10 + int(line[start+1]&0x0F)
+	// Parse "06/Jul/2025:19:57:26 +0000" directly from line buffer. Load the 12
+	// digits as byte-'0' and validate all of them with a single branch.
+	d0, d1 := line[start]-'0', line[start+1]-'0'
+	y0, y1, y2, y3 := line[start+7]-'0', line[start+8]-'0', line[start+9]-'0', line[start+10]-'0'
+	h0, h1 := line[start+12]-'0', line[start+13]-'0'
+	n0, n1 := line[start+15]-'0', line[start+16]-'0'
+	s0, s1 := line[start+18]-'0', line[start+19]-'0'
+	if (notDigitBits(d0)|notDigitBits(d1)|
+		notDigitBits(y0)|notDigitBits(y1)|notDigitBits(y2)|notDigitBits(y3)|
+		notDigitBits(h0)|notDigitBits(h1)|
+		notDigitBits(n0)|notDigitBits(n1)|
+		notDigitBits(s0)|notDigitBits(s1))&0xF0 != 0 {
+		return time.Time{}
+	}
 
 	// Month lookup using 3-byte comparison
 	var month time.Month
@@ -1637,11 +1668,19 @@ func parseTimestamp(line []byte, start, end int) time.Time {
 		return time.Time{}
 	}
 
-	// Use bit masking for faster digit extraction
-	year := int(line[start+7]&0x0F)*1000 + int(line[start+8]&0x0F)*100 + int(line[start+9]&0x0F)*10 + int(line[start+10]&0x0F)
-	hour := int(line[start+12]&0x0F)*10 + int(line[start+13]&0x0F)
-	minute := int(line[start+15]&0x0F)*10 + int(line[start+16]&0x0F)
-	second := int(line[start+18]&0x0F)*10 + int(line[start+19]&0x0F)
+	day := int(d0)*10 + int(d1)
+	year := int(y0)*1000 + int(y1)*100 + int(y2)*10 + int(y3)
+	hour := int(h0)*10 + int(h1)
+	minute := int(n0)*10 + int(n1)
+	second := int(s0)*10 + int(s1)
+
+	// Range checks: time.Date would silently normalise 25:00 into the next day.
+	if day == 0 || day > int(daysInMonth[month]) || hour > 23 || minute > 59 || second > 59 {
+		return time.Time{}
+	}
+	if month == 2 && day == 29 && (year%4 != 0 || (year%100 == 0 && year%400 != 0)) {
+		return time.Time{}
+	}
 
 	// Retain the log's timezone offset when present (URGENT-09 parity). The
 	// offset suffix is " +HHMM"/" -HHMM": space at start+20, sign at start+21,
