@@ -3,6 +3,7 @@ package analysis
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ChristianF88/flokbn/cidr"
@@ -86,230 +87,166 @@ func (tb *timeBounds) excluded(ts time.Time) bool {
 	return false
 }
 
-// requestChunk represents a chunk of requests for parallel processing
-type requestChunk struct {
-	requests []ingestor.Request
-}
+// concurrentFilterMin is the request count above which a trie's filters run on
+// several goroutines. Below it the fan-out costs more than it saves.
+const concurrentFilterMin = 50000
 
-// filterResult represents the result of filtering a single request
+// filterResult is what one trie's filters selected from the parsed requests.
 type filterResult struct {
-	request         ingestor.Request
-	shouldInclude   bool
-	isWhitelistedUA bool
-	isBlacklistedUA bool
+	// ips holds one entry per request that passed every filter, in no
+	// particular order: the IPs to insert into the trie.
+	ips []uint32
+	// invalid counts requests that passed the trie's time and regex filters but
+	// carry no usable IP (0.0.0.0, or a host field that failed to parse).
+	invalid int
+	// uaExcluded counts requests dropped only because their User-Agent is on the
+	// global whitelist.
+	uaExcluded int
+	// uaWhitelistIPs / uaBlacklistIPs list the IP of every request seen with a
+	// whitelisted / blacklisted User-Agent: one entry per request, so an IP
+	// repeats. The pipeline sorts and de-duplicates them once for all tries.
+	uaWhitelistIPs []uint32
+	uaBlacklistIPs []uint32
 }
 
-// filterWorker processes request chunks concurrently
-func filterWorker(
-	requestChan <-chan requestChunk,
-	resultChan chan<- filterResult,
-	trieConfig *config.TrieConfig,
-	bounds timeBounds,
-	userAgentMatcher *cidr.UserAgentMatcher) {
+// add runs the trie's filters over requests and accumulates the outcome. This
+// is THE filter: the sequential and the concurrent path both go through it, so
+// they cannot drift apart.
+//
+// Order matters for the counters: a request rejected by the time window or a
+// regex is not counted anywhere; a zero IP is counted as invalid before any
+// User-Agent verdict, so 0.0.0.0 never reaches the UA lists (which become /32
+// whitelist and jail entries).
+func (f *filterResult) add(requests []ingestor.Request, trieConfig *config.TrieConfig,
+	bounds *timeBounds, userAgentMatcher *cidr.UserAgentMatcher) {
 
-	for chunk := range requestChan {
-		for _, r := range chunk.requests {
-			result := filterResult{
-				request: r,
-			}
+	for i := range requests {
+		r := &requests[i]
 
-			// Apply time filtering - skip rejected requests entirely (no channel send)
-			if bounds.excluded(r.Timestamp) {
-				continue
-			}
-
-			// Apply regex filtering (this is expensive and benefits from concurrency)
-			if !trieConfig.ShouldIncludeRequest(r) {
-				continue
-			}
-
-			// Check User-Agent patterns using ultra-fast exact matching
-			if userAgentMatcher != nil {
-				uaResult := userAgentMatcher.CheckUserAgent(r.UserAgent)
-				result.isWhitelistedUA = (uaResult == cidr.UserAgentWhitelist)
-				result.isBlacklistedUA = (uaResult == cidr.UserAgentBlacklist)
-			}
-
-			// Include in results if not whitelisted by User-Agent
-			if !result.isWhitelistedUA {
-				result.shouldInclude = true
-			}
-
-			resultChan <- result
-		}
-	}
-}
-
-// filterRequestsConcurrent implements high-performance concurrent filtering
-func filterRequestsConcurrent(
-	requests []ingestor.Request,
-	trieConfig *config.TrieConfig,
-	bounds timeBounds,
-	userAgentMatcher *cidr.UserAgentMatcher,
-	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[uint32]struct{},
-	filteredRequestCount *int,
-	ipsToInsert *[]uint32,
-	invalidIPCount *int,
-	uaWhitelistExcluded *int) error {
-
-	// Determine optimal worker count for filtering. The caller (processTrie) only
-	// takes this concurrent path when len(requests) > 50000, so only the >8 cap matters.
-	numWorkers := runtime.NumCPU()
-	if numWorkers > 8 {
-		numWorkers = 8 // Cap at 8 to reduce contention and mutex overhead
-	}
-
-	// Channels for work distribution - smaller buffers reduce memory overhead
-	requestChan := make(chan requestChunk, numWorkers)
-	resultChan := make(chan filterResult, numWorkers*4)
-
-	// Worker synchronization
-	var wg sync.WaitGroup
-
-	// Start filter workers
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			filterWorker(requestChan, resultChan, trieConfig, bounds,
-				userAgentMatcher)
-		}()
-	}
-
-	// Start result collector. Only this single goroutine touches the UA
-	// whitelist/blacklist sets and the local counters, so no mutex is needed
-	// around them.
-	var collectorWG sync.WaitGroup
-
-	// Track invalid IPs in collector
-	var localInvalidCount int
-	// Track requests excluded solely by the UA whitelist (passed all other
-	// filters but were dropped because their User-Agent is whitelisted).
-	var localUAExcluded int
-	// Track requests that pass filtering and are inserted into the trie.
-	var localFilteredCount int
-
-	collectorWG.Add(1)
-	go func() {
-		defer collectorWG.Done()
-		for result := range resultChan {
-			// A zero IP (invalid or failed to parse) is counted as invalid FIRST,
-			// regardless of the UA verdict - this matches sequential filterRequests,
-			// which checks IPUint32==0 before any UA logic. A 0.0.0.0 entry must
-			// never reach the UA-excluded counter or the whitelist/blacklist IP sets
-			// (those are converted to /32s for jail/ban processing).
-			if result.request.IPUint32 == 0 {
-				localInvalidCount++
-				continue
-			}
-
-			if result.shouldInclude {
-				*ipsToInsert = append(*ipsToInsert, result.request.IPUint32)
-				localFilteredCount++
-			} else if result.isWhitelistedUA {
-				localUAExcluded++
-			}
-
-			// Collect User-Agent whitelist IPs
-			if result.isWhitelistedUA {
-				userAgentWhitelistIPSet[result.request.IPUint32] = struct{}{}
-			}
-
-			// Collect User-Agent blacklist IPs
-			if result.isBlacklistedUA {
-				userAgentBlacklistIPSet[result.request.IPUint32] = struct{}{}
-			}
-		}
-		// Update the shared counts
-		*invalidIPCount += localInvalidCount
-		*uaWhitelistExcluded += localUAExcluded
-		*filteredRequestCount += localFilteredCount
-	}()
-
-	// Distribute work in larger chunks to reduce overhead
-	chunkSize := len(requests) / (numWorkers * 2) // 2 chunks per worker for better efficiency
-	if chunkSize < 5000 {
-		chunkSize = 5000 // Larger minimum chunk size
-	}
-	if chunkSize > 50000 {
-		chunkSize = 50000 // Larger maximum chunk size
-	}
-
-	for i := 0; i < len(requests); i += chunkSize {
-		end := i + chunkSize
-		if end > len(requests) {
-			end = len(requests)
-		}
-
-		requestChan <- requestChunk{
-			requests: requests[i:end],
-		}
-	}
-	close(requestChan)
-
-	// Wait for all workers to complete
-	wg.Wait()
-	close(resultChan)
-
-	// Wait for result collection to complete
-	collectorWG.Wait()
-
-	return nil
-}
-
-// filterRequests provides optimized sequential processing for simple filtering cases
-func filterRequests(
-	requests []ingestor.Request,
-	trieConfig *config.TrieConfig,
-	bounds timeBounds,
-	userAgentMatcher *cidr.UserAgentMatcher,
-	userAgentWhitelistIPSet, userAgentBlacklistIPSet map[uint32]struct{},
-	filteredRequestCount *int,
-	ipsToInsert *[]uint32,
-	invalidIPCount *int,
-	uaWhitelistExcluded *int) {
-
-	// Single pass through requests with optimized filtering
-	for _, r := range requests {
-		// Apply time filtering
 		if bounds.excluded(r.Timestamp) {
 			continue
 		}
-
-		// Apply regex filtering
-		if !trieConfig.ShouldIncludeRequest(r) {
+		if !trieConfig.ShouldIncludeRequest(*r) {
 			continue
 		}
-
-		// Skip 0 IPs (invalid or failed to parse)
 		if r.IPUint32 == 0 {
-			*invalidIPCount++
+			f.invalid++
 			continue
 		}
 
-		isWhitelistedUA := false
-		isBlacklistedUA := false
-
-		// Check User-Agent patterns using ultra-fast exact matching
-		if userAgentMatcher != nil {
-			uaResult := userAgentMatcher.CheckUserAgent(r.UserAgent)
-			isWhitelistedUA = (uaResult == cidr.UserAgentWhitelist)
-			isBlacklistedUA = (uaResult == cidr.UserAgentBlacklist)
-
-			if isWhitelistedUA {
-				userAgentWhitelistIPSet[r.IPUint32] = struct{}{}
-			}
-			if isBlacklistedUA {
-				userAgentBlacklistIPSet[r.IPUint32] = struct{}{}
-			}
+		// Exact-match lookup; a nil matcher lists nothing.
+		switch userAgentMatcher.CheckUserAgent(r.UserAgent) {
+		case cidr.UserAgentWhitelist:
+			f.uaWhitelistIPs = append(f.uaWhitelistIPs, r.IPUint32)
+			f.uaExcluded++
+			continue
+		case cidr.UserAgentBlacklist:
+			f.uaBlacklistIPs = append(f.uaBlacklistIPs, r.IPUint32)
 		}
-
-		// Include in trie if not whitelisted by User-Agent
-		if !isWhitelistedUA {
-			*ipsToInsert = append(*ipsToInsert, r.IPUint32)
-			*filteredRequestCount++
-		} else {
-			*uaWhitelistExcluded++
-		}
+		f.ips = append(f.ips, r.IPUint32)
 	}
+}
+
+// filterRequests applies one trie's filters to the parsed requests, fanning
+// out over several goroutines when there are enough requests to pay for it.
+func filterRequests(requests []ingestor.Request, trieConfig *config.TrieConfig,
+	bounds timeBounds, userAgentMatcher *cidr.UserAgentMatcher) filterResult {
+
+	if len(requests) > concurrentFilterMin {
+		return filterConcurrent(requests, trieConfig, bounds, userAgentMatcher)
+	}
+	return filterSequential(requests, trieConfig, bounds, userAgentMatcher)
+}
+
+// filterSequential filters on the calling goroutine.
+func filterSequential(requests []ingestor.Request, trieConfig *config.TrieConfig,
+	bounds timeBounds, userAgentMatcher *cidr.UserAgentMatcher) filterResult {
+
+	var result filterResult
+	result.add(requests, trieConfig, &bounds, userAgentMatcher)
+	return result
+}
+
+// filterConcurrent splits requests into chunks that a few workers claim and
+// filter. Every worker accumulates into a result of its own and the results
+// are merged once at the end, so the per-request path takes no lock and sends
+// nothing over a channel.
+func filterConcurrent(requests []ingestor.Request, trieConfig *config.TrieConfig,
+	bounds timeBounds, userAgentMatcher *cidr.UserAgentMatcher) filterResult {
+
+	// Several tries filter at the same time, so more workers per trie only add
+	// scheduling overhead.
+	numWorkers := runtime.NumCPU()
+	if numWorkers > 8 {
+		numWorkers = 8
+	}
+
+	// Two chunks per worker even out uneven regex cost across the log; the
+	// bounds keep a chunk large enough to amortize claiming it and small enough
+	// to balance.
+	chunkSize := len(requests) / (numWorkers * 2)
+	if chunkSize < 5000 {
+		chunkSize = 5000
+	}
+	if chunkSize > 50000 {
+		chunkSize = 50000
+	}
+
+	parts := make([]filterResult, numWorkers)
+	var next atomic.Int64 // start index of the next unclaimed chunk
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			// Accumulate on this goroutine's stack and publish once: writing
+			// through parts[w] per request would make neighbouring workers
+			// share cache lines.
+			var part filterResult
+			for {
+				start := int(next.Add(int64(chunkSize))) - chunkSize
+				if start >= len(requests) {
+					break
+				}
+				end := start + chunkSize
+				if end > len(requests) {
+					end = len(requests)
+				}
+				part.add(requests[start:end], trieConfig, &bounds, userAgentMatcher)
+			}
+			parts[w] = part
+		}(w)
+	}
+	wg.Wait()
+
+	return mergeFilterResults(parts)
+}
+
+// mergeFilterResults concatenates the workers' results.
+func mergeFilterResults(parts []filterResult) filterResult {
+	var merged filterResult
+	var ips, whitelisted, blacklisted int
+	for i := range parts {
+		ips += len(parts[i].ips)
+		whitelisted += len(parts[i].uaWhitelistIPs)
+		blacklisted += len(parts[i].uaBlacklistIPs)
+		merged.invalid += parts[i].invalid
+		merged.uaExcluded += parts[i].uaExcluded
+	}
+	// Leave empty lists nil, as the sequential path does.
+	if ips > 0 {
+		merged.ips = make([]uint32, 0, ips)
+	}
+	if whitelisted > 0 {
+		merged.uaWhitelistIPs = make([]uint32, 0, whitelisted)
+	}
+	if blacklisted > 0 {
+		merged.uaBlacklistIPs = make([]uint32, 0, blacklisted)
+	}
+	for i := range parts {
+		merged.ips = append(merged.ips, parts[i].ips...)
+		merged.uaWhitelistIPs = append(merged.uaWhitelistIPs, parts[i].uaWhitelistIPs...)
+		merged.uaBlacklistIPs = append(merged.uaBlacklistIPs, parts[i].uaBlacklistIPs...)
+	}
+	return merged
 }

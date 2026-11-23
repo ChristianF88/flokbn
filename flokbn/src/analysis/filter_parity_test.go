@@ -17,26 +17,11 @@ import (
 // and returns everything it produced.
 func runFilter(t *testing.T, concurrent bool, reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
 	t.Helper()
-	var fc filterCounts
-	wlSet := make(map[uint32]struct{})
-	blSet := make(map[uint32]struct{})
-	var ips []uint32
 	bounds := makeTimeBounds(tc)
 	if concurrent {
-		if err := filterRequestsConcurrent(reqs, tc, bounds, m,
-			wlSet, blSet,
-			&fc.filteredRequestCount, &ips, &fc.invalidIPCount, &fc.uaWhitelistExcluded); err != nil {
-			t.Fatalf("filterRequestsConcurrent error: %v", err)
-		}
-	} else {
-		filterRequests(reqs, tc, bounds, m,
-			wlSet, blSet,
-			&fc.filteredRequestCount, &ips, &fc.invalidIPCount, &fc.uaWhitelistExcluded)
+		return toFilterCounts(filterConcurrent(reqs, tc, bounds, m))
 	}
-	fc.whitelistIPs = ipSetStrings(wlSet)
-	fc.blacklistIPs = ipSetStrings(blSet)
-	fc.ipsToInsert = ips
-	return fc
+	return toFilterCounts(filterSequential(reqs, tc, bounds, m))
 }
 
 // parityCorpus builds n pseudo-random requests (fixed seed): repeated and

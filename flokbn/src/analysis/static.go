@@ -290,18 +290,6 @@ func sortedUniqueIPStrings(ips []uint32) []string {
 	return out
 }
 
-// ipSetToSlice returns the members of set in unspecified order.
-func ipSetToSlice(set map[uint32]struct{}) []uint32 {
-	if len(set) == 0 {
-		return nil
-	}
-	out := make([]uint32, 0, len(set))
-	for ip := range set {
-		out = append(out, ip)
-	}
-	return out
-}
-
 // computeGlobalFilters loads the globally-configured whitelists and records
 // their entry counts. Only the UA whitelist drops requests from every trie
 // (and is rendered as an active filter); the IP whitelist acts solely in the
@@ -329,9 +317,9 @@ func computeGlobalFilters(cfg *config.Config) output.GlobalFilters {
 }
 
 // processTrie builds and analyzes a single trie; callers run one goroutine per trie.
-// Returns the trie result along with the distinct IPs this trie saw with a
-// whitelisted / blacklisted User-Agent (numeric, unspecified order - the
-// caller merges and sorts them across tries).
+// Returns the trie result along with the IPs this trie saw with a whitelisted /
+// blacklisted User-Agent (numeric, unspecified order, an IP may repeat - the
+// caller merges, sorts and de-duplicates them across tries).
 // userAgentMatcher is built once by the caller and shared across all tries (it
 // depends only on global config), so processTrie never rebuilds it per trie.
 func processTrie(trieName string, trieConfig *config.TrieConfig, requests []ingestor.Request,
@@ -403,12 +391,10 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	// warning below), so we thread an int counter rather than accumulating a full
 	// []ingestor.Request that is never read.
 	var filteredRequestCount int
-	var ipsToInsertUint32 []uint32
 
-	// User-Agent tracking: distinct IPs seen with a whitelisted / blacklisted
-	// UA. Keyed by the numeric IP - no per-request string conversion.
-	userAgentWhitelistIPSet := make(map[uint32]struct{})
-	userAgentBlacklistIPSet := make(map[uint32]struct{})
+	// User-Agent tracking: IPs seen with a whitelisted / blacklisted UA.
+	// Numeric - no per-request string conversion.
+	var userAgentWhitelistIPs, userAgentBlacklistIPs []uint32
 
 	// Check if we have any filters that require per-request processing
 	// Only consider User-Agent matcher a filter if it actually has patterns
@@ -454,32 +440,19 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 		// for ascending-sorted input, ~2x faster).
 		trieInstance.BuildSorted(ipUints)
 	} else {
-		// Adaptive filtering: use concurrent processing only when complex patterns justify overhead
-		usesConcurrency := len(requests) > 50000 && hasFilters
-
-		if usesConcurrency {
-			// Concurrent filtering for large datasets with complex patterns
-			if err := filterRequestsConcurrent(
-				requests, trieConfig, bounds,
-				userAgentMatcher,
-				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
-				&filteredRequestCount, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded); err != nil {
-				jsonOutput.AddError("concurrent_filtering", fmt.Sprintf("Failed to process requests concurrently: %v", err), 1)
-			}
-		} else {
-			// Sequential filtering for simple cases (faster for small datasets)
-			filterRequests(
-				requests, trieConfig, bounds,
-				userAgentMatcher,
-				userAgentWhitelistIPSet, userAgentBlacklistIPSet,
-				&filteredRequestCount, &ipsToInsertUint32, &invalidIPCount, &uaWhitelistExcluded)
-		}
+		// One filter pass (concurrent for large logs, see filterRequests).
+		filtered := filterRequests(requests, trieConfig, bounds, userAgentMatcher)
+		filteredRequestCount = len(filtered.ips)
+		invalidIPCount = filtered.invalid
+		uaWhitelistExcluded = filtered.uaExcluded
+		userAgentWhitelistIPs = filtered.uaWhitelistIPs
+		userAgentBlacklistIPs = filtered.uaBlacklistIPs
 
 		// Radix sort + batch sorted insert - same optimization as unfiltered fast path
-		if len(ipsToInsertUint32) > 0 {
-			iputils.RadixSortUint32(ipsToInsertUint32)
-			uniqueIPs = iputils.CountDistinctSorted(ipsToInsertUint32)
-			trieInstance.BuildSorted(ipsToInsertUint32)
+		if len(filtered.ips) > 0 {
+			iputils.RadixSortUint32(filtered.ips)
+			uniqueIPs = iputils.CountDistinctSorted(filtered.ips)
+			trieInstance.BuildSorted(filtered.ips)
 		}
 	}
 
@@ -540,7 +513,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, requests []inge
 	// Clustering (same as original but with parallel trie)
 	processClustering(trieConfig, trieInstance.Trie, jsonOutput, &trieResult)
 
-	return trieResult, ipSetToSlice(userAgentWhitelistIPSet), ipSetToSlice(userAgentBlacklistIPSet)
+	return trieResult, userAgentWhitelistIPs, userAgentBlacklistIPs
 }
 
 // Static runs static analysis from config and returns
