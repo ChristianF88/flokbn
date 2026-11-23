@@ -32,6 +32,7 @@ package regexprefilter
 import (
 	"regexp/syntax"
 	"strings"
+	"unicode/utf8"
 )
 
 // Prefilter screens inputs with a cheap multi-substring test before the full
@@ -43,6 +44,14 @@ type Prefilter struct {
 	needles []string
 	// foldCase reports whether matching is ASCII case-insensitive.
 	foldCase bool
+	// foldLongS / foldKelvin report whether a folded needle contains an ASCII
+	// 's' / 'k'. Go's (?i) uses Unicode simple case folding, under which those
+	// two letters (and no other ASCII letter) have a non-ASCII partner: 's'
+	// also matches U+017F (long s) and 'k' also matches U+212A (Kelvin sign).
+	// The ASCII-only fast scan cannot see them, so MightMatch re-checks an
+	// input that carries one of those runes on a slower, exact path.
+	foldLongS  bool
+	foldKelvin bool
 	// exact reports whether MightMatch alone is equivalent to the regex, so the
 	// caller may skip the regex call entirely.
 	exact bool
@@ -93,9 +102,17 @@ func Build(pattern string) *Prefilter {
 		return nil
 	}
 
+	// Lowercase ASCII letters ONLY. The screen folds ASCII only, so a needle
+	// must keep every non-ASCII byte verbatim: strings.ToLower is Unicode-aware
+	// and would rewrite a case-sensitive non-ASCII literal sitting next to a
+	// folded one ("(?i:bot)É" -> needle "boté"), which then never
+	// matches the input the regex accepts.
+	var foldLongS, foldKelvin bool
 	if fold {
 		for i := range kept {
-			kept[i] = strings.ToLower(kept[i])
+			kept[i] = lowerASCIIString(kept[i])
+			foldLongS = foldLongS || strings.IndexByte(kept[i], 's') >= 0
+			foldKelvin = foldKelvin || strings.IndexByte(kept[i], 'k') >= 0
 		}
 	}
 	kept = dedup(kept)
@@ -120,9 +137,11 @@ func Build(pattern string) *Prefilter {
 	}
 
 	return &Prefilter{
-		needles:  kept,
-		foldCase: fold,
-		exact:    exact,
+		needles:    kept,
+		foldCase:   fold,
+		foldLongS:  foldLongS,
+		foldKelvin: foldKelvin,
+		exact:      exact,
 	}
 }
 
@@ -405,12 +424,17 @@ func minLen(ss []string) int {
 // FoldCase, fold is reported true. It fails closed (ok==false) when folding is
 // requested for a non-ASCII rune, because Unicode case folding can map runes to
 // sequences of different byte length, which would break a byte-substring
-// search and could violate necessity.
+// search and could violate necessity. It also fails closed on U+FFFD: the regex
+// engine decodes every invalid UTF-8 byte of the input as U+FFFD, so that
+// literal matches bytes a substring search for its own encoding never finds.
 func literalFromRunes(runes []rune, flags syntax.Flags) (lit string, fold, csLetter bool, ok bool) {
 	foldRequested := flags&syntax.FoldCase != 0
 	var b strings.Builder
 	b.Grow(len(runes))
 	for _, r := range runes {
+		if r == utf8.RuneError {
+			return "", false, false, false
+		}
 		if isASCIILetter(r) {
 			if foldRequested {
 				// An ASCII letter actually matched case-insensitively.
@@ -465,7 +489,75 @@ func (p *Prefilter) MightMatch(s string) bool {
 			return true
 		}
 	}
+	// No needle under ASCII folding. That is final unless a needle holds an 's'
+	// or 'k' and s carries the non-ASCII rune (?i) folds to it.
+	if p.foldLongS || p.foldKelvin {
+		return p.mightMatchFoldPartner(s)
+	}
 	return false
+}
+
+// mightMatchFoldPartner is the tail of MightMatch's folded path, reached only
+// after the ASCII scan found no needle. The probe is one vectorized byte search
+// per rune for its UTF-8 lead byte, which practically never occurs in a
+// User-Agent or URI, so the reject path stays about as cheap as it was; only an
+// input that contains a lead byte pays for the exact re-scan.
+func (p *Prefilter) mightMatchFoldPartner(s string) bool {
+	if (p.foldLongS && strings.IndexByte(s, longS[0]) >= 0) || (p.foldKelvin && strings.IndexByte(s, kelvinSign[0]) >= 0) {
+		for _, n := range p.needles {
+			if containsFoldUnicode(s, n) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The two non-ASCII members of an ASCII letter's simple-fold orbit (see
+// Prefilter.foldLongS). TestAsciiLetterFoldOrbits pins that there are no others.
+const (
+	longS      = "ſ" // LATIN SMALL LETTER LONG S, folds with 's' / 'S'
+	kelvinSign = "K" // KELVIN SIGN, folds with 'k' / 'K'
+)
+
+// containsFoldUnicode is containsFoldASCII extended with the two non-ASCII
+// fold partners: a needle 's' also matches U+017F and a needle 'k' also matches
+// U+212A, exactly as Go's (?i) does. needle must be ASCII-lowercased. It is the
+// slow path of MightMatch and allocates nothing.
+func containsFoldUnicode(s, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	for i := 0; i < len(s); i++ {
+		if hasFoldPrefixUnicode(s[i:], needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFoldPrefixUnicode reports whether s starts with needle under the folding
+// described at containsFoldUnicode. One needle byte consumes one byte of s, or
+// the whole multi-byte encoding when it matches a fold partner.
+func hasFoldPrefixUnicode(s, needle string) bool {
+	for j := 0; j < len(needle); j++ {
+		if s == "" {
+			return false
+		}
+		switch c := needle[j]; {
+		case lowerASCII(s[0]) == c:
+			// Covers ASCII letters case-insensitively and every other byte
+			// (including non-ASCII bytes of a case-sensitive literal) exactly.
+			s = s[1:]
+		case c == 's' && strings.HasPrefix(s, longS):
+			s = s[len(longS):]
+		case c == 'k' && strings.HasPrefix(s, kelvinSign):
+			s = s[len(kelvinSign):]
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // containsFoldASCII reports whether s contains needle, comparing ASCII letters
@@ -496,6 +588,21 @@ func containsFoldASCII(s, needle string) bool {
 		}
 	}
 	return false
+}
+
+// lowerASCIIString lowercases the ASCII letters of s and leaves every other
+// byte untouched (unlike strings.ToLower, which is Unicode-aware).
+func lowerASCIIString(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			b := []byte(s)
+			for j := i; j < len(b); j++ {
+				b[j] = lowerASCII(b[j])
+			}
+			return string(b)
+		}
+	}
+	return s
 }
 
 // lowerASCII lowercases a single byte if it is an ASCII uppercase letter.
