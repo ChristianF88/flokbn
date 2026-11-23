@@ -17,6 +17,12 @@ seo:
 
 Live mode provides real-time detection by continuously monitoring incoming logs via the Lumberjack protocol and automatically detecting and blocking high-volume IP ranges.
 
+{{< callout context="caution" title="Live mode ignores logFormat: the client IP must be the first field" icon="outline/alert-triangle" >}}
+Live mode does **not** use the configurable log format. It always takes the text before the first space of each line as the client IP and expects the standard combined log layout after it. `flokbn live` has no `--logFormat` flag, `[live]` has no `logFormat` key, and a `logFormat` under `[static]` has no effect here.
+
+This matters most behind a proxy or load balancer. Static mode's **default** format reads the client IP from the *last* field (an `X-Forwarded-For` layout); live mode reads the *first* field of the very same line - which is then your proxy's address. flokbn would cluster and ban your own proxy. Before enabling live mode, make sure your web server writes the real client IP first (see [Expected log line format](#expected-log-line-format)), and whitelist your proxy addresses as a safety net.
+{{< /callout >}}
+
 ## How Live Mode Works
 
 - Receives logs from Filebeat/Logstash via the Lumberjack protocol (TCP)
@@ -112,7 +118,11 @@ Live mode parses each event's `message` field itself and expects the standard **
 192.0.2.1 - - [09/Oct/2025:10:15:23 +0000] "GET / HTTP/1.1" 200 1234 "-" "curl/8.5.0"
 ```
 
-The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion. If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the flokbn side, which live mode does not support). Lines that don't parse are counted as parse errors in `/stats` and skipped.
+The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion, and a format you tuned for static mode says nothing about what live mode will read. The first space-separated token is the client IP, always.
+
+If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the flokbn side, which live mode does not support). For nginx behind a trusted proxy, either let the `realip` module rewrite `$remote_addr` (`set_real_ip_from <proxy>; real_ip_header X-Forwarded-For;`) and keep the stock format, or define a format that starts with the address your own proxy appended. Only that element of `X-Forwarded-For` is trustworthy; the rest of the header is supplied by the client.
+
+A quick check before going live: take one line from the log Filebeat ships and confirm that its first field is a client address, not your proxy's. Lines that don't parse are counted as parse errors in `/stats` and skipped - but a line with the *wrong* IP first parses fine, so the parse-error counter will not warn you.
 
 ## Security Considerations
 

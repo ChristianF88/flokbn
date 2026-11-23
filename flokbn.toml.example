@@ -226,6 +226,14 @@ useForJail = [true, true, true]
 #################################################################################
 
 [live]
+# IMPORTANT: live mode does NOT use logFormat. There is no logFormat key here,
+# and the [static] logFormat above has no effect on live ingestion. Live mode
+# always reads the client IP from the FIRST space-separated field of each line
+# (standard combined log layout). If your web server logs a proxy address first
+# and the real client in X-Forwarded-For - which is what the [static] example
+# format above expects - change the web server's log format before using live
+# mode, otherwise flokbn clusters and bans your proxy.
+
 # REQUIRED: Network configuration (global settings only)
 port = "8080"                           # Port to listen for incoming log streams
 

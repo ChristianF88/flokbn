@@ -77,6 +77,8 @@ Each `[static.NAME]` section defines an independent analysis trie. The `NAME` is
 | `statsListen` | string | No | `host:port` for the HTTP stats server (`GET /stats`, `GET /bans`, Prometheus `GET /metrics`); empty = off. **Unauthenticated**, and `/stats` returns whitelist/blacklist CIDRs, file paths and detection thresholds: keep it on loopback or behind an authenticating proxy. |
 | `topTalkers` | int | No | Include the top-N IPs per window in `/stats`; `0` = off |
 
+**There is no `logFormat` for live mode.** `[live]` rejects the key, and a `logFormat` under `[static]` does not apply. Live mode always reads the client IP from the first space-separated field of each line and expects the combined log layout after it - see [Live Protection]({{< relref "/docs/guides/live-protection/#expected-log-line-format" >}}).
+
 ### Live Windows: [live.NAME]
 
 Each `[live.NAME]` section defines an independent sliding window (own filters, own time/size bounds, own cluster arg sets). All windows share the same jail and ban file.
