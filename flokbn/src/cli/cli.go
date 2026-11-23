@@ -331,7 +331,7 @@ func handleLiveFlagsMode(c *cli.Context) error {
 	// (not a throwaway, or a dropped regex error becomes a fail-open no-op filter
 	// that admits all traffic), so it enumerates with static flags at the barrier
 	// in executeLiveAnalysis before any port/stats bind.
-	slidingConfig.CompileRegexInto(cfg.Diagnostics())
+	slidingConfig.CompileRegexInto("live.cli_default", cfg.Diagnostics())
 
 	// clusterArgSets arity stays a hard return (parity with static flags mode).
 	clusterArgs, err := config.ParseClusterArgSetsFromStrings(c.StringSlice("clusterArgSet"))
@@ -436,7 +436,7 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	// A bad --useragentRegex/--endpointRegex routes into cfg.diags; the barrier
 	// (in executeStaticAnalysis) enumerates and aborts before analysis. On failure
 	// both compiled+prefilter stay nil; analysis never runs.
-	trieConfig.CompileRegexInto(diags)
+	trieConfig.CompileRegexInto("static.cli_trie", diags)
 
 	// Validate --rangesCidr into cfg.diags, storing ONLY valid IPv4 entries on the
 	// trie (drop IPv6/malformed before append - never store a bad entry, parity
