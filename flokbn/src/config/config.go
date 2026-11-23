@@ -332,6 +332,10 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 			if err := logparser.ValidateFormat(effFormat); err != nil {
 				diags.Add("static", "logFormat", c.Static.LogFormat,
 					"a valid log format string with exactly one %h", err)
+			} else {
+				// A filter needing a field the format never extracts would
+				// silently match nothing (or everything); reject it here.
+				c.validateFilterFields(diags, effFormat)
 			}
 			// logFile-exists migrated from the CLI handler (CFG-02): a configured
 			// but absent logfile enumerates alongside (e.g.) a bad startTime instead
