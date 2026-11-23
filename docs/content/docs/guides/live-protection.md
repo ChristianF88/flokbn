@@ -102,6 +102,8 @@ output.logstash:
 sudo systemctl restart filebeat
 ```
 
+flokbn listens on `127.0.0.1` unless `[live] listen` (or `--listen`) says otherwise. With Filebeat on the same host, point `hosts` at `127.0.0.1:8080`; for a remote Filebeat, set `listen` and restrict access to the port as described in [Security Considerations](#security-considerations).
+
 ### Expected log line format
 
 Live mode parses each event's `message` field itself and expects the standard **combined log format with the client IP as the first field**:
@@ -111,6 +113,20 @@ Live mode parses each event's `message` field itself and expects the standard **
 ```
 
 The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion. If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the flokbn side, which live mode does not support). Lines that don't parse are counted as parse errors in `/stats` and skipped.
+
+## Security Considerations
+
+Live mode turns log lines into bans automatically, so everything that can influence its input or read its output is security-relevant.
+
+{{< callout context="caution" title="The ingest port is unauthenticated" icon="outline/alert-triangle" >}}
+The Lumberjack listener has no authentication and no encryption. Whoever can open a TCP connection to it can send forged log events - and with enough of them get arbitrary IP ranges banned (for example your own customers, or a monitoring service).
+{{< /callout >}}
+
+- **Ingest listener (`[live] listen`, `--listen`).** The listener binds to `127.0.0.1` by default, which fits a Filebeat running on the same host. To accept logs from another host or container, set `listen` explicitly (for example `listen = "0.0.0.0"` or one specific interface address) **and** restrict who can reach the port: a firewall rule that admits only your log shippers, a private network, or a tunnel. Never expose it to the internet.
+- **HTTP endpoints (`statsListen`).** `/stats`, `/bans` and `/metrics` are unauthenticated too. `/stats` returns your whitelist and blacklist CIDRs, the paths of the list, jail and ban files, and the exact detection thresholds of every cluster arg set - enough for an attacker to stay just below them. The server is off unless `statsListen` is set; when you set it, keep it on loopback (`127.0.0.1:8666`) or put it behind a reverse proxy that authenticates. If a remote enforcement point needs the ban list, expose only `/bans` through that proxy.
+- **User-Agent whitelist.** The User-Agent is client-controlled: one request with a listed string makes the sender's IP immune, including against the manual blacklist. See the warning in [Filtering]({{< relref "/docs/reference/filtering/#user-agent-whitelist" >}}).
+- **Client IP behind a proxy.** flokbn bans whatever address the log line names as the client. If that address comes from an `X-Forwarded-For` header, only the element appended by **your own** proxy is trustworthy; anything to its left was supplied by the client and can name any address they want banned. See [Log Formats]({{< relref "/docs/reference/log-formats/" >}}).
+- **Jail and ban files.** Keep them in a directory only the flokbn user can write (for example `/var/lib/flokbn`), not in a world-writable location such as `/tmp`: whoever can write the ban file controls your firewall rules.
 
 ## Firewall Integration
 
@@ -203,7 +219,7 @@ format = "text"  # text or json
 
 ## HTTP Endpoints
 
-For machine-readable live data, set `statsListen` in `[live]` (config file only - no CLI flag). Bind to localhost unless you have a reason not to:
+For machine-readable live data, set `statsListen` in `[live]` (config file only - no CLI flag). The endpoints are unauthenticated and `/stats` discloses your whitelist and detection thresholds, so bind to loopback or put an authenticating reverse proxy in front (see [Security Considerations](#security-considerations)):
 
 ```toml
 [live]

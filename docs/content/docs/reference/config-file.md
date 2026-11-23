@@ -72,8 +72,9 @@ Each `[static.NAME]` section defines an independent analysis trie. The `NAME` is
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `port` | string | Yes | Lumberjack protocol listening port |
+| `listen` | string | No | Address the Lumberjack listener binds to (default `127.0.0.1`). The port is **unauthenticated**: set another address (e.g. `0.0.0.0`) only when access to the port is restricted to your log shippers. |
 | `readTimeout` | string | No | TCP read timeout for the ingestor (duration string; default `5s`) |
-| `statsListen` | string | No | `host:port` for the HTTP stats server (`GET /stats`, `GET /bans`, Prometheus `GET /metrics`); empty = off |
+| `statsListen` | string | No | `host:port` for the HTTP stats server (`GET /stats`, `GET /bans`, Prometheus `GET /metrics`); empty = off. **Unauthenticated**, and `/stats` returns whitelist/blacklist CIDRs, file paths and detection thresholds: keep it on loopback or behind an authenticating proxy. |
 | `topTalkers` | int | No | Include the top-N IPs per window in `/stats`; `0` = off |
 
 ### Live Windows: [live.NAME]

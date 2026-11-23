@@ -28,7 +28,12 @@ blacklist = "config_examples/blacklist.txt"              # Optional: IPs/CIDRs a
 
 # OPTIONAL: User-Agent based filtering
 # These files contain exact User-Agent strings (full-string match, not substrings)
-userAgentWhitelist = "config_examples/ua_whitelist.txt"  # Optional: exact User-Agent strings that whitelist IPs
+# SECURITY: the User-Agent is sent by the client and trivially spoofed. ONE request
+# with a whitelisted User-Agent makes its source IP immune: excluded from detection,
+# removed from active bans AND from the manual IP blacklist. Do not treat the
+# User-Agent whitelist as access control; for crawlers and monitoring you must
+# never ban, whitelist their published IP ranges instead.
+userAgentWhitelist ="config_examples/ua_whitelist.txt"  # Optional: exact User-Agent strings that whitelist IPs
 userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-Agent strings that blacklist IPs
 
 # WHITELIST/BLACKLIST BEHAVIOR:
@@ -40,6 +45,7 @@ userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-
 # 2. IP Blacklist: IPs matching these CIDRs are always added to ban file
 # 3. User-Agent Whitelist: requests with these exact UA strings are excluded from
 #    every trie (analysis + statistics), and their IPs are shielded from jail/ban
+#    - including from the manual IP blacklist. Client-controlled, see SECURITY above.
 # 4. User-Agent Blacklist: IPs with these exact UA strings are immediately banned
 # 5. Processing order: UA filters → clustering → IP whitelist/blacklist (ban pipeline) → jail → ban file
 
@@ -280,6 +286,15 @@ useForJail = [true, true, true]
 # 3. Monitor jail file size and rotation
 # 4. Use exact User-Agent strings that are specific enough to avoid false positives
 # 5. Regularly review and update filtering rules
+# 6. The User-Agent whitelist is spoofable (client-controlled header): anyone who
+#    sends a listed string is immune to bans. Prefer the IP whitelist.
+# 7. The live ingest port ([live] port) is unauthenticated: whoever can reach it
+#    can forge log events and get arbitrary ranges banned. Restrict access to it.
+# 8. [live] statsListen is unauthenticated and /stats returns the whitelist, file
+#    paths and detection thresholds: keep it on loopback or behind an
+#    authenticating reverse proxy.
+# 9. If the client IP (%h) comes from an X-Forwarded-For header, only the element
+#    appended by YOUR OWN proxy is trustworthy; the rest is client-supplied.
 
 # OPERATIONAL NOTES:
 # 1. The jail file persists banned IPs across restarts

@@ -38,7 +38,7 @@ Both stacks share the same topology:
 
 Every published port is bound to `127.0.0.1` on the host: none of these services is authenticated, so the stacks are reachable from the machine running Docker and nowhere else.
 
-The configs bind `statsListen = "0.0.0.0:8666"` so the published port is reachable from the host across the isolated compose network. That `0.0.0.0` bind is a documented demo-only exception - outside Docker, bind the stats server to localhost.
+The configs bind `statsListen = "0.0.0.0:8666"` (and the Lumberjack listener on all container interfaces) so Filebeat, the proxy's ban poller and the published ports can reach flokbn across the isolated compose networks. Inside a container that is the only way to be reachable; the exposure is limited by the `127.0.0.1` port mappings instead. It is a demo-only exception - outside Docker, keep both listeners on loopback, because neither is authenticated.
 
 ## Quick Start (test stack)
 
@@ -238,7 +238,7 @@ services:
     image: flokbn:latest
     restart: always
     ports:
-      - "8080:8080"            # Lumberjack ingest ([live] port)
+      - "10.0.0.5:8080:8080"   # Lumberjack ingest ([live] port): publish ONLY on the interface your log shippers use - unauthenticated
       - "127.0.0.1:8666:8666"  # HTTP stats (statsListen), host-local only
     volumes:
       - /etc/flokbn/flokbn.toml:/config/flokbn.toml:ro  # the path the image's default command reads
@@ -250,7 +250,9 @@ services:
           memory: 2G
 ```
 
-For better performance, use `network_mode: host` to eliminate Docker network overhead.
+Inside the container flokbn must listen on the container's interface for the published ingest port to work, so the mounted config needs `listen = "0.0.0.0"` in `[live]` (the default is `127.0.0.1`). The port mapping above is then what limits who can reach the unauthenticated listener - see [Security Considerations]({{< relref "/docs/guides/live-protection/#security-considerations" >}}).
+
+For better performance, use `network_mode: host` to eliminate Docker network overhead. With host networking there is no port mapping to hide behind: the `listen` and `statsListen` addresses in the config are the real bind addresses.
 
 ## Troubleshooting
 

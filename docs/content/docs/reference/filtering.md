@@ -102,6 +102,16 @@ Whitelist and blacklist can be used together. The whitelist wins: any blacklist 
 
 Requests whose User-Agent is listed are excluded from analysis, and their source IPs are immunized against bans. Matching is a **case-insensitive exact match** of the full User-Agent string (not substring, not regex).
 
+{{< callout context="caution" title="The User-Agent is chosen by the client" icon="outline/alert-triangle" >}}
+A User-Agent is a request header: any client can send any string, including one from your whitelist. A single request carrying a whitelisted User-Agent makes its source IP immune - it is excluded from detection, removed from active bans, **and removed from the manual IP blacklist** for as long as that IP is remembered (the whole run in static mode, the sliding-window lifetime in live mode). An attacker who guesses or reads a listed string (search-engine crawler strings are public) can switch off banning for their own addresses.
+
+Treat the User-Agent whitelist as a convenience against false positives, not as an access control:
+
+- Prefer the [IP whitelist](#ip-whitelist) with the operator's published address ranges for crawlers and monitoring services you must never ban.
+- Keep the list short and specific; do not list common browser strings.
+- Do not rely on it to protect anything an attacker would benefit from being exempt on.
+{{< /callout >}}
+
 ### File Format
 
 One **full User-Agent string** per line (the exact value the client sends). Comments with `#`. Blank lines ignored.
