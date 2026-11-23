@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/ChristianF88/flokbn/config/regexprefilter"
 	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/logging"
 	"github.com/ChristianF88/flokbn/logparser"
@@ -116,6 +118,10 @@ type SlidingTrieConfig struct {
 	// CFG-02 collect-all guard flags (see TrieConfig).
 	clusterArgSetsHadError bool
 	useForJailHadError     bool
+
+	// ignoredKeys lists the keys present in this [live.<name>] table that are
+	// accepted but have no effect in live mode (see Config.LiveWarnings).
+	ignoredKeys []string
 }
 
 type StaticConfig struct {
@@ -332,6 +338,10 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 			if err := logparser.ValidateFormat(effFormat); err != nil {
 				diags.Add("static", "logFormat", c.Static.LogFormat,
 					"a valid log format string with exactly one %h", err)
+			} else {
+				// A filter needing a field the format never extracts would
+				// silently match nothing (or everything); reject it here.
+				c.validateFilterFields(diags, effFormat)
 			}
 			// logFile-exists migrated from the CLI handler (CFG-02): a configured
 			// but absent logfile enumerates alongside (e.g.) a bad startTime instead
@@ -446,18 +456,65 @@ func (c *Config) validateJailFile(diags *ConfigDiagnostics) {
 func validateTrieTimestamps(diags *ConfigDiagnostics, section string,
 	startRaw, endRaw string, start, end *time.Time, startHasOffset, endHasOffset bool) {
 
-	// Format: raw captured (non-empty) but never parsed => RFC3339 failure.
+	// Format: raw captured (non-empty) but never parsed => no accepted layout matched.
 	if startRaw != "" && start == nil {
-		diags.Add(section, "startTime", startRaw, "RFC3339 (e.g. 2025-01-01T00:00:00Z)", nil)
+		diags.Add(section, "startTime", startRaw, TimeBoundFormats, nil)
 	}
 	if endRaw != "" && end == nil {
-		diags.Add(section, "endTime", endRaw, "RFC3339 (e.g. 2025-01-01T00:00:00Z)", nil)
+		diags.Add(section, "endTime", endRaw, TimeBoundFormats, nil)
 	}
 	// Range: only when both bounds parsed. The offset-equality gate matches
 	// makeTimeBounds (URGENT-09): a zone-less wall-clock bound and an
 	// offset-bearing instant are not comparable via time.Before, so skip then.
 	if start != nil && end != nil && startHasOffset == endHasOffset && end.Before(*start) {
 		diags.AddRange(section, endRaw, startRaw)
+	}
+}
+
+// topLevelSections are the recognized top-level tables, in the order
+// checkTopLevelSectionTypes reports them.
+var topLevelSections = [...]string{"global", "static", "live", "log"}
+
+// checkTopLevelSectionTypes rejects a recognized top-level section that is not
+// a TOML table (`global = "x"`, `[[global]]`). LoadConfig's dispatch only acts
+// on table values, so a wrong-typed section would otherwise be dropped whole
+// and leave an empty section behind - the same fail-open as a misspelled
+// section header, hence the same hard error rather than a diagnostic.
+func checkTopLevelSectionTypes(raw map[string]any) error {
+	for _, name := range topLevelSections {
+		value, present := raw[name]
+		if !present {
+			continue
+		}
+		if _, isTable := value.(map[string]any); !isTable {
+			return fmt.Errorf("section [%s] must be a table, got %s (write it as a [%s] header followed by key = value lines)",
+				name, tomlTypeName(value), name)
+		}
+	}
+	return nil
+}
+
+// tomlTypeName names the TOML type of a decoded value for an error message.
+func tomlTypeName(v any) string {
+	switch v.(type) {
+	case string:
+		return "a string"
+	case int64:
+		return "an integer"
+	case float64:
+		return "a float"
+	case bool:
+		return "a boolean"
+	case time.Time:
+		return "a datetime"
+	case []map[string]any:
+		return "an array of tables"
+	case []any:
+		return "an array"
+	case map[string]any:
+		return "a table"
+	default:
+		return fmt.Sprintf("%T", v)
 	}
 }
 
@@ -470,6 +527,10 @@ func LoadConfig(configPath string) (*Config, error) {
 	var rawConfig map[string]any
 	if _, err := toml.Decode(string(configData), &rawConfig); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	if err := checkTopLevelSectionTypes(rawConfig); err != nil {
+		return nil, err
 	}
 
 	config := &Config{
@@ -841,27 +902,17 @@ func parseClusterArgSetsFromTOML(m map[string]any, section string, diags *Config
 			hadError = true
 			continue
 		}
-		minDepth := uint32(argSet[1])
-		maxDepth := uint32(argSet[2])
-		// 32 is the IPv4 bit width ceiling. Mirror the CLI REJECT
-		// (ParseClusterArgSetsFromStrings) so an invalid set never reaches
-		// collectCIDRsNode and the positional useForJail alignment is preserved.
-		if minDepth > maxDepth {
-			diags.AddRaw(fmt.Sprintf("[%s] clusterArgSets row %d: minDepth (%d) must be <= maxDepth (%d)", section, i, minDepth, maxDepth))
+		// Range/integrality rules live in validateClusterArgValues, shared with
+		// the CLI path (ParseClusterArgSetsFromStrings), so an invalid set never
+		// reaches collectCIDRsNode and the positional useForJail alignment is
+		// preserved. One diagnostic per rejected row.
+		set, verr := validateClusterArgValues(argSet[0], argSet[1], argSet[2], argSet[3])
+		if verr != nil {
+			diags.AddRaw(fmt.Sprintf("[%s] clusterArgSets row %d: %s", section, i, verr.Error()))
 			hadError = true
 			continue
 		}
-		if maxDepth > 32 {
-			diags.AddRaw(fmt.Sprintf("[%s] clusterArgSets row %d: maxDepth (%d) must be <= 32", section, i, maxDepth))
-			hadError = true
-			continue
-		}
-		sets = append(sets, ClusterArgSet{
-			MinClusterSize:       uint32(argSet[0]),
-			MinDepth:             minDepth,
-			MaxDepth:             maxDepth,
-			MeanSubnetDifference: argSet[3],
-		})
+		sets = append(sets, set)
 	}
 	return sets, hadError, nil
 }
@@ -893,14 +944,14 @@ func parseUseForJail(m map[string]any, section string, diags *ConfigDiagnostics)
 	return result, hadError, nil
 }
 
-// parseTimeBound reads an RFC3339 timestamp bound (startTime/endTime) from a
-// trie TOML map. A present-but-non-string value is a hard fail-fast (structural
-// error); an empty or absent value yields the zero result, accepted as before.
-// A non-empty string is returned as raw and, when it parses, as a non-nil
-// instant with hasOffset=true (RFC3339 always carries a zone designator;
-// URGENT-09). The raw literal is returned even on parse failure so Validate can
-// echo the operator's text. Shared by both trie parsers so the static and
-// sliding bound paths cannot drift.
+// parseTimeBound reads a timestamp bound (startTime/endTime) from a trie TOML
+// map. A present-but-non-string value is a hard fail-fast (structural error);
+// an empty or absent value yields the zero result, accepted as before. A
+// non-empty string is returned as raw and, when ParseTimeBound accepts it, as a
+// non-nil time with hasOffset reporting whether it carried an explicit zone
+// offset (always true for RFC3339; URGENT-09). The raw literal is returned even
+// on parse failure so Validate can echo the operator's text. Shared by both
+// trie parsers so the static and sliding bound paths cannot drift.
 func parseTimeBound(m map[string]any, key string) (raw string, t *time.Time, hasOffset bool, err error) {
 	v, present := m[key]
 	if !present {
@@ -913,8 +964,11 @@ func parseTimeBound(m map[string]any, key string) (raw string, t *time.Time, has
 	if s == "" {
 		return "", nil, false, nil
 	}
-	if parsed, perr := time.Parse(time.RFC3339, s); perr == nil {
-		return s, &parsed, true, nil
+	// ParseTimeBound is shared with the --startTime/--endTime flags, so the
+	// TOML keys accept the same syntaxes: RFC3339 (always an explicit offset)
+	// and the short zone-less / "±HHMM" forms.
+	if parsed, offset, perr := ParseTimeBound(s); perr == nil {
+		return s, &parsed, offset, nil
 	}
 	return s, nil, false, nil
 }
@@ -952,7 +1006,7 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 	if clusterHadError {
 		tc.UseForJail = nil
 	}
-	tc.CompileRegexInto(diags)
+	tc.CompileRegexInto(section, diags)
 	// A non-empty but non-RFC3339 startTime/endTime sets the raw carrier (not the
 	// parsed pointer) and is surfaced as a diagnostic at Validate, not here; a
 	// wrong-TYPE value stays a hard fail-fast. The raw literal is also captured
@@ -977,10 +1031,11 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 			// IPv6/malformed entry BEFORE the append so an invalid string never
 			// lands on tc.CIDRRanges (a pre-barrier reader / negative-shift panic
 			// guard). COLLECT-ALL: validateCIDRRangeEntry records each bad entry.
-			if !validateCIDRRangeEntry("cidrRanges", section, i, str, diags) {
+			cidrStr, valid := validateCIDRRangeEntry("cidrRanges", section, i, str, diags)
+			if !valid {
 				continue
 			}
-			tc.CIDRRanges = append(tc.CIDRRanges, str)
+			tc.CIDRRanges = append(tc.CIDRRanges, cidrStr)
 		}
 	}
 	return tc, nil
@@ -996,17 +1051,29 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 // rejected while plain IPv4 CIDRs pass. The MSG-02 grammar is preserved verbatim
 // ("invalid %s[%d] %q: %w" / "IPv6 not supported (IPv4-only tool) in %s[%d]:
 // %q"); the offending value is quoteCapped (untrusted) inside an AddRaw line.
-func validateCIDRRangeEntry(field, section string, i int, str string, diags *ConfigDiagnostics) bool {
+//
+// A bare IPv4 address is accepted as a single host and returned as "/32" (the
+// same rule as --rangesCidr and the whitelist/blacklist files); the caller
+// stores the RETURNED value, never the raw string, so a downstream
+// net.ParseCIDR always succeeds. A bare IPv6 address is reported as IPv6.
+func validateCIDRRangeEntry(field, section string, i int, str string, diags *ConfigDiagnostics) (cidr string, valid bool) {
 	_, ipNet, err := net.ParseCIDR(str)
 	if err != nil {
+		if normalized, ok := iputils.NormalizeIPv4CIDR(str); ok {
+			return normalized, true
+		}
+		if net.ParseIP(str) != nil {
+			diags.AddRaw(fmt.Sprintf("[%s] IPv6 not supported (IPv4-only tool) in %s[%d]: %s", section, field, i, quoteCapped(str)))
+			return "", false
+		}
 		diags.AddRaw(fmt.Sprintf("[%s] invalid %s[%d] %s: %s", section, field, i, quoteCapped(str), err.Error()))
-		return false
+		return "", false
 	}
 	if len(ipNet.Mask) != 4 {
 		diags.AddRaw(fmt.Sprintf("[%s] IPv6 not supported (IPv4-only tool) in %s[%d]: %s", section, field, i, quoteCapped(str)))
-		return false
+		return "", false
 	}
-	return true
+	return str, true
 }
 
 func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*SlidingTrieConfig, error) {
@@ -1025,17 +1092,27 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 		return nil, err
 	}
 	stc := &SlidingTrieConfig{
-		UserAgentRegex:         uaRegex,
-		EndpointRegex:          epRegex,
+		UserAgentRegex: uaRegex,
+		EndpointRegex:  epRegex,
+		// Same default as the --sleepBetweenIterations flag; overwritten below
+		// when the key is present (an explicit 0 is honored).
+		SleepBetweenIterations: DefaultSleepBetweenIterations,
 		ClusterArgSets:         clusterArgSets,
 		UseForJail:             useForJail,
 		clusterArgSetsHadError: clusterHadError,
 		useForJailHadError:     useForJailHadError,
 	}
+	// Keys that are validated below but never consumed by a sliding trie; the
+	// live command warns about each one (Config.LiveWarnings).
+	for _, key := range ignoredLiveKeys {
+		if _, present := m[key]; present {
+			stc.ignoredKeys = append(stc.ignoredKeys, key)
+		}
+	}
 	if clusterHadError {
 		stc.UseForJail = nil // belt-and-suspenders (see parseTrieConfig)
 	}
-	stc.CompileRegexInto(diags)
+	stc.CompileRegexInto(section, diags)
 	// Sliding tries never consume these bounds for filtering; they feed only
 	// Validate(LiveMode), so a [live.<n>] bound is parsed (and thus accepted or
 	// rejected) identically to a [static.<n>] bound via the shared helper. A live
@@ -1319,90 +1396,90 @@ func (c *Config) LoadBlacklistCIDRs() ([]string, error) {
 	return loadCIDRFile(c.Global.Blacklist)
 }
 
-// compileRegexFields is the single implementation of the regex-compile logic
-// shared by the PUBLIC CompileRegex() and the diagnostics-threading
-// CompileRegexInto(diags). It returns the first wrapped compile error (the exact
-// substrings "invalid useragentRegex pattern: ..." / "invalid endpointRegex
-// pattern: ..." that direct callers assert) and, on success, sets the compiled
-// regex AND the prefilter - ORDER MATTERS (security, D1-SECURITY): the prefilter
-// is built ONLY after a successful Compile, so a compile failure leaves BOTH the
-// compiled regex AND the prefilter nil. regexGate(nil,...) returns true, so a
-// FAIL-OPEN would admit all traffic - the barrier (which fires when the
-// diagnostic is recorded) is the only thing permitted to run between this and
-// any ShouldIncludeRequest call. Never set a partial/garbage prefilter.
-func (tc *TrieConfig) compileRegexFields() error {
-	if tc.UserAgentRegex != "" {
-		compiled, err := regexp.Compile(tc.UserAgentRegex)
-		if err != nil {
-			return fmt.Errorf("invalid useragentRegex pattern: %w", err)
-		}
-		tc.userAgentRegexCompiled = compiled
-		tc.userAgentPrefilter = regexprefilter.Build(tc.UserAgentRegex)
+// compileFilterRegex compiles one filter pattern (key is the config key,
+// "useragentRegex" or "endpointRegex") together with its prefilter. An empty
+// pattern means "no filter" and yields nil, nil, nil. The error text keeps the
+// exact substrings "invalid useragentRegex pattern: ..." / "invalid
+// endpointRegex pattern: ..." that callers and tests match on.
+//
+// ORDER MATTERS (security, D1-SECURITY): the prefilter is built ONLY after a
+// successful Compile, so a compile failure returns BOTH the compiled regex AND
+// the prefilter as nil. regexGate(nil,...) returns true, so a FAIL-OPEN would
+// admit all traffic - the barrier (which fires when the diagnostic is recorded)
+// is the only thing permitted to run between this and any ShouldIncludeRequest
+// call. Never return a partial/garbage prefilter.
+func compileFilterRegex(key, pattern string) (*regexp.Regexp, *regexprefilter.Prefilter, error) {
+	if pattern == "" {
+		return nil, nil, nil
 	}
-	if tc.EndpointRegex != "" {
-		compiled, err := regexp.Compile(tc.EndpointRegex)
-		if err != nil {
-			return fmt.Errorf("invalid endpointRegex pattern: %w", err)
-		}
-		tc.endpointRegexCompiled = compiled
-		tc.endpointPrefilter = regexprefilter.Build(tc.EndpointRegex)
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid %s pattern: %w", key, err)
 	}
-	return nil
+	return compiled, regexprefilter.Build(pattern), nil
 }
 
-// CompileRegex compiles the regex patterns for a TrieConfig, returning the first
-// compile error. It is a PUBLIC thin wrapper retained for direct callers
-// (config_test.go TestCompileRegex, prefilter_wiring_test.go, cli/live_loop_test.go)
-// that assert the error channel; do NOT remove it. Flags/parse paths use
-// CompileRegexInto to route the same failure into a diagnostics accumulator.
+// recordRegexErrors routes the per-field compile errors of one trie into diags,
+// one line per failed field, prefixed with the section ("static.<name>" /
+// "live.<name>", no brackets) so the operator knows WHICH trie to fix. The
+// regexp.Compile error text is operator/attacker-influenced via the pattern;
+// AddRaw sanitizes the assembled line.
+func recordRegexErrors(section string, diags *ConfigDiagnostics, errs ...error) {
+	for _, err := range errs {
+		if err != nil {
+			diags.AddRaw("[" + section + "] " + err.Error())
+		}
+	}
+}
+
+// compileRegexFields compiles both filter patterns INDEPENDENTLY: a bad
+// useragentRegex does not stop the endpointRegex from being compiled (and
+// reported), so one pass surfaces every bad pattern of the trie.
+func (tc *TrieConfig) compileRegexFields() (uaErr, epErr error) {
+	tc.userAgentRegexCompiled, tc.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", tc.UserAgentRegex)
+	tc.endpointRegexCompiled, tc.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", tc.EndpointRegex)
+	return uaErr, epErr
+}
+
+// CompileRegex compiles the regex patterns for a TrieConfig and returns the
+// compile errors of both fields (joined; nil when both compile). It is a PUBLIC
+// thin wrapper retained for direct callers (config_test.go TestCompileRegex,
+// prefilter_wiring_test.go, cli/live_loop_test.go) that assert the error
+// channel; do NOT remove it. Flags/parse paths use CompileRegexInto to route
+// the same failures into a diagnostics accumulator.
 func (tc *TrieConfig) CompileRegex() error {
-	return tc.compileRegexFields()
+	return errors.Join(tc.compileRegexFields())
 }
 
-// CompileRegexInto compiles the regex patterns and, on failure, records the
-// wrapped error into diags (verbatim, sanitized - the regexp.Compile error text
-// is operator/attacker-influenced via the pattern). It NEVER returns an error;
+// CompileRegexInto compiles the regex patterns and records every failure into
+// diags, naming the section (e.g. "static.t2_bots"). It NEVER returns an error;
 // callers proceed to build the Config and the barrier aborts before any
-// ShouldIncludeRequest call. On failure BOTH compiled+prefilter stay nil (see
-// compileRegexFields).
-func (tc *TrieConfig) CompileRegexInto(diags *ConfigDiagnostics) {
-	if err := tc.compileRegexFields(); err != nil {
-		diags.AddRaw(err.Error())
-	}
+// ShouldIncludeRequest call. A failed field leaves BOTH its compiled regex and
+// its prefilter nil (see compileFilterRegex).
+func (tc *TrieConfig) CompileRegexInto(section string, diags *ConfigDiagnostics) {
+	uaErr, epErr := tc.compileRegexFields()
+	recordRegexErrors(section, diags, uaErr, epErr)
+}
+
+// compileRegexFields is the SlidingTrieConfig counterpart (see
+// TrieConfig.compileRegexFields).
+func (stc *SlidingTrieConfig) compileRegexFields() (uaErr, epErr error) {
+	stc.userAgentRegexCompiled, stc.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", stc.UserAgentRegex)
+	stc.endpointRegexCompiled, stc.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", stc.EndpointRegex)
+	return uaErr, epErr
 }
 
 // CompileRegex compiles the regex patterns for a SlidingTrieConfig (public thin
 // wrapper; see TrieConfig.CompileRegex).
 func (stc *SlidingTrieConfig) CompileRegex() error {
-	return stc.compileRegexFields()
-}
-
-func (stc *SlidingTrieConfig) compileRegexFields() error {
-	if stc.UserAgentRegex != "" {
-		compiled, err := regexp.Compile(stc.UserAgentRegex)
-		if err != nil {
-			return fmt.Errorf("invalid useragentRegex pattern: %w", err)
-		}
-		stc.userAgentRegexCompiled = compiled
-		stc.userAgentPrefilter = regexprefilter.Build(stc.UserAgentRegex)
-	}
-	if stc.EndpointRegex != "" {
-		compiled, err := regexp.Compile(stc.EndpointRegex)
-		if err != nil {
-			return fmt.Errorf("invalid endpointRegex pattern: %w", err)
-		}
-		stc.endpointRegexCompiled = compiled
-		stc.endpointPrefilter = regexprefilter.Build(stc.EndpointRegex)
-	}
-	return nil
+	return errors.Join(stc.compileRegexFields())
 }
 
 // CompileRegexInto is the SlidingTrieConfig counterpart (see
 // TrieConfig.CompileRegexInto).
-func (stc *SlidingTrieConfig) CompileRegexInto(diags *ConfigDiagnostics) {
-	if err := stc.compileRegexFields(); err != nil {
-		diags.AddRaw(err.Error())
-	}
+func (stc *SlidingTrieConfig) CompileRegexInto(section string, diags *ConfigDiagnostics) {
+	uaErr, epErr := stc.compileRegexFields()
+	recordRegexErrors(section, diags, uaErr, epErr)
 }
 
 // ParseClusterArgSetsFromStrings parses flat string arrays (from CLI flags)
@@ -1434,18 +1511,13 @@ func ParseClusterArgSetsFromStrings(args []string) ([]ClusterArgSet, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid meanSubnetDifference %q: %w", args[i+3], err)
 		}
-		if minDepth > maxDepth {
-			return nil, fmt.Errorf("clusterArgSets set %d: minDepth (%d) must be <= maxDepth (%d)", i/4, uint32(minDepth), uint32(maxDepth))
+		// Same range/integrality rules as the TOML path (see
+		// validateClusterArgValues).
+		set, err := validateClusterArgValues(minClusterSize, minDepth, maxDepth, meanSubnetDiff)
+		if err != nil {
+			return nil, fmt.Errorf("clusterArgSets set %d: %w", i/4, err)
 		}
-		if maxDepth > 32 {
-			return nil, fmt.Errorf("clusterArgSets set %d: maxDepth (%d) must be <= 32", i/4, uint32(maxDepth))
-		}
-		sets = append(sets, ClusterArgSet{
-			MinClusterSize:       uint32(minClusterSize),
-			MinDepth:             uint32(minDepth),
-			MaxDepth:             uint32(maxDepth),
-			MeanSubnetDifference: meanSubnetDiff,
-		})
+		sets = append(sets, set)
 	}
 	return sets, nil
 }
@@ -1466,10 +1538,13 @@ func (c *Config) LoadUserAgentBlacklistPatterns() ([]string, error) {
 	return loadPatternFile(c.Global.UserAgentBlacklist)
 }
 
-// stripCommentLine normalizes one raw line from a pattern/CIDR list file:
-// trims surrounding whitespace, drops a full-line comment (empty or leading
-// '#'), strips a trailing inline '#...' comment, and re-trims. It returns the
-// cleaned token and whether the line carries content (false = skip this line).
+// stripCommentLine normalizes one raw line from a CIDR list file: trims
+// surrounding whitespace, drops a full-line comment (empty or leading '#'),
+// strips a trailing inline '#...' comment, and re-trims. It returns the cleaned
+// token and whether the line carries content (false = skip this line).
+//
+// CIDR files only: a CIDR can never contain '#'. User-Agent pattern files use
+// patternLine, which keeps an inner '#'.
 func stripCommentLine(raw string) (string, bool) {
 	line := strings.TrimSpace(raw)
 	if line == "" || strings.HasPrefix(line, "#") {
@@ -1480,6 +1555,20 @@ func stripCommentLine(raw string) (string, bool) {
 		if line == "" {
 			return "", false
 		}
+	}
+	return line, true
+}
+
+// patternLine normalizes one raw line from a User-Agent pattern file: trims
+// surrounding whitespace and drops an empty line or a comment line (first
+// non-blank character is '#'). Unlike stripCommentLine it does NOT treat an
+// inner '#' as a comment: entries are exact User-Agent strings and real
+// User-Agents contain '#' ("Mozilla/5.0 (compatible; Foo #1)"), so cutting at
+// it would store a truncated entry that never matches.
+func patternLine(raw string) (string, bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", false
 	}
 	return line, true
 }
@@ -1496,7 +1585,7 @@ func loadPatternFile(filename string) ([]string, error) {
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
-		pattern, ok := stripCommentLine(scanner.Text())
+		pattern, ok := patternLine(scanner.Text())
 		if !ok {
 			continue
 		}
@@ -1537,6 +1626,18 @@ func loadCIDRFile(filename string) ([]string, error) {
 		// Validate CIDR format
 		_, ipNet, err := net.ParseCIDR(line)
 		if err != nil {
+			// The list files are documented as "IP/CIDR": a bare IPv4 address
+			// is a single host. Store it as /32 so every consumer that calls
+			// net.ParseCIDR on these strings (cidr, jail) accepts it.
+			if normalized, ok := iputils.NormalizeIPv4CIDR(line); ok {
+				cidrs = append(cidrs, normalized)
+				continue
+			}
+			// A bare IPv6 address (incl. IPv4-mapped) is an IPv6 problem, not
+			// a format problem.
+			if net.ParseIP(line) != nil {
+				return nil, fmt.Errorf("IPv6 not supported (IPv4-only tool) in %s:%d: %q", filename, lineNum, line)
+			}
 			return nil, fmt.Errorf("invalid CIDR format in %s:%d: %q", filename, lineNum, line)
 		}
 		// IPv4-only tool: reject IPv6 at the boundary (fail-loud). net.ParseCIDR

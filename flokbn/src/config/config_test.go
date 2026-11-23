@@ -771,7 +771,7 @@ func TestInvalidTimeFormatStoresRawValue(t *testing.T) {
 	testConfigContent := `
 [static.trie_1]
 startTime = "2025-01-01T00:00:00"
-endTime = "2025-12-31"
+endTime = "2025/12/31"
 cidrRanges = ["192.168.1.0/24"]
 clusterArgSets = [[100, 24, 32, 0.1]]
 useForJail = [true]
@@ -795,7 +795,9 @@ useForJail = [true]
 		t.Fatal("Expected trie_1 to exist")
 	}
 
-	// Both bounds failed RFC3339 parse, so the parsed pointers stay nil and the
+	// Neither bound matches an accepted layout (RFC3339 needs a zone; the short
+	// forms use dashes - "2025-12-31" itself is a valid zone-less date since the
+	// TOML keys accept the flag syntax), so the parsed pointers stay nil and the
 	// raw carriers feed the diagnostics pass (the exported StartTimeRaw/EndTimeRaw
 	// fields are gone - CFG-01 surfaces these through Validate instead).
 	if trie1.StartTime != nil {
@@ -813,7 +815,7 @@ useForJail = [true]
 	if !strings.Contains(report, `[static.trie_1] invalid startTime "2025-01-01T00:00:00"`) {
 		t.Errorf("Expected startTime diagnostic, got:\n%s", report)
 	}
-	if !strings.Contains(report, `[static.trie_1] invalid endTime "2025-12-31"`) {
+	if !strings.Contains(report, `[static.trie_1] invalid endTime "2025/12/31"`) {
 		t.Errorf("Expected endTime diagnostic, got:\n%s", report)
 	}
 }

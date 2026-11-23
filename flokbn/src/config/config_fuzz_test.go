@@ -60,6 +60,8 @@ func FuzzParseClusterArgSetsFromStrings(f *testing.F) {
 	f.Add("999999999,32,32,1.0")
 	f.Add("100,24,32")     // wrong field count
 	f.Add("100,32,24,0.1") // minDepth > maxDepth
+	f.Add("NaN,-1,1e40,Inf")
+	f.Add("1.5,24.5,4294967328,-0.1")
 
 	f.Fuzz(func(t *testing.T, s string) {
 		if s == "" {
@@ -67,8 +69,17 @@ func FuzzParseClusterArgSetsFromStrings(f *testing.F) {
 		}
 		// Split by comma to create the args slice
 		args := splitComma(s)
-		// Should not panic
-		ParseClusterArgSetsFromStrings(args)
+		// Should not panic, and anything accepted must be in range.
+		sets, err := ParseClusterArgSetsFromStrings(args)
+		if err != nil {
+			return
+		}
+		for _, set := range sets {
+			if set.MinClusterSize < 1 || set.MinDepth > set.MaxDepth || set.MaxDepth > 32 ||
+				!(set.MeanSubnetDifference >= 0 && set.MeanSubnetDifference <= 2) {
+				t.Fatalf("accepted out-of-range set %+v from %q", set, s)
+			}
+		}
 	})
 }
 

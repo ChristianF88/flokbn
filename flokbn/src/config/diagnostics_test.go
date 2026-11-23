@@ -98,9 +98,9 @@ startTime = "a-bad"
 startTime = "m-bad"
 `
 	want := "configuration errors (3):\n" +
-		`1. [static.alpha] invalid startTime "a-bad": want RFC3339 (e.g. 2025-01-01T00:00:00Z)` + "\n" +
-		`2. [static.mike] invalid startTime "m-bad": want RFC3339 (e.g. 2025-01-01T00:00:00Z)` + "\n" +
-		`3. [static.zulu] invalid startTime "z-bad": want RFC3339 (e.g. 2025-01-01T00:00:00Z)` + "\n"
+		`1. [static.alpha] invalid startTime "a-bad": want ` + TimeBoundFormats + "\n" +
+		`2. [static.mike] invalid startTime "m-bad": want ` + TimeBoundFormats + "\n" +
+		`3. [static.zulu] invalid startTime "z-bad": want ` + TimeBoundFormats + "\n"
 
 	for i := 0; i < 30; i++ {
 		cfg, err := LoadConfig(writeConfig(t, content))

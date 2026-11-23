@@ -132,7 +132,7 @@ func TestBarrierStderrExactness(t *testing.T) {
 		t.Fatalf("expected exit 1, got %d\nstderr:\n%s", code, stderr)
 	}
 	want := "configuration errors (1):\n" +
-		`1. [static.t] invalid startTime "2026-02-04T12:00:0": want RFC3339 (e.g. 2025-01-01T00:00:00Z)` + "\n"
+		`1. [static.t] invalid startTime "2026-02-04T12:00:0": want RFC3339 (e.g. 2025-01-01T00:00:00Z) or YYYY-MM-DD, "YYYY-MM-DD HH", "YYYY-MM-DD HH:MM", each optionally with " ±HHMM"` + "\n"
 	if stderr != want {
 		t.Errorf("stderr not exact.\nwant:\n%q\ngot:\n%q", want, stderr)
 	}

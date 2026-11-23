@@ -583,6 +583,12 @@ func FuzzPrefilterEquivalence(f *testing.F) {
 			f.Add(pat, in)
 		}
 	}
+	// Unicode fold partners of ASCII letters, mixed-fold non-ASCII literals and
+	// the replacement character (see prefilter_unicode_test.go).
+	f.Add(`(?i)sqlmap`, longS+"qlmap")
+	f.Add(`(?i)(bot|nikto|task)`, "ni"+kelvinSign+"to ta"+longS+kelvinSign)
+	f.Add("(?i:bot)É", "BOTÉ")
+	f.Add("ab�", "ab\xff")
 	f.Fuzz(func(t *testing.T, pat, input string) {
 		re, err := regexp.Compile(pat)
 		if err != nil {

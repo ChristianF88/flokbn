@@ -42,8 +42,9 @@ var (
 		Usage: "Filter requests by endpoint regex pattern (e.g., '/api/.*')",
 	}
 	rangesCidrFlag = &cli.StringSliceFlag{
-		Name:  "rangesCidr",
-		Usage: "Provide one or more CIDR ranges to check how many requests are in these range(s).",
+		Name:    "rangesCidr",
+		Aliases: []string{"cidrRanges"}, // the TOML key spelling
+		Usage:   "Count the requests inside a CIDR range or single IPv4 address (repeatable), e.g. '10.0.0.0/8'",
 	}
 
 	// Output flags
@@ -65,11 +66,11 @@ var (
 	// Jail and ban management flags
 	jailFileFlag = &cli.StringFlag{
 		Name:  "jailFile",
-		Usage: "Path to jail file for ban persistence (e.g., '/tmp/jail.json')",
+		Usage: "Path to jail file for ban persistence (e.g., '/var/lib/flokbn/jail.json')",
 	}
 	banFileFlag = &cli.StringFlag{
 		Name:  "banFile",
-		Usage: "Path to ban file output (e.g., '/tmp/ban.txt')",
+		Usage: "Path to ban file output (e.g., '/var/lib/flokbn/ban.txt')",
 	}
 
 	// Whitelist and blacklist flags
@@ -112,17 +113,19 @@ var (
 	sleepBetweenIterationsFlag = &cli.IntFlag{
 		Name:  "sleepBetweenIterations",
 		Usage: "Sleep duration between iterations in seconds",
-		Value: 10,
+		Value: config.DefaultSleepBetweenIterations,
 	}
 	clusterArgSetFlag = &cli.StringSliceFlag{
-		Name:  "clusterArgSet",
-		Usage: "Cluster argument sets (multiple can be passed): minClusterSize,minDepth,maxDepth,meanSubnetDifference",
+		Name:    "clusterArgSet",
+		Aliases: []string{"clusterArgSets"}, // the static flag / TOML key spelling
+		Usage:   "Cluster argument set minClusterSize,minDepth,maxDepth,meanSubnetDifference (e.g. '1000,24,32,0.1'); repeat the flag for several sets",
 	}
 
 	// Static-specific flags
 	logfileFlag = &cli.StringFlag{
-		Name:  "logfile",
-		Usage: "Path to the log file",
+		Name:    "logfile",
+		Aliases: []string{"logFile"}, // the TOML key spelling
+		Usage:   "Path to the log file",
 	}
 	logFormatFlag = &cli.StringFlag{
 		Name:  "logFormat",
@@ -131,15 +134,16 @@ var (
 	}
 	startTimeFlag = &cli.StringFlag{
 		Name:  "startTime",
-		Usage: "Start time. Zone-less (e.g. '2025-07-06 06:00') matches a log line's local clock regardless of its offset; add an offset (e.g. '2025-07-06 06:00 +0100') to compare as a true instant. Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM, optionally + ' ±HHMM'",
+		Usage: "Start time. Zone-less (e.g. '2025-07-06 06:00') matches a log line's local clock regardless of its offset; add an offset (e.g. '2025-07-06 06:00 +0100') to compare as a true instant. Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM, optionally + ' ±HHMM', or RFC3339 (e.g. '2025-07-06T06:00:00+01:00')",
 	}
 	endTimeFlag = &cli.StringFlag{
 		Name:  "endTime",
-		Usage: "End time. Zone-less (e.g. '2025-07-06 06:00') matches a log line's local clock regardless of its offset; add an offset (e.g. '2025-07-06 06:00 +0100') to compare as a true instant. Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM, optionally + ' ±HHMM'",
+		Usage: "End time. Zone-less (e.g. '2025-07-06 06:00') matches a log line's local clock regardless of its offset; add an offset (e.g. '2025-07-06 06:00 +0100') to compare as a true instant. Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM, optionally + ' ±HHMM', or RFC3339 (e.g. '2025-07-06T06:00:00+01:00')",
 	}
 	clusterArgSetsFlag = &cli.StringSliceFlag{
-		Name:  "clusterArgSets",
-		Usage: "Cluster argument sets: minClusterSize,minDepth,maxDepth,meanSubnetDifference;...",
+		Name:    "clusterArgSets",
+		Aliases: []string{"clusterArgSet"}, // the live flag spelling
+		Usage:   "Cluster argument set minClusterSize,minDepth,maxDepth,meanSubnetDifference (e.g. '1000,24,32,0.1'); repeat the flag for several sets",
 	}
 	tuiFlag = &cli.BoolFlag{
 		Name:  "tui",
@@ -170,7 +174,10 @@ func validateConfigModeFlags(c *cli.Context, allowedFlags []string) error {
 	// AND lists the allowed set, instead of leaking a raw Go slice.
 	var offenders []string
 	for _, flag := range flagsToCheck {
-		if c.IsSet(flag) && !allowed[flag] {
+		// An alias (--clusterArgSets on live, --clusterArgSet on static) reports
+		// as set together with its primary name; name the flag once, by its
+		// primary spelling.
+		if c.IsSet(flag) && !allowed[flag] && !isAliasName(c, flag) {
 			offenders = append(offenders, flag)
 		}
 	}
@@ -179,6 +186,23 @@ func validateConfigModeFlags(c *cli.Context, allowedFlags []string) error {
 			joinFlags(offenders), joinFlags(allowedFlags))
 	}
 	return nil
+}
+
+// isAliasName reports whether name is a secondary spelling (alias) of a flag of
+// the running command rather than its primary name.
+func isAliasName(c *cli.Context, name string) bool {
+	if c.Command == nil {
+		return false
+	}
+	for _, f := range c.Command.Flags {
+		names := f.Names()
+		for _, alias := range names[1:] {
+			if alias == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // joinFlags renders flag names as a comma-separated list of quoted --flag
@@ -202,34 +226,12 @@ func joinFlags(names []string) string {
 
 // parseFlexibleTime parses a CLI --startTime/--endTime bound. It returns the
 // parsed time and whether the bound carried an EXPLICIT timezone offset
-// (URGENT-09). Zone-less bounds (no offset layout matched) are compared
-// wall-clock / zone-agnostically against log lines; offset-bearing bounds are
-// compared as a true instant. Offset layouts are tried first so a trailing
-// "-0700" is not mis-parsed by a zone-less layout.
+// (URGENT-09). Zone-less bounds are compared wall-clock / zone-agnostically
+// against log lines; offset-bearing bounds are compared as a true instant. The
+// accepted layouts live in config.ParseTimeBound, which the TOML
+// startTime/endTime keys use too, so both surfaces accept the same syntaxes.
 func parseFlexibleTime(input string) (t time.Time, hasOffset bool, err error) {
-	offsetFormats := []string{
-		"2006-01-02 15:04 -0700", // full datetime + offset
-		"2006-01-02 15 -0700",    // date + hour + offset
-		"2006-01-02 -0700",       // date + offset
-	}
-	for _, layout := range offsetFormats {
-		if parsed, perr := time.Parse(layout, input); perr == nil {
-			return parsed, true, nil
-		}
-	}
-
-	zonelessFormats := []string{
-		"2006-01-02 15:04", // full datetime
-		"2006-01-02 15",    // date + hour
-		"2006-01-02",       // just date
-	}
-	for _, layout := range zonelessFormats {
-		if parsed, perr := time.Parse(layout, input); perr == nil {
-			return parsed, false, nil
-		}
-	}
-
-	return time.Time{}, false, fmt.Errorf("invalid time format %q (want YYYY-MM-DD, \"YYYY-MM-DD HH\", or \"YYYY-MM-DD HH:MM\", each optionally with \" ±HHMM\")", input)
+	return config.ParseTimeBound(input)
 }
 
 // Command handler functions to reduce deep nesting
@@ -286,6 +288,13 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 	}
 	setupLoggerTolerant(level, cfg.Log.Format)
 
+	// Keys that are accepted in a [live.<name>] table but do nothing in live
+	// mode (startTime, endTime, cidrRanges): say so instead of letting the
+	// operator assume a time filter or range report is active.
+	for _, warning := range cfg.LiveWarnings() {
+		slog.Warn(warning)
+	}
+
 	slog.Info("starting live mode", "config", configPath)
 	return LiveFromConfig(cfg)
 }
@@ -331,7 +340,7 @@ func handleLiveFlagsMode(c *cli.Context) error {
 	// (not a throwaway, or a dropped regex error becomes a fail-open no-op filter
 	// that admits all traffic), so it enumerates with static flags at the barrier
 	// in executeLiveAnalysis before any port/stats bind.
-	slidingConfig.CompileRegexInto(cfg.Diagnostics())
+	slidingConfig.CompileRegexInto("live.cli_default", cfg.Diagnostics())
 
 	// clusterArgSets arity stays a hard return (parity with static flags mode).
 	clusterArgs, err := config.ParseClusterArgSetsFromStrings(c.StringSlice("clusterArgSet"))
@@ -339,15 +348,12 @@ func handleLiveFlagsMode(c *cli.Context) error {
 		return err
 	}
 	if len(clusterArgs) == 0 {
-		// Default cluster config when none provided
-		clusterArgs = []config.ClusterArgSet{{
-			MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2,
-		}}
-		slidingConfig.UseForJail = []bool{true}
-	} else {
-		for range clusterArgs {
-			slidingConfig.UseForJail = append(slidingConfig.UseForJail, true)
-		}
+		// Default cluster config when none provided (shared with static flags mode).
+		clusterArgs = config.DefaultClusterArgSets()
+	}
+	// CLI cluster sets (given or default) always jail.
+	for range clusterArgs {
+		slidingConfig.UseForJail = append(slidingConfig.UseForJail, true)
 	}
 	slidingConfig.ClusterArgSets = clusterArgs
 
@@ -436,17 +442,19 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	// A bad --useragentRegex/--endpointRegex routes into cfg.diags; the barrier
 	// (in executeStaticAnalysis) enumerates and aborts before analysis. On failure
 	// both compiled+prefilter stay nil; analysis never runs.
-	trieConfig.CompileRegexInto(diags)
+	trieConfig.CompileRegexInto("static.cli_trie", diags)
 
 	// Validate --rangesCidr into cfg.diags, storing ONLY valid IPv4 entries on the
 	// trie (drop IPv6/malformed before append - never store a bad entry, parity
-	// with the TOML cidrRanges path).
+	// with the TOML cidrRanges path). A bare IPv4 address is stored as /32: the
+	// trie counts ranges via net.ParseCIDR, which rejects a bare address.
 	for i, cidrStr := range c.StringSlice("rangesCidr") {
-		if !iputils.IsValidCidrOrIP(cidrStr) {
+		normalized, ok := iputils.NormalizeIPv4CIDR(cidrStr)
+		if !ok {
 			diags.AddRaw(fmt.Sprintf("[static.cli_trie] invalid rangesCidr[%d] %s", i, strconv.Quote(cidrStr)))
 			continue
 		}
-		trieConfig.CIDRRanges = append(trieConfig.CIDRRanges, cidrStr)
+		trieConfig.CIDRRanges = append(trieConfig.CIDRRanges, normalized)
 	}
 
 	// A malformed --startTime/--endTime hard-errors here (parseFlexibleTime); the
@@ -476,17 +484,13 @@ func handleStaticFlagsMode(c *cli.Context) error {
 		return err
 	}
 	if len(clusterArgs) == 0 {
-		// Default cluster config when none provided (parity with live flags mode).
-		clusterArgs = []config.ClusterArgSet{{
-			MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2,
-		}}
-		trieConfig.UseForJail = []bool{true}
-	} else {
-		// CLI-provided cluster sets default to jailing (parity with live flags
-		// mode); TOML configs keep explicit per-set control via useForJail.
-		for range clusterArgs {
-			trieConfig.UseForJail = append(trieConfig.UseForJail, true)
-		}
+		// Default cluster config when none provided (shared with live flags mode).
+		clusterArgs = config.DefaultClusterArgSets()
+	}
+	// CLI cluster sets (given or default) always jail (parity with live flags
+	// mode); TOML configs keep explicit per-set control via useForJail.
+	for range clusterArgs {
+		trieConfig.UseForJail = append(trieConfig.UseForJail, true)
 	}
 	trieConfig.ClusterArgSets = clusterArgs
 
