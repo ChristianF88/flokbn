@@ -12,68 +12,33 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
-type HTTPMethod uint8
+// The request record and its helpers live in the leaf package accesslog. The
+// names below are aliases kept so that existing users of ingestor.Request and
+// friends compile unchanged.
+type (
+	HTTPMethod = accesslog.HTTPMethod
+	Request    = accesslog.Request
+)
 
 const (
-	GET HTTPMethod = iota
-	POST
-	PUT
-	DELETE
-	HEAD
-	OPTIONS
-	PATCH
-	UNKNOWN
+	GET     = accesslog.GET
+	POST    = accesslog.POST
+	PUT     = accesslog.PUT
+	DELETE  = accesslog.DELETE
+	HEAD    = accesslog.HEAD
+	OPTIONS = accesslog.OPTIONS
+	PATCH   = accesslog.PATCH
+	UNKNOWN = accesslog.UNKNOWN
 )
 
-func ParseMethod(m string) HTTPMethod {
-	switch m {
-	case "GET":
-		return GET
-	case "POST":
-		return POST
-	case "PUT":
-		return PUT
-	case "DELETE":
-		return DELETE
-	case "HEAD":
-		return HEAD
-	case "OPTIONS":
-		return OPTIONS
-	case "PATCH":
-		return PATCH
-	default:
-		return UNKNOWN
-	}
-}
+func ParseMethod(m string) HTTPMethod { return accesslog.ParseMethod(m) }
 
-type Request struct {
-	// Hot fields - first cache line (accessed by trie insertion, filtering, clustering)
-	IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation in parser
-	Status    uint16     // Smaller type for status code
-	Method    HTTPMethod // 1 byte
-	_         byte       // explicit padding for alignment
-	Bytes     uint32
-	Timestamp time.Time // 24 bytes - needed for time-range filtering
-
-	// Cold fields - second cache line (only accessed during output or string filtering)
-	URI       string
-	UserAgent string
-	IP        net.IP // Legacy (TCP ingestor path only, nil from log parser)
-}
-
-// GetIPNet returns the IP as net.IP, deriving from IPUint32 if IP is nil.
-// Use this for non-hot-path code that needs net.IP.
-func (r *Request) GetIPNet() net.IP {
-	if r.IP != nil {
-		return r.IP
-	}
-	if r.IPUint32 == 0 {
-		return nil
-	}
-	return net.IPv4(byte(r.IPUint32>>24), byte(r.IPUint32>>16), byte(r.IPUint32>>8), byte(r.IPUint32))
-}
+// Uint32ToIPString converts uint32 back to IP string for output
+func Uint32ToIPString(ip uint32) string { return accesslog.Uint32ToIPString(ip) }
 
 // --- TCP Ingestor (Lumberjack v2, see lumberjack.go) ---
 
