@@ -1,0 +1,849 @@
+{
+  "output": {
+    "errors": [],
+    "general": {
+      "log_file": "\u003cLOGDIR\u003e/access.log",
+      "parsing": {
+        "format": "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
+      },
+      "total_requests": 60000,
+      "unique_ips": 30270
+    },
+    "global_filters": {
+      "ip_whitelist_cidrs": 0,
+      "ua_whitelist_patterns": 0
+    },
+    "metadata": {
+      "analysis_type": "static"
+    },
+    "tries": [
+      {
+        "data": [
+          {
+            "detected_ranges": [
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.00116795141322,
+                "requests": 3425
+              },
+              {
+                "cidr": "10.20.0.0/19",
+                "percentage": 39.99649614576033,
+                "requests": 6849
+              }
+            ],
+            "merged_ranges": [
+              {
+                "cidr": "10.20.0.0/19",
+                "percentage": 39.99649614576033,
+                "requests": 6849
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.00116795141322,
+                "requests": 3425
+              }
+            ],
+            "parameters": {
+              "max_depth": 24,
+              "mean_subnet_difference": 0.2,
+              "min_cluster_size": 2000,
+              "min_depth": 16
+            }
+          },
+          {
+            "detected_ranges": [
+              {
+                "cidr": "203.0.113.8/29",
+                "percentage": 9.997664097173557,
+                "requests": 1712
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.00116795141322,
+                "requests": 3425
+              },
+              {
+                "cidr": "10.20.26.0/23",
+                "percentage": 1.7694463910301332,
+                "requests": 303
+              },
+              {
+                "cidr": "10.20.20.0/22",
+                "percentage": 6.2894183601962155,
+                "requests": 1077
+              },
+              {
+                "cidr": "10.20.4.0/22",
+                "percentage": 3.737444522307872,
+                "requests": 640
+              },
+              {
+                "cidr": "10.20.0.0/23",
+                "percentage": 3.381219341275403,
+                "requests": 579
+              },
+              {
+                "cidr": "10.20.10.0/23",
+                "percentage": 3.2702639570193877,
+                "requests": 560
+              }
+            ],
+            "merged_ranges": [
+              {
+                "cidr": "10.20.0.0/23",
+                "percentage": 3.381219341275403,
+                "requests": 579
+              },
+              {
+                "cidr": "10.20.4.0/22",
+                "percentage": 3.737444522307872,
+                "requests": 640
+              },
+              {
+                "cidr": "10.20.10.0/23",
+                "percentage": 3.2702639570193877,
+                "requests": 560
+              },
+              {
+                "cidr": "10.20.20.0/22",
+                "percentage": 6.2894183601962155,
+                "requests": 1077
+              },
+              {
+                "cidr": "10.20.26.0/23",
+                "percentage": 1.7694463910301332,
+                "requests": 303
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.00116795141322,
+                "requests": 3425
+              },
+              {
+                "cidr": "203.0.113.8/29",
+                "percentage": 9.997664097173557,
+                "requests": 1712
+              }
+            ],
+            "parameters": {
+              "max_depth": 32,
+              "mean_subnet_difference": 0.1,
+              "min_cluster_size": 300,
+              "min_depth": 20
+            }
+          }
+        ],
+        "name": "api",
+        "parameters": {
+          "cidr_ranges": [
+            "192.168.0.0/20"
+          ],
+          "endpoint_regex": "^/api/"
+        },
+        "stats": {
+          "cidr_analysis": [
+            {
+              "cidr": "192.168.0.0/20",
+              "percentage": 20.00116795141322,
+              "requests": 3425
+            }
+          ],
+          "skipped_invalid_ips": 16,
+          "total_requests_after_filtering": 17124,
+          "unique_ips": 13784
+        }
+      },
+      {
+        "data": [
+          {
+            "detected_ranges": [
+              {
+                "cidr": "203.0.113.0/24",
+                "percentage": 10.000500609074374,
+                "requests": 5993
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.001001218148748,
+                "requests": 11986
+              },
+              {
+                "cidr": "10.20.0.0/19",
+                "percentage": 39.99866504246833,
+                "requests": 23970
+              }
+            ],
+            "merged_ranges": [
+              {
+                "cidr": "10.20.0.0/19",
+                "percentage": 39.99866504246833,
+                "requests": 23970
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.001001218148748,
+                "requests": 11986
+              },
+              {
+                "cidr": "203.0.113.0/24",
+                "percentage": 10.000500609074374,
+                "requests": 5993
+              }
+            ],
+            "parameters": {
+              "max_depth": 24,
+              "mean_subnet_difference": 0.2,
+              "min_cluster_size": 2000,
+              "min_depth": 16
+            }
+          },
+          {
+            "detected_ranges": [
+              {
+                "cidr": "203.0.113.8/29",
+                "percentage": 10.000500609074374,
+                "requests": 5993
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.001001218148748,
+                "requests": 11986
+              },
+              {
+                "cidr": "10.20.26.0/23",
+                "percentage": 1.7704874263687487,
+                "requests": 1061
+              },
+              {
+                "cidr": "10.20.25.0/24",
+                "percentage": 1.1146895389390425,
+                "requests": 668
+              },
+              {
+                "cidr": "10.20.24.0/24",
+                "percentage": 1.3166018656031504,
+                "requests": 789
+              },
+              {
+                "cidr": "10.20.28.0/24",
+                "percentage": 0.894421546214561,
+                "requests": 536
+              },
+              {
+                "cidr": "10.20.29.0/24",
+                "percentage": 1.0946651759640897,
+                "requests": 656
+              },
+              {
+                "cidr": "10.20.30.0/24",
+                "percentage": 1.2965775026281978,
+                "requests": 777
+              },
+              {
+                "cidr": "10.20.31.0/24",
+                "percentage": 1.4901463447194085,
+                "requests": 893
+              },
+              {
+                "cidr": "10.20.16.0/23",
+                "percentage": 1.7087456405293104,
+                "requests": 1024
+              },
+              {
+                "cidr": "10.20.18.0/24",
+                "percentage": 1.0379294808683899,
+                "requests": 622
+              },
+              {
+                "cidr": "10.20.19.0/24",
+                "percentage": 1.2381731106179186,
+                "requests": 742
+              },
+              {
+                "cidr": "10.20.20.0/22",
+                "percentage": 6.2859812772206185,
+                "requests": 3767
+              },
+              {
+                "cidr": "10.20.4.0/22",
+                "percentage": 3.7312063009995495,
+                "requests": 2236
+              },
+              {
+                "cidr": "10.20.3.0/24",
+                "percentage": 1.2581974735928714,
+                "requests": 754
+              },
+              {
+                "cidr": "10.20.2.0/24",
+                "percentage": 1.455103709513241,
+                "requests": 872
+              },
+              {
+                "cidr": "10.20.0.0/23",
+                "percentage": 3.36576167670666,
+                "requests": 2017
+              },
+              {
+                "cidr": "10.20.15.0/25",
+                "percentage": 0.5339830126654096,
+                "requests": 320
+              },
+              {
+                "cidr": "10.20.14.128/25",
+                "percentage": 0.5456638910674655,
+                "requests": 327
+              },
+              {
+                "cidr": "10.20.14.0/25",
+                "percentage": 0.6391109182839121,
+                "requests": 383
+              },
+              {
+                "cidr": "10.20.13.128/25",
+                "percentage": 0.6391109182839121,
+                "requests": 383
+              },
+              {
+                "cidr": "10.20.13.0/25",
+                "percentage": 0.7442388239024146,
+                "requests": 446
+              },
+              {
+                "cidr": "10.20.12.128/25",
+                "percentage": 0.7459075208169941,
+                "requests": 447
+              },
+              {
+                "cidr": "10.20.12.0/25",
+                "percentage": 0.8360171542042818,
+                "requests": 501
+              },
+              {
+                "cidr": "10.20.8.0/25",
+                "percentage": 0.5339830126654096,
+                "requests": 320
+              },
+              {
+                "cidr": "10.20.8.128/25",
+                "percentage": 0.6324361306255945,
+                "requests": 379
+              },
+              {
+                "cidr": "10.20.9.0/25",
+                "percentage": 0.6407796151984915,
+                "requests": 384
+              },
+              {
+                "cidr": "10.20.9.128/25",
+                "percentage": 0.7258831578420412,
+                "requests": 435
+              },
+              {
+                "cidr": "10.20.10.0/23",
+                "percentage": 3.2706459525756335,
+                "requests": 1960
+              }
+            ],
+            "merged_ranges": [
+              {
+                "cidr": "10.20.0.0/21",
+                "percentage": 9.810269160812322,
+                "requests": 5879
+              },
+              {
+                "cidr": "10.20.8.0/22",
+                "percentage": 5.8037278689071705,
+                "requests": 3478
+              },
+              {
+                "cidr": "10.20.12.0/23",
+                "percentage": 2.9652744172076027,
+                "requests": 1777
+              },
+              {
+                "cidr": "10.20.14.0/24",
+                "percentage": 1.1847748093513775,
+                "requests": 710
+              },
+              {
+                "cidr": "10.20.15.0/25",
+                "percentage": 0.5339830126654096,
+                "requests": 320
+              },
+              {
+                "cidr": "10.20.16.0/20",
+                "percentage": 19.248418909673436,
+                "requests": 11535
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.001001218148748,
+                "requests": 11986
+              },
+              {
+                "cidr": "203.0.113.8/29",
+                "percentage": 10.000500609074374,
+                "requests": 5993
+              }
+            ],
+            "parameters": {
+              "max_depth": 32,
+              "mean_subnet_difference": 0.1,
+              "min_cluster_size": 300,
+              "min_depth": 20
+            }
+          }
+        ],
+        "name": "baseline",
+        "parameters": {
+          "cidr_ranges": [
+            "203.0.113.0/24"
+          ]
+        },
+        "stats": {
+          "cidr_analysis": [
+            {
+              "cidr": "203.0.113.0/24",
+              "percentage": 10.000500609074374,
+              "requests": 5993
+            }
+          ],
+          "skipped_invalid_ips": 73,
+          "total_requests_after_filtering": 59927,
+          "unique_ips": 30270
+        }
+      },
+      {
+        "data": [
+          {
+            "detected_ranges": [
+              {
+                "cidr": "203.0.113.0/24",
+                "percentage": 11.131234327110615,
+                "requests": 3995
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 16.698244636388967,
+                "requests": 5993
+              },
+              {
+                "cidr": "10.20.8.0/21",
+                "percentage": 7.787684591808302,
+                "requests": 2795
+              },
+              {
+                "cidr": "10.20.16.0/20",
+                "percentage": 26.193925884647534,
+                "requests": 9401
+              }
+            ],
+            "merged_ranges": [
+              {
+                "cidr": "10.20.8.0/21",
+                "percentage": 7.787684591808302,
+                "requests": 2795
+              },
+              {
+                "cidr": "10.20.16.0/20",
+                "percentage": 26.193925884647534,
+                "requests": 9401
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 16.698244636388967,
+                "requests": 5993
+              },
+              {
+                "cidr": "203.0.113.0/24",
+                "percentage": 11.131234327110615,
+                "requests": 3995
+              }
+            ],
+            "parameters": {
+              "max_depth": 24,
+              "mean_subnet_difference": 0.2,
+              "min_cluster_size": 2000,
+              "min_depth": 16
+            }
+          },
+          {
+            "detected_ranges": [
+              {
+                "cidr": "203.0.113.8/29",
+                "percentage": 11.131234327110615,
+                "requests": 3995
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 16.698244636388967,
+                "requests": 5993
+              },
+              {
+                "cidr": "10.20.0.0/23",
+                "percentage": 2.7667874059626634,
+                "requests": 993
+              },
+              {
+                "cidr": "10.20.10.0/23",
+                "percentage": 2.1370855391473946,
+                "requests": 767
+              },
+              {
+                "cidr": "10.20.12.0/22",
+                "percentage": 4.274171078294789,
+                "requests": 1534
+              },
+              {
+                "cidr": "10.20.24.0/21",
+                "percentage": 11.894678183337977,
+                "requests": 4269
+              },
+              {
+                "cidr": "10.20.16.0/23",
+                "percentage": 2.13987183059348,
+                "requests": 768
+              },
+              {
+                "cidr": "10.20.18.0/24",
+                "percentage": 1.3764279743661187,
+                "requests": 494
+              },
+              {
+                "cidr": "10.20.19.0/24",
+                "percentage": 1.7107829478963499,
+                "requests": 614
+              },
+              {
+                "cidr": "10.20.20.0/22",
+                "percentage": 9.072164948453608,
+                "requests": 3256
+              }
+            ],
+            "merged_ranges": [
+              {
+                "cidr": "10.20.0.0/23",
+                "percentage": 2.7667874059626634,
+                "requests": 993
+              },
+              {
+                "cidr": "10.20.10.0/23",
+                "percentage": 2.1370855391473946,
+                "requests": 767
+              },
+              {
+                "cidr": "10.20.12.0/22",
+                "percentage": 4.274171078294789,
+                "requests": 1534
+              },
+              {
+                "cidr": "10.20.16.0/20",
+                "percentage": 26.193925884647534,
+                "requests": 9401
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 16.698244636388967,
+                "requests": 5993
+              },
+              {
+                "cidr": "203.0.113.8/29",
+                "percentage": 11.131234327110615,
+                "requests": 3995
+              }
+            ],
+            "parameters": {
+              "max_depth": 32,
+              "mean_subnet_difference": 0.1,
+              "min_cluster_size": 300,
+              "min_depth": 20
+            }
+          }
+        ],
+        "name": "bots",
+        "parameters": {
+          "useragent_regex": "(?i)curl|python-requests|googlebot"
+        },
+        "stats": {
+          "skipped_invalid_ips": 36,
+          "total_requests_after_filtering": 35890,
+          "unique_ips": 23243
+        }
+      },
+      {
+        "data": [
+          {
+            "detected_ranges": [
+              {
+                "cidr": "203.0.113.10/31",
+                "percentage": 6.601919297028558,
+                "requests": 571
+              },
+              {
+                "cidr": "203.0.113.12/31",
+                "percentage": 8.151231356226154,
+                "requests": 705
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 14.822522835009828,
+                "requests": 1282
+              },
+              {
+                "cidr": "10.20.0.0/22",
+                "percentage": 5.006359116660885,
+                "requests": 433
+              },
+              {
+                "cidr": "10.20.12.0/22",
+                "percentage": 6.544109145565962,
+                "requests": 566
+              },
+              {
+                "cidr": "10.20.28.0/22",
+                "percentage": 5.0757312984160015,
+                "requests": 439
+              },
+              {
+                "cidr": "10.20.16.0/22",
+                "percentage": 6.544109145565962,
+                "requests": 566
+              },
+              {
+                "cidr": "10.20.20.0/22",
+                "percentage": 9.989594172736732,
+                "requests": 864
+              }
+            ],
+            "merged_ranges": [
+              {
+                "cidr": "10.20.0.0/22",
+                "percentage": 5.006359116660885,
+                "requests": 433
+              },
+              {
+                "cidr": "10.20.12.0/22",
+                "percentage": 6.544109145565962,
+                "requests": 566
+              },
+              {
+                "cidr": "10.20.16.0/21",
+                "percentage": 16.533703318302695,
+                "requests": 1430
+              },
+              {
+                "cidr": "10.20.28.0/22",
+                "percentage": 5.0757312984160015,
+                "requests": 439
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 14.822522835009828,
+                "requests": 1282
+              },
+              {
+                "cidr": "203.0.113.10/31",
+                "percentage": 6.601919297028558,
+                "requests": 571
+              },
+              {
+                "cidr": "203.0.113.12/31",
+                "percentage": 8.151231356226154,
+                "requests": 705
+              }
+            ],
+            "parameters": {
+              "max_depth": 32,
+              "mean_subnet_difference": 0.1,
+              "min_cluster_size": 300,
+              "min_depth": 20
+            }
+          }
+        ],
+        "name": "combined",
+        "parameters": {
+          "endpoint_regex": "^/(api|admin)/",
+          "time_range": {
+            "end": "0001-01-01T00:00:00Z",
+            "start": "2025-02-01T12:00:00+01:00"
+          },
+          "useragent_regex": "curl|python-requests"
+        },
+        "stats": {
+          "skipped_invalid_ips": 7,
+          "total_requests_after_filtering": 8649,
+          "unique_ips": 7270
+        }
+      },
+      {
+        "data": [
+          {
+            "detected_ranges": [],
+            "merged_ranges": [],
+            "parameters": {
+              "max_depth": 24,
+              "mean_subnet_difference": 0.2,
+              "min_cluster_size": 2000,
+              "min_depth": 16
+            }
+          },
+          {
+            "detected_ranges": [],
+            "merged_ranges": [],
+            "parameters": {
+              "max_depth": 32,
+              "mean_subnet_difference": 0.1,
+              "min_cluster_size": 300,
+              "min_depth": 20
+            }
+          }
+        ],
+        "name": "nothing",
+        "parameters": {
+          "time_range": {
+            "end": "0001-01-01T00:00:00Z",
+            "start": "2030-01-01T00:00:00Z"
+          }
+        },
+        "stats": {
+          "total_requests_after_filtering": 0,
+          "unique_ips": 0
+        }
+      },
+      {
+        "data": [
+          {
+            "detected_ranges": [
+              {
+                "cidr": "203.0.113.13/32",
+                "percentage": 1.8603351955307261,
+                "requests": 333
+              },
+              {
+                "cidr": "203.0.113.12/32",
+                "percentage": 2.787709497206704,
+                "requests": 499
+              },
+              {
+                "cidr": "203.0.113.10/31",
+                "percentage": 5.575418994413408,
+                "requests": 998
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.011173184357542,
+                "requests": 3582
+              },
+              {
+                "cidr": "10.20.0.0/20",
+                "percentage": 18.75418994413408,
+                "requests": 3357
+              },
+              {
+                "cidr": "10.20.16.0/20",
+                "percentage": 21.234636871508382,
+                "requests": 3801
+              }
+            ],
+            "merged_ranges": [
+              {
+                "cidr": "10.20.0.0/19",
+                "percentage": 39.98882681564246,
+                "requests": 7158
+              },
+              {
+                "cidr": "192.168.0.0/20",
+                "percentage": 20.011173184357542,
+                "requests": 3582
+              },
+              {
+                "cidr": "203.0.113.10/31",
+                "percentage": 5.575418994413408,
+                "requests": 998
+              },
+              {
+                "cidr": "203.0.113.12/31",
+                "percentage": 4.648044692737431,
+                "requests": 832
+              }
+            ],
+            "parameters": {
+              "max_depth": 32,
+              "mean_subnet_difference": 0.1,
+              "min_cluster_size": 300,
+              "min_depth": 20
+            }
+          }
+        ],
+        "name": "window",
+        "parameters": {
+          "cidr_ranges": [
+            "10.20.0.0/16"
+          ],
+          "time_range": {
+            "end": "2025-02-03T03:30:00Z",
+            "start": "2025-02-02T06:00:00Z"
+          }
+        },
+        "stats": {
+          "cidr_analysis": [
+            {
+              "cidr": "10.20.0.0/16",
+              "percentage": 39.98882681564246,
+              "requests": 7158
+            }
+          ],
+          "skipped_invalid_ips": 17,
+          "total_requests_after_filtering": 17900,
+          "unique_ips": 14728
+        }
+      }
+    ],
+    "warnings": [
+      {
+        "count": 1,
+        "message": "12 requests (0.0%) had a non-numeric bytes field (%b) - bytes recorded as 0, lines kept",
+        "type": "malformed_field"
+      },
+      {
+        "count": 1,
+        "message": "12 requests (0.0%) had a non-numeric status field (%s) - status recorded as 0, lines kept",
+        "type": "malformed_field"
+      },
+      {
+        "count": 1,
+        "message": "Trie \"api\": 16 requests (0.0%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format",
+        "type": "invalid_ips_skipped"
+      },
+      {
+        "count": 1,
+        "message": "Trie \"baseline\": 73 requests (0.1%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format",
+        "type": "invalid_ips_skipped"
+      },
+      {
+        "count": 1,
+        "message": "Trie \"bots\": 36 requests (0.1%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format",
+        "type": "invalid_ips_skipped"
+      },
+      {
+        "count": 1,
+        "message": "Trie \"combined\": 7 requests (0.0%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format",
+        "type": "invalid_ips_skipped"
+      },
+      {
+        "count": 1,
+        "message": "Trie \"nothing\": time filter \"after 2030-01-01T00:00:00Z\" resulted in 0 requests - the time range may not overlap with log data",
+        "type": "time_filter_no_results"
+      },
+      {
+        "count": 1,
+        "message": "Trie \"window\": 17 requests (0.0%) had invalid/missing IPs (nil or 0.0.0.0) and were skipped - check log format",
+        "type": "invalid_ips_skipped"
+      }
+    ]
+  },
+  "ban_file": [],
+  "jail": []
+}
