@@ -156,7 +156,7 @@ func (a *App) ShowError(message string) {
 		// lines (wrapped paths, nested causes), so let them wrap instead of
 		// being clipped at the right border.
 		a.progressView.SetWrap(true).SetWordWrap(true)
-		a.progressView.SetText(fmt.Sprintf("[red]Error:[white] %s\n\n[yellow]Press 'q' to quit[white]", message))
+		a.progressView.SetText(errorText(message))
 
 		// Update status bar
 		a.setStatusBarText(statusAnalysisFailed)
@@ -164,6 +164,13 @@ func (a *App) ShowError(message string) {
 		// Make sure we're on the progress page to show the error
 		a.pages.SwitchToPage("progress")
 	})
+}
+
+// errorText renders the error screen shown by ShowError. The message is
+// escaped: errors quote config sections ("[static] ...") and paths, and tview
+// would otherwise consume anything bracketed as a style tag.
+func errorText(message string) string {
+	return fmt.Sprintf("[red]Error:[white] %s\n\n[yellow]Press 'q' to quit[white]", tview.Escape(message))
 }
 
 // SetRequestData sets the real request data for visualization and pre-caches all
@@ -627,30 +634,7 @@ func (a *App) animateProgress() {
 		stage := stages[stageIndex%len(stages)]
 		dotStr := strings.Repeat(".", dots%4)
 
-		var clusterSets, cidrRanges int
-		if a.cfg != nil {
-			// Count cluster sets and CIDR ranges from config
-			for _, trieConfig := range a.cfg.StaticTries {
-				clusterSets += len(trieConfig.ClusterArgSets)
-				cidrRanges += len(trieConfig.CIDRRanges)
-			}
-		} else {
-			// No-config mode
-			clusterSets = len(a.clusterArgSets) / 4
-			cidrRanges = len(a.rangesCidr)
-		}
-
-		content := fmt.Sprintf(`
-[white::b]flokbn Log Analysis[white::-]
-
-%s%s
-
-[dim]Log file:[white] %s
-[dim]Cluster sets:[white] %d
-[dim]CIDR ranges:[white] %d
-
-[dim]Press 'q' to quit[white]
-`, stage, dotStr, a.logFile, clusterSets, cidrRanges)
+		content := a.progressFrameText(stage, dotStr)
 
 		a.app.QueueUpdateDraw(func() {
 			// Re-check on the UI goroutine: the analysis may have finished
@@ -669,6 +653,35 @@ func (a *App) animateProgress() {
 			stageIndex++
 		}
 	}
+}
+
+// progressFrameText renders one frame of the progress animation: the current
+// stage line (which carries its own style tags) plus the run's static facts.
+func (a *App) progressFrameText(stage, dotStr string) string {
+	var clusterSets, cidrRanges int
+	if a.cfg != nil {
+		// Count cluster sets and CIDR ranges from config
+		for _, trieConfig := range a.cfg.StaticTries {
+			clusterSets += len(trieConfig.ClusterArgSets)
+			cidrRanges += len(trieConfig.CIDRRanges)
+		}
+	} else {
+		// No-config mode
+		clusterSets = len(a.clusterArgSets) / 4
+		cidrRanges = len(a.rangesCidr)
+	}
+
+	return fmt.Sprintf(`
+[white::b]flokbn Log Analysis[white::-]
+
+%s%s
+
+[dim]Log file:[white] %s
+[dim]Cluster sets:[white] %d
+[dim]CIDR ranges:[white] %d
+
+[dim]Press 'q' to quit[white]
+`, stage, dotStr, tview.Escape(a.logFile), clusterSets, cidrRanges)
 }
 
 // nextTrie cycles to the next trie in config mode (async optimized)
@@ -864,7 +877,7 @@ func (a *App) displayResultsUncached() {
 	if len(realWarnings) > 0 {
 		diagText.WriteString("[yellow]Warnings:[white]\n")
 		for _, warning := range realWarnings {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", warning.Message))
+			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(warning.Message)))
 		}
 		diagText.WriteString("\n")
 	}
@@ -872,7 +885,7 @@ func (a *App) displayResultsUncached() {
 	if len(a.jsonResult.Errors) > 0 {
 		diagText.WriteString("[red]Errors:[white]\n")
 		for _, err := range a.jsonResult.Errors {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", err.Message))
+			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(err.Message)))
 		}
 	} else if len(realWarnings) == 0 {
 		diagText.WriteString("[green]✓ No issues detected[white]")
@@ -971,7 +984,7 @@ func (a *App) buildDiagnosticsTextFor(result *output.JSONOutput) string {
 	if len(realWarnings) > 0 {
 		diagText.WriteString("[yellow]Warnings:[white]\n")
 		for _, warning := range realWarnings {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", warning.Message))
+			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(warning.Message)))
 		}
 		diagText.WriteString("\n")
 	}
@@ -979,7 +992,7 @@ func (a *App) buildDiagnosticsTextFor(result *output.JSONOutput) string {
 	if len(result.Errors) > 0 {
 		diagText.WriteString("[red]Errors:[white]\n")
 		for _, err := range result.Errors {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", err.Message))
+			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(err.Message)))
 		}
 	} else if len(realWarnings) == 0 {
 		diagText.WriteString("[green]✓ No issues detected[white]")
@@ -1033,13 +1046,17 @@ func (a *App) buildSummaryTextFor(result *output.JSONOutput, trieIndex int) stri
 		// The single-trie output conversion loses this information, so we bypass it here
 		trieData := a.multiTrieResult.Tries[trieIndex]
 
-		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", trieData.Name))
+		// Trie names, regex filters, paths and messages are user data and are
+		// escaped wherever they are rendered: tview consumes anything that
+		// looks like "[word]" as a style tag (useragentRegex = "[Bb]ot" was
+		// displayed as "ot").
+		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", tview.Escape(trieData.Name)))
 
 		// Active filters
 		summaryText.WriteString("[dim]Active Filters:[white] ")
 		filters := output.ActiveFilters(trieData.Parameters, a.multiTrieResult.GlobalFilters)
 		if len(filters) > 0 {
-			summaryText.WriteString(strings.Join(filters, ", "))
+			summaryText.WriteString(tview.Escape(strings.Join(filters, ", ")))
 		} else {
 			summaryText.WriteString("None")
 		}
@@ -1080,7 +1097,7 @@ func (a *App) buildSummaryTextFor(result *output.JSONOutput, trieIndex int) stri
 	} else {
 		// No-config CLI mode
 		summaryText.WriteString("[white::b]Legacy Analysis[white::-]\n")
-		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", result.General.LogFile))
+		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", tview.Escape(result.General.LogFile)))
 		summaryText.WriteString(fmt.Sprintf("[dim]Unique IPs:[white] %s\n",
 			output.FormatNumber(result.General.UniqueIPs)))
 		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dms", result.Metadata.DurationMS))
@@ -1170,7 +1187,7 @@ func (a *App) updateStatusBar() {
 				}
 				trieName := a.multiTrieResult.Tries[a.currentTrie].Name
 				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | [cyan]%s (%d/%d)[white] | Tab/Shift+Tab: panels, 't': next trie, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit",
-					currentPanel, trieName, a.currentTrie+1, len(a.multiTrieResult.Tries)))
+					currentPanel, tview.Escape(trieName), a.currentTrie+1, len(a.multiTrieResult.Tries)))
 			} else {
 				// Single trie config mode
 				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
