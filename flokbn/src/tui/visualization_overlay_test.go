@@ -7,8 +7,10 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
+	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/output"
@@ -775,8 +777,10 @@ func TestTrafficMatrixIsGroundTruth(t *testing.T) {
 	ftc := NewTrieCache()
 	trieA := output.TrieResult{Name: "a", Data: []output.ClusterResult{*newClusterSet("14.169.0.0/16")}}
 	trieB := output.TrieResult{Name: "b", Data: []output.ClusterResult{*newClusterSet("45.40.0.0/16")}}
-	ftc.cacheTrafficData(0, reqs, trieA)
-	ftc.cacheTrafficData(1, reqs, trieB)
+	multi := output.NewJSONOutput("static", time.Now())
+	multi.Tries = []output.TrieResult{trieA, trieB}
+	app := &App{cfg: &config.Config{}, multiTrieResult: multi, trieCache: ftc}
+	ftc.PreCacheAllTries(app, multi, reqs)
 
 	mA, maxA, okA := ftc.GetTrafficData(0)
 	mB, maxB, okB := ftc.GetTrafficData(1)

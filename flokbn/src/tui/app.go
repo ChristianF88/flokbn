@@ -43,7 +43,6 @@ type App struct {
 	logFile        string
 	clusterArgSets []string
 	rangesCidr     []string
-	plotPath       string
 
 	// jsonResult and currentTrie are owned exclusively by the tview UI goroutine
 	// (read/written only inside QueueUpdateDraw closures). Background precache
@@ -58,7 +57,11 @@ type App struct {
 
 	// Atomic flags for cross-goroutine signaling (no mutex needed)
 	analysisComplete atomic.Bool
-	switchingTrie    atomic.Bool
+	// analysisFailed is set by ShowError. It stops the progress animation, which
+	// would otherwise keep looping (analysisComplete is only set on success) and
+	// overwrite the error text with its next frame.
+	analysisFailed atomic.Bool
+	switchingTrie  atomic.Bool
 	// shuttingDown is set true when Run() returns (the tview application has
 	// stopped). The analysis setters check it first so a late-finishing
 	// background analysis cannot QueueUpdateDraw on a stopped application.
@@ -81,7 +84,6 @@ func NewAppFromConfig(cfg *config.Config, configPath string) *App {
 		cfg:           cfg,
 		configPath:    configPath,
 		logFile:       cfg.Static.LogFile,
-		plotPath:      cfg.Static.PlotPath,
 		currentTrie:   0,
 		requestsReady: make(chan struct{}),
 	}
@@ -135,21 +137,47 @@ func (a *App) SetAnalysisResults(multiResult *output.JSONOutput) {
 	// SetRequestData (which has the request data needed to populate it).
 }
 
+// statusAnalysisFailed is the status-bar text of a failed run.
+const statusAnalysisFailed = "[red]Analysis failed![white] | Press 'q' to quit"
+
 // ShowError displays an error message in the TUI and stops the progress animation
 func (a *App) ShowError(message string) {
 	if a.shuttingDown.Load() {
 		return
 	}
+	// Stop the animation BEFORE queueing the error: the animation loop checks
+	// this flag both before queueing a frame and inside the queued closure, so
+	// no frame can be drawn over the error text once it is on screen.
+	a.analysisFailed.Store(true)
 	a.app.QueueUpdateDraw(func() {
-		// Update progress view to show error
-		a.progressView.SetText(fmt.Sprintf("[red]Error:[white] %s\n\n[yellow]Press 'q' to quit[white]", message))
+		// Update progress view to show error. Error messages are long single
+		// lines (wrapped paths, nested causes), so let them wrap instead of
+		// being clipped at the right border.
+		a.progressView.SetWrap(true).SetWordWrap(true)
+		a.progressView.SetText(errorText(message))
 
 		// Update status bar
-		a.setStatusBarText("[red]Analysis failed![white] | Press 'q' to quit")
+		a.setStatusBarText(statusAnalysisFailed)
 
 		// Make sure we're on the progress page to show the error
 		a.pages.SwitchToPage("progress")
 	})
+}
+
+// requestData returns the parsed requests handed over by SetRequestData (nil
+// until then). a.requests is written by the analysis goroutine and read by the
+// UI goroutine and the precache goroutines, so every read goes through a.mu.
+func (a *App) requestData() []ingestor.Request {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.requests
+}
+
+// errorText renders the error screen shown by ShowError. The message is
+// escaped: errors quote config sections ("[static] ...") and paths, and tview
+// would otherwise consume anything bracketed as a style tag.
+func errorText(message string) string {
+	return fmt.Sprintf("[red]Error:[white] %s\n\n[yellow]Press 'q' to quit[white]", tview.Escape(message))
 }
 
 // SetRequestData sets the real request data for visualization and pre-caches all
@@ -167,14 +195,15 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 	}
 	a.mu.Lock()
 	a.requests = requests
+	multiResult := a.multiTrieResult
 	a.mu.Unlock()
 
 	// Signal that requests are available (kept for any external waiters).
 	close(a.requestsReady)
 
-	if a.trieCache != nil && a.multiTrieResult != nil {
+	if a.trieCache != nil && multiResult != nil {
 		go func() {
-			a.trieCache.PreCacheAllTries(a, a.multiTrieResult, requests)
+			a.trieCache.PreCacheAllTries(a, multiResult, requests)
 		}()
 	}
 
@@ -282,8 +311,7 @@ func (a *App) setupUI() {
 			}
 			return nil
 		case 'p', 'P':
-			a.pages.SwitchToPage("progress")
-			a.setStatusBarText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
+			a.showProgressPage()
 			return nil
 		case 'v', 'V':
 			if a.analysisComplete.Load() {
@@ -573,6 +601,27 @@ func (a *App) Run() error {
 	return err
 }
 
+// progressTick is the frame interval of the progress animation.
+const progressTick = 200 * time.Millisecond
+
+// showProgressPage switches to the progress page ('p' key). Must run on the UI
+// goroutine. A failed run keeps its failure status: the page then shows the
+// error text, not a running analysis.
+func (a *App) showProgressPage() {
+	a.pages.SwitchToPage("progress")
+	if a.analysisFailed.Load() {
+		a.setStatusBarText(statusAnalysisFailed)
+		return
+	}
+	a.setStatusBarText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
+}
+
+// progressAnimationDone reports whether the progress animation must stop: the
+// analysis finished (results or error), or the application is shutting down.
+func (a *App) progressAnimationDone() bool {
+	return a.analysisComplete.Load() || a.analysisFailed.Load() || a.shuttingDown.Load()
+}
+
 // animateProgress shows a fake progress animation
 func (a *App) animateProgress() {
 	stages := []string{
@@ -589,24 +638,48 @@ func (a *App) animateProgress() {
 	stageIndex := 0
 	dots := 0
 
-	for !a.analysisComplete.Load() {
+	for !a.progressAnimationDone() {
 		stage := stages[stageIndex%len(stages)]
 		dotStr := strings.Repeat(".", dots%4)
 
-		var clusterSets, cidrRanges int
-		if a.cfg != nil {
-			// Count cluster sets and CIDR ranges from config
-			for _, trieConfig := range a.cfg.StaticTries {
-				clusterSets += len(trieConfig.ClusterArgSets)
-				cidrRanges += len(trieConfig.CIDRRanges)
-			}
-		} else {
-			// No-config mode
-			clusterSets = len(a.clusterArgSets) / 4
-			cidrRanges = len(a.rangesCidr)
-		}
+		content := a.progressFrameText(stage, dotStr)
 
-		content := fmt.Sprintf(`
+		a.app.QueueUpdateDraw(func() {
+			// Re-check on the UI goroutine: the analysis may have finished
+			// between the loop condition and this frame being drawn, and a
+			// frame queued behind ShowError must not replace the error text.
+			if a.progressAnimationDone() {
+				return
+			}
+			a.progressView.SetText(content)
+		})
+
+		time.Sleep(progressTick)
+		dots++
+
+		if dots%20 == 0 {
+			stageIndex++
+		}
+	}
+}
+
+// progressFrameText renders one frame of the progress animation: the current
+// stage line (which carries its own style tags) plus the run's static facts.
+func (a *App) progressFrameText(stage, dotStr string) string {
+	var clusterSets, cidrRanges int
+	if a.cfg != nil {
+		// Count cluster sets and CIDR ranges from config
+		for _, trieConfig := range a.cfg.StaticTries {
+			clusterSets += len(trieConfig.ClusterArgSets)
+			cidrRanges += len(trieConfig.CIDRRanges)
+		}
+	} else {
+		// No-config mode
+		clusterSets = len(a.clusterArgSets) / 4
+		cidrRanges = len(a.rangesCidr)
+	}
+
+	return fmt.Sprintf(`
 [white::b]flokbn Log Analysis[white::-]
 
 %s%s
@@ -616,19 +689,7 @@ func (a *App) animateProgress() {
 [dim]CIDR ranges:[white] %d
 
 [dim]Press 'q' to quit[white]
-`, stage, dotStr, a.logFile, clusterSets, cidrRanges)
-
-		a.app.QueueUpdateDraw(func() {
-			a.progressView.SetText(content)
-		})
-
-		time.Sleep(200 * time.Millisecond)
-		dots++
-
-		if dots%20 == 0 {
-			stageIndex++
-		}
-	}
+`, stage, dotStr, tview.Escape(a.logFile), clusterSets, cidrRanges)
 }
 
 // nextTrie cycles to the next trie in config mode (async optimized)
@@ -680,7 +741,7 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 			// tview UI goroutine remains their sole owner.
 			if a.multiTrieResult != nil && newTrieIndex < len(a.multiTrieResult.Tries) {
 				go func() {
-					if a.trieCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requests) {
+					if a.trieCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requestData()) {
 						a.app.QueueUpdateDraw(func() {
 							// Re-render only if the user is still on this trie.
 							if a.currentTrie != newTrieIndex {
@@ -763,8 +824,8 @@ func (a *App) displayResultsUncached() {
 	clusteringText.WriteString("[white::b]Detected Threats[white::-]\n\n")
 
 	for i, cluster := range a.jsonResult.Clustering.Data {
-		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (min_size=%d, depth=%d-%d)\n",
-			i+1, cluster.Parameters.MinClusterSize, cluster.Parameters.MinDepth, cluster.Parameters.MaxDepth))
+		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (%s)\n",
+			i+1, output.FormatClusterParameters(cluster.Parameters)))
 
 		if len(cluster.MergedRanges) > 0 {
 			clusteringText.WriteString("[red]Merged Ranges:[white]\n")
@@ -824,7 +885,7 @@ func (a *App) displayResultsUncached() {
 	if len(realWarnings) > 0 {
 		diagText.WriteString("[yellow]Warnings:[white]\n")
 		for _, warning := range realWarnings {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", warning.Message))
+			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(warning.Message)))
 		}
 		diagText.WriteString("\n")
 	}
@@ -832,7 +893,7 @@ func (a *App) displayResultsUncached() {
 	if len(a.jsonResult.Errors) > 0 {
 		diagText.WriteString("[red]Errors:[white]\n")
 		for _, err := range a.jsonResult.Errors {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", err.Message))
+			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(err.Message)))
 		}
 	} else if len(realWarnings) == 0 {
 		diagText.WriteString("[green]✓ No issues detected[white]")
@@ -854,8 +915,8 @@ func (a *App) buildClusteringTextFor(result *output.JSONOutput) string {
 	clusteringText.WriteString("[white::b]Detected Threats[white::-]\n\n")
 
 	for i, cluster := range result.Clustering.Data {
-		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (min_size=%d, depth=%d-%d)\n",
-			i+1, cluster.Parameters.MinClusterSize, cluster.Parameters.MinDepth, cluster.Parameters.MaxDepth))
+		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (%s)\n",
+			i+1, output.FormatClusterParameters(cluster.Parameters)))
 
 		if len(cluster.MergedRanges) > 0 {
 			clusteringText.WriteString("[red]Merged Ranges:[white]\n")
@@ -931,7 +992,7 @@ func (a *App) buildDiagnosticsTextFor(result *output.JSONOutput) string {
 	if len(realWarnings) > 0 {
 		diagText.WriteString("[yellow]Warnings:[white]\n")
 		for _, warning := range realWarnings {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", warning.Message))
+			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(warning.Message)))
 		}
 		diagText.WriteString("\n")
 	}
@@ -939,7 +1000,7 @@ func (a *App) buildDiagnosticsTextFor(result *output.JSONOutput) string {
 	if len(result.Errors) > 0 {
 		diagText.WriteString("[red]Errors:[white]\n")
 		for _, err := range result.Errors {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", err.Message))
+			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(err.Message)))
 		}
 	} else if len(realWarnings) == 0 {
 		diagText.WriteString("[green]✓ No issues detected[white]")
@@ -993,13 +1054,17 @@ func (a *App) buildSummaryTextFor(result *output.JSONOutput, trieIndex int) stri
 		// The single-trie output conversion loses this information, so we bypass it here
 		trieData := a.multiTrieResult.Tries[trieIndex]
 
-		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", trieData.Name))
+		// Trie names, regex filters, paths and messages are user data and are
+		// escaped wherever they are rendered: tview consumes anything that
+		// looks like "[word]" as a style tag (useragentRegex = "[Bb]ot" was
+		// displayed as "ot").
+		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", tview.Escape(trieData.Name)))
 
 		// Active filters
 		summaryText.WriteString("[dim]Active Filters:[white] ")
 		filters := output.ActiveFilters(trieData.Parameters, a.multiTrieResult.GlobalFilters)
 		if len(filters) > 0 {
-			summaryText.WriteString(strings.Join(filters, ", "))
+			summaryText.WriteString(tview.Escape(strings.Join(filters, ", ")))
 		} else {
 			summaryText.WriteString("None")
 		}
@@ -1040,7 +1105,7 @@ func (a *App) buildSummaryTextFor(result *output.JSONOutput, trieIndex int) stri
 	} else {
 		// No-config CLI mode
 		summaryText.WriteString("[white::b]Legacy Analysis[white::-]\n")
-		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", result.General.LogFile))
+		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", tview.Escape(result.General.LogFile)))
 		summaryText.WriteString(fmt.Sprintf("[dim]Unique IPs:[white] %s\n",
 			output.FormatNumber(result.General.UniqueIPs)))
 		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dms", result.Metadata.DurationMS))
@@ -1098,6 +1163,10 @@ func (a *App) updateFocusBorders() {
 }
 
 func (a *App) updateStatusBar() {
+	if a.analysisFailed.Load() {
+		a.setStatusBarText(statusAnalysisFailed)
+		return
+	}
 	if !a.analysisComplete.Load() {
 		a.setStatusBarText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
 		return
@@ -1126,7 +1195,7 @@ func (a *App) updateStatusBar() {
 				}
 				trieName := a.multiTrieResult.Tries[a.currentTrie].Name
 				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | [cyan]%s (%d/%d)[white] | Tab/Shift+Tab: panels, 't': next trie, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit",
-					currentPanel, trieName, a.currentTrie+1, len(a.multiTrieResult.Tries)))
+					currentPanel, tview.Escape(trieName), a.currentTrie+1, len(a.multiTrieResult.Tries)))
 			} else {
 				// Single trie config mode
 				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
@@ -1154,8 +1223,8 @@ func (a *App) showVisualization() {
 		a.pages.AddPage("visualization", visualizationLayout, true, false)
 
 		// Process data if we have requests (fallback for immediate use)
-		if len(a.requests) > 0 {
-			a.visualizationView.ProcessTrafficData(a.requests)
+		if requests := a.requestData(); len(requests) > 0 {
+			a.visualizationView.ProcessTrafficData(requests)
 			a.visualizationView.Render()
 		}
 	}

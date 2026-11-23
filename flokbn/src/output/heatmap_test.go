@@ -101,3 +101,45 @@ func TestPlotHeatmap_UncreatablePathErrors(t *testing.T) {
 		t.Error("heatmap file exists for an uncreatable path, want none")
 	}
 }
+
+// TestWriteHeatmap_IsSilent: WriteHeatmap is the variant for callers that must
+// not touch the terminal (the TUI). It writes the same file as PlotHeatmap but
+// prints nothing, on stdout or stderr.
+func TestWriteHeatmap_IsSilent(t *testing.T) {
+	requests := []ingestor.Request{
+		ipv4Request(10, 5, 5, 1),
+		ipv4Request(192, 168, 0, 3),
+	}
+	out := filepath.Join(t.TempDir(), "heatmap.html")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStdout, origStderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = w, w
+
+	writeErr := WriteHeatmap(requests, out)
+
+	os.Stdout, os.Stderr = origStdout, origStderr
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatalf("closing pipe writer: %v", closeErr)
+	}
+	captured, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("reading captured output: %v", readErr)
+	}
+	if closeErr := r.Close(); closeErr != nil {
+		t.Fatalf("closing pipe reader: %v", closeErr)
+	}
+
+	if writeErr != nil {
+		t.Fatalf("WriteHeatmap returned error: %v", writeErr)
+	}
+	if len(captured) != 0 {
+		t.Errorf("WriteHeatmap printed %q, want nothing", captured)
+	}
+	if fi, statErr := os.Stat(out); statErr != nil || fi.Size() == 0 {
+		t.Errorf("heatmap file missing or empty (stat error: %v)", statErr)
+	}
+}
