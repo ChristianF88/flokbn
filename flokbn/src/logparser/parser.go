@@ -1229,7 +1229,11 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 		if extractor.FieldType >= 0 && start < pos {
 			// IP is always extracted; other fields are skipped when skipNonIP is true
 			if extractor.FieldType == 0 {
-				req.IPUint32 = parseIPv4ToUint32(line, start, pos)
+				ip := parseIPv4ToUint32(line, start, pos)
+				if ip == 0 {
+					ip = forwardedTailIP(line, start, pos) // slow path: address list
+				}
+				req.IPUint32 = ip
 			} else if !skipNonIP {
 				fieldData := line[start:pos]
 
@@ -1403,7 +1407,10 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 		// exactly what req.IPUint32 would remain (zero value).
 		if extractor.FieldType == 0 {
 			if start < pos {
-				return parseIPv4ToUint32(line, start, pos)
+				if ip := parseIPv4ToUint32(line, start, pos); ip != 0 {
+					return ip
+				}
+				return forwardedTailIP(line, start, pos) // slow path: address list
 			}
 			return 0
 		}
@@ -1455,6 +1462,38 @@ func bytesToString(b []byte) string {
 		return ""
 	}
 	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
+// forwardedTailIP is the slow path for a %h value that is not a single IPv4
+// address: when the value is a comma-separated list (an X-Forwarded-For
+// header) it returns the RIGHTMOST element, or 0 when that element is not a
+// valid IPv4 address or there is no comma at all.
+//
+// Rightmost is the only defensible choice: every proxy appends the address it
+// received the connection from, so the last element is the one written by the
+// proxy nearest to the logging server, while everything to its left arrived in
+// the request and is whatever the client chose to send. There is deliberately
+// no fallback to an earlier element when the last one is unusable ("unknown",
+// IPv6, empty) - that would hand the choice back to the client.
+//
+// Callers reach this only after parseIPv4ToUint32 returned 0, so a log of
+// plain addresses never pays for it.
+func forwardedTailIP(line []byte, start, end int) uint32 {
+	if start < 0 || end > len(line) || start >= end {
+		return 0
+	}
+	comma := bytes.LastIndexByte(line[start:end], ',')
+	if comma < 0 {
+		return 0
+	}
+	start += comma + 1
+	for start < end && (line[start] == ' ' || line[start] == '\t') {
+		start++
+	}
+	for end > start && (line[end-1] == ' ' || line[end-1] == '\t') {
+		end--
+	}
+	return parseIPv4ToUint32(line, start, end)
 }
 
 // parseIPv4ToUint32 extracts IPv4 address directly as uint32 - zero allocation

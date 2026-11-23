@@ -235,6 +235,7 @@ var alignmentTokens = []string{
 	"203.0.113.9", "8.8.8.7", "10.0.0.1", "999.1.1.1", "1.2.3", "GET", "/a/b?c=d", "HTTP/1.1",
 	"200", "1234", "Mozilla/5.0", "(X11; Linux)", "http://a", "10/Oct/2025:13:55:36 +0200",
 	`"http://a b"`, `"8.8.8.7"`, `"203.0.113.9"`, `[10/Oct/2025:13:55:36 +0200]`, `"GET /x HTTP/1.1"`,
+	`"8.8.8.7, 203.0.113.9"`, "8.8.8.7,203.0.113.9", ", ",
 }
 
 // TestDiffFieldWalk_AgainstReference cross-checks both production walkers
@@ -271,7 +272,9 @@ func TestDiffFieldWalk_AgainstReference(t *testing.T) {
 				}
 				switch e.FieldType {
 				case 0:
-					wantIP = parseIPv4ToUint32(line, s, end)
+					if wantIP = parseIPv4ToUint32(line, s, end); wantIP == 0 {
+						wantIP = forwardedTailIP(line, s, end)
+					}
 				case 6:
 					wantUA, checkUA = string(line[s:end]), true
 				case 7:

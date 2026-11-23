@@ -68,6 +68,20 @@ Place `%h` at the position of the real client IP:
 
 This is the compiled-in default format.
 
+#### Address lists (X-Forwarded-For)
+
+If the field behind `%h` holds a comma-separated list, as `$http_x_forwarded_for` does (`"198.51.100.1, 203.0.113.7"`), flokbn uses the **rightmost** address. Each proxy appends the address it received the connection from, so the last element is the one written by the proxy next to the logging server. Everything to its left arrived inside the request and is whatever the client chose to send. If the rightmost element is not an IPv4 address (`unknown`, IPv6, empty), the line counts as an invalid IP; flokbn never falls back to an element further left.
+
+{{< callout context="caution" title="Only trust what your own proxy wrote" icon="outline/alert-triangle" >}}
+A forwarded address is only as trustworthy as the proxy that wrote it. Point `%h` at such a field only when **all** of these hold:
+
+- the logging server is reachable solely through your own proxy, so no client can send the header directly;
+- that proxy appends the peer address itself (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`) or overwrites the header;
+- there is exactly one such proxy in front of the logging server. With a chain of your own proxies the rightmost element is the previous proxy, not the client.
+
+When in doubt, log a field your server derives itself (nginx `$remote_addr`, or `$realip_remote_addr` with the realip module restricted by `set_real_ip_from`) and use that for `%h`. Otherwise a client can put any address into the header and get it banned.
+{{< /callout >}}
+
 ### Apache Combined
 
 ```apache
