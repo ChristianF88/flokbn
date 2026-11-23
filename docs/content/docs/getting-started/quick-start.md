@@ -77,11 +77,13 @@ flokbn static --logfile access.log \
 ```bash
 flokbn static --logfile access.log \
   --whitelist /etc/flokbn/whitelist.txt \
-  --jailFile /tmp/jail.json \
-  --banFile /tmp/ban.txt \
+  --jailFile /var/lib/flokbn/jail.json \
+  --banFile /var/lib/flokbn/ban.txt \
   --clusterArgSets 1000,24,32,0.1 \
   --plain
 ```
+
+The directory for the jail and ban file must already exist and be writable by the user running flokbn (`sudo mkdir -p /var/lib/flokbn && sudo chown "$USER" /var/lib/flokbn`); flokbn does not create it. Avoid `/tmp` or any other world-writable directory: the ban file feeds your firewall, so only flokbn should be able to write it.
 
 Detected ranges (minus whitelisted ones) are jailed and written to the ban file. The jail file only appears once at least one range has actually been jailed; the ban file is always written. See [Output Formats]({{< relref "/docs/reference/output-formats/#ban-file-format" >}}) for the file formats and firewall integration.
 

@@ -4,6 +4,14 @@
 # Format: One exact User-Agent string per line, comments start with '#'
 # Note: These are EXACT matches, not substrings - must match completely
 # Whitelist takes precedence over blacklist if same pattern exists in both files
+#
+# SECURITY WARNING: the User-Agent header is chosen by the client and trivially
+# spoofed. ONE request carrying a string from this file makes its source IP
+# immune - it is excluded from detection, removed from active bans, and removed
+# from the manual IP blacklist. The strings below are public, so anyone can send
+# them. Keep this list short, do not list ordinary browser strings in production
+# (the browser entries below are examples only), and whitelist the published IP
+# ranges of crawlers you must never ban in whitelist.txt instead.
 
 # Legitimate Search Engine Crawlers
 Googlebot/2.1 (+http://www.google.com/bot.html)

@@ -60,6 +60,15 @@ Contains exact User-Agent strings that **whitelist** the source IP:
 - Internal tools and services
 - Legitimate security scanners
 
+**Security warning:** the User-Agent header is chosen by the client and is
+trivially spoofed. One request carrying a listed string makes its source IP
+immune: it is excluded from detection, removed from active bans, and removed
+from the manual IP blacklist (`blacklist.txt`). Use this list to reduce false
+positives, not as access control. For crawlers and monitoring services you
+must never ban, put their published IP ranges in `whitelist.txt` instead, and
+do not ship ordinary browser strings (the example file contains some for
+illustration only).
+
 ### ua_blacklist.txt
 Contains exact User-Agent strings that **blacklist** the source IP:
 - Security testing tools (sqlmap, nmap, nikto)

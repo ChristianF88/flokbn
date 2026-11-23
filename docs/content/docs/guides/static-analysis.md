@@ -122,10 +122,12 @@ Write detected ranges to files for firewall integration:
 
 ```bash
 flokbn static --logfile access.log \
-  --jailFile /tmp/jail.json \
-  --banFile /tmp/ban.txt \
+  --jailFile /var/lib/flokbn/jail.json \
+  --banFile /var/lib/flokbn/ban.txt \
   --clusterArgSets 1000,24,32,0.1 --plain
 ```
+
+The target directory must exist and be writable by the user running flokbn (flokbn does not create it). Keep these files out of `/tmp` and other world-writable directories - the ban file feeds your firewall.
 
 Both flags must be set together - with only one of them, no jail/ban output is written. Cluster arg sets passed on the command line all count toward jailing, so every detected range is added to the jail and published to the ban file. Note that the jail file is only created once at least one range has actually been jailed; the ban file is always written (header-only if nothing is banned). See [Output Formats]({{< relref "/docs/reference/output-formats/" >}}) for the exact ban file format, the `#`-comment filtering caveat, and iptables/nginx integration patterns.
 

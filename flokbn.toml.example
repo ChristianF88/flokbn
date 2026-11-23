@@ -16,10 +16,15 @@
 #################################################################################
 
 [global]
-# REQUIRED: Core jail and ban file configuration
+# Core jail and ban file configuration
+# REQUIRED in live mode. OPTIONAL in static mode: leave both out and static mode
+# only reports its detections; set both to also write a jail and a ban file.
 # These files are used by both static and live modes
-jailFile = "/tmp/flokbn_jail.json"        # Jail state persistence file
-banFile = "/tmp/flokbn_ban.txt"           # Output file for banned IPs/CIDRs
+# Keep them in a directory only flokbn can write, never in /tmp or another
+# world-writable location: the ban file feeds your firewall. The directory must
+# exist before the first run (flokbn does not create it).
+jailFile = "/var/lib/flokbn/jail.json"    # Jail state persistence file
+banFile = "/var/lib/flokbn/ban.txt"       # Output file for banned IPs/CIDRs
 
 # OPTIONAL: Whitelist and blacklist files for IP filtering
 # Relative paths are supported and resolved from the current working directory
@@ -28,6 +33,11 @@ blacklist = "config_examples/blacklist.txt"              # Optional: IPs/CIDRs a
 
 # OPTIONAL: User-Agent based filtering
 # These files contain exact User-Agent strings (full-string match, not substrings)
+# SECURITY: the User-Agent is sent by the client and trivially spoofed. ONE request
+# with a whitelisted User-Agent makes its source IP immune: excluded from detection,
+# removed from active bans AND from the manual IP blacklist. Do not treat the
+# User-Agent whitelist as access control; for crawlers and monitoring you must
+# never ban, whitelist their published IP ranges instead.
 userAgentWhitelist = "config_examples/ua_whitelist.txt"  # Optional: exact User-Agent strings that whitelist IPs
 userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-Agent strings that blacklist IPs
 
@@ -40,6 +50,7 @@ userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-
 # 2. IP Blacklist: IPs matching these CIDRs are always added to ban file
 # 3. User-Agent Whitelist: requests with these exact UA strings are excluded from
 #    every trie (analysis + statistics), and their IPs are shielded from jail/ban
+#    - including from the manual IP blacklist. Client-controlled, see SECURITY above.
 # 4. User-Agent Blacklist: IPs with these exact UA strings are immediately banned
 # 5. Processing order: UA filters → clustering → IP whitelist/blacklist (ban pipeline) → jail → ban file
 
@@ -137,21 +148,26 @@ logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
 # IPv4 CIDRs only - an IPv6 entry aborts the load (IPv4-only tool).
 cidrRanges = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
-# REQUIRED: Clustering configuration
+# Clustering configuration
+# OPTIONAL in static mode (without it the trie only reports parse statistics and
+# cidrRanges counts); REQUIRED for every [live.NAME] window.
 # Each array defines one clustering analysis: [minClusterSize, minDepth, maxDepth, meanSubnetDifference]
-# - minClusterSize: Minimum IPs needed to form a cluster
+# - minClusterSize: Minimum number of REQUESTS (log lines) a range must account for
+#   to be reported. It is a request count, NOT a count of distinct IPs: one IP
+#   sending 1000 requests satisfies minClusterSize = 1000.
 # - minDepth: Minimum subnet depth to consider (e.g., 24 for /24 networks)
 # - maxDepth: Maximum subnet depth to consider (e.g., 32 for individual IPs)
 # - meanSubnetDifference: Threshold for grouping similar subnets
 clusterArgSets = [
-    [1000, 16, 24, 0.2],    # Large clusters: 1000+ IPs, /16 to /24 networks
-    [500, 20, 28, 0.15],    # Medium clusters: 500+ IPs, /20 to /28 networks
-    [100, 24, 32, 0.1]      # Small clusters: 100+ IPs, /24 to /32 (individual IPs)
+    [1000, 16, 24, 0.2],    # Large clusters: 1000+ requests, /16 to /24 networks
+    [500, 20, 28, 0.15],    # Medium clusters: 500+ requests, /20 to /28 networks
+    [100, 24, 32, 0.1]      # Small clusters: 100+ requests, /24 to /32 (individual IPs)
 ]
 
-# REQUIRED: Jail configuration
-# Specify which clustering results should contribute to the jail
-# Must match the number of clusterArgSets entries
+# OPTIONAL: Jail configuration
+# Specify which clustering results should contribute to the jail.
+# Omit useForJail entirely and every set is detected and reported but never
+# jailed. If present, it must have exactly one entry per clusterArgSets row.
 useForJail = [true, true, false]    # Use first two cluster results for jail
 
 [static.trie_2]
@@ -168,9 +184,9 @@ cidrRanges = ["192.168.0.0/16"]          # Report request volume in the 192.168.
 
 # More aggressive clustering for admin endpoints
 clusterArgSets = [
-    [50, 24, 32, 0.05],     # Very sensitive: 50+ IPs, /24 to /32
-    [20, 28, 32, 0.03],     # Highly sensitive: 20+ IPs, /28 to /32
-    [10, 30, 32, 0.02]      # Extremely sensitive: 10+ IPs, /30 to /32
+    [50, 24, 32, 0.05],     # Very sensitive: 50+ requests, /24 to /32
+    [20, 28, 32, 0.03],     # Highly sensitive: 20+ requests, /28 to /32
+    [10, 30, 32, 0.02]      # Extremely sensitive: 10+ requests, /30 to /32
 ]
 
 # All admin endpoint clusters go to jail
@@ -193,9 +209,9 @@ cidrRanges = ["0.0.0.0/0"]
 
 # Moderate clustering for suspicious UAs
 clusterArgSets = [
-    [200, 20, 28, 0.1],     # Medium clusters: 200+ IPs
-    [100, 24, 32, 0.08],    # Small clusters: 100+ IPs
-    [50, 28, 32, 0.05]      # Very small clusters: 50+ IPs
+    [200, 20, 28, 0.1],     # Medium clusters: 200+ requests
+    [100, 24, 32, 0.08],    # Small clusters: 100+ requests
+    [50, 28, 32, 0.05]      # Very small clusters: 50+ requests
 ]
 
 # Use all suspicious UA clusters for jail
@@ -210,8 +226,28 @@ useForJail = [true, true, true]
 #################################################################################
 
 [live]
+# IMPORTANT: live mode does NOT use logFormat. There is no logFormat key here,
+# and the [static] logFormat above has no effect on live ingestion. Live mode
+# always reads the client IP from the FIRST space-separated field of each line
+# (standard combined log layout). If your web server logs a proxy address first
+# and the real client in X-Forwarded-For - which is what the [static] example
+# format above expects - change the web server's log format before using live
+# mode, otherwise flokbn clusters and bans your proxy.
+
 # REQUIRED: Network configuration (global settings only)
 port = "8080"                           # Port to listen for incoming log streams
+
+# OPTIONAL: TCP read timeout for the log ingestor (duration string, default "5s")
+# readTimeout = "5s"
+
+# OPTIONAL: HTTP endpoints GET /stats (JSON), GET /bans (ban list) and
+# GET /metrics (Prometheus). Off unless set. There is no authentication and
+# /stats returns the whitelist, file paths and detection thresholds, so keep it
+# on loopback or behind an authenticating reverse proxy.
+# statsListen = "127.0.0.1:8666"
+
+# OPTIONAL: include the top-N IPs per window in /stats (default 0 = off)
+# topTalkers = 5
 
 # NOTE: Sliding window parameters are now per-window, not global
 # Each [live.X] section below defines its own sliding window
@@ -236,7 +272,8 @@ clusterArgSets = [
     [100, 24, 32, 0.1]      # Individual IP detection
 ]
 
-# REQUIRED: Real-time jail configuration
+# OPTIONAL: Real-time jail configuration (omit it and nothing from this window
+# is ever jailed; if present, one entry per clusterArgSets row)
 useForJail = [true, true, false]
 
 [live.sliding_trie_2]
@@ -260,7 +297,7 @@ clusterArgSets = [
     [25, 28, 32, 0.03]      # Very sensitive detection
 ]
 
-# REQUIRED: All rapid threat clusters go to jail
+# OPTIONAL: All rapid threat clusters go to jail
 useForJail = [true, true, true]
 
 #################################################################################
@@ -280,6 +317,15 @@ useForJail = [true, true, true]
 # 3. Monitor jail file size and rotation
 # 4. Use exact User-Agent strings that are specific enough to avoid false positives
 # 5. Regularly review and update filtering rules
+# 6. The User-Agent whitelist is spoofable (client-controlled header): anyone who
+#    sends a listed string is immune to bans. Prefer the IP whitelist.
+# 7. The live ingest port ([live] port) is unauthenticated: whoever can reach it
+#    can forge log events and get arbitrary ranges banned. Restrict access to it.
+# 8. [live] statsListen is unauthenticated and /stats returns the whitelist, file
+#    paths and detection thresholds: keep it on loopback or behind an
+#    authenticating reverse proxy.
+# 9. If the client IP (%h) comes from an X-Forwarded-For header, only the element
+#    appended by YOUR OWN proxy is trustworthy; the rest is client-supplied.
 
 # OPERATIONAL NOTES:
 # 1. The jail file persists banned IPs across restarts

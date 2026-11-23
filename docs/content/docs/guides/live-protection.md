@@ -17,6 +17,12 @@ seo:
 
 Live mode provides real-time detection by continuously monitoring incoming logs via the Lumberjack protocol and automatically detecting and blocking high-volume IP ranges.
 
+{{< callout context="caution" title="Live mode ignores logFormat: the client IP must be the first field" icon="outline/alert-triangle" >}}
+Live mode does **not** use the configurable log format. It always takes the text before the first space of each line as the client IP and expects the standard combined log layout after it. `flokbn live` has no `--logFormat` flag, `[live]` has no `logFormat` key, and a `logFormat` under `[static]` has no effect here.
+
+This matters most behind a proxy or load balancer. Static mode's **default** format reads the client IP from the *last* field (an `X-Forwarded-For` layout); live mode reads the *first* field of the very same line - which is then your proxy's address. flokbn would cluster and ban your own proxy. Before enabling live mode, make sure your web server writes the real client IP first (see [Expected log line format](#expected-log-line-format)), and whitelist your proxy addresses as a safety net.
+{{< /callout >}}
+
 ## How Live Mode Works
 
 - Receives logs from Filebeat/Logstash via the Lumberjack protocol (TCP)
@@ -30,8 +36,8 @@ Live mode provides real-time detection by continuously monitoring incoming logs 
 
 ```bash
 flokbn live --port 8080 \
-  --jailFile /etc/flokbn/jail.json \
-  --banFile /etc/flokbn/ban.txt \
+  --jailFile /var/lib/flokbn/jail.json \
+  --banFile /var/lib/flokbn/ban.txt \
   --slidingWindowMaxTime 2h \
   --slidingWindowMaxSize 100000
 ```
@@ -102,6 +108,8 @@ output.logstash:
 sudo systemctl restart filebeat
 ```
 
+flokbn listens on `127.0.0.1` unless `[live] listen` (or `--listen`) says otherwise. With Filebeat on the same host, point `hosts` at `127.0.0.1:8080`; for a remote Filebeat, set `listen` and restrict access to the port as described in [Security Considerations](#security-considerations).
+
 ### Expected log line format
 
 Live mode parses each event's `message` field itself and expects the standard **combined log format with the client IP as the first field**:
@@ -110,7 +118,25 @@ Live mode parses each event's `message` field itself and expects the standard **
 192.0.2.1 - - [09/Oct/2025:10:15:23 +0000] "GET / HTTP/1.1" 200 1234 "-" "curl/8.5.0"
 ```
 
-The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion. If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the flokbn side, which live mode does not support). Lines that don't parse are counted as parse errors in `/stats` and skipped.
+The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion, and a format you tuned for static mode says nothing about what live mode will read. The first space-separated token is the client IP, always.
+
+If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the flokbn side, which live mode does not support). For nginx behind a trusted proxy, either let the `realip` module rewrite `$remote_addr` (`set_real_ip_from <proxy>; real_ip_header X-Forwarded-For;`) and keep the stock format, or define a format that starts with the address your own proxy appended. Only that element of `X-Forwarded-For` is trustworthy; the rest of the header is supplied by the client.
+
+A quick check before going live: take one line from the log Filebeat ships and confirm that its first field is a client address, not your proxy's. Lines that don't parse are counted as parse errors in `/stats` and skipped - but a line with the *wrong* IP first parses fine, so the parse-error counter will not warn you.
+
+## Security Considerations
+
+Live mode turns log lines into bans automatically, so everything that can influence its input or read its output is security-relevant.
+
+{{< callout context="caution" title="The ingest port is unauthenticated" icon="outline/alert-triangle" >}}
+The Lumberjack listener has no authentication and no encryption. Whoever can open a TCP connection to it can send forged log events - and with enough of them get arbitrary IP ranges banned (for example your own customers, or a monitoring service).
+{{< /callout >}}
+
+- **Ingest listener (`[live] listen`, `--listen`).** The listener binds to `127.0.0.1` by default, which fits a Filebeat running on the same host. To accept logs from another host or container, set `listen` explicitly (for example `listen = "0.0.0.0"` or one specific interface address) **and** restrict who can reach the port: a firewall rule that admits only your log shippers, a private network, or a tunnel. Never expose it to the internet.
+- **HTTP endpoints (`statsListen`).** `/stats`, `/bans` and `/metrics` are unauthenticated too. `/stats` returns your whitelist and blacklist CIDRs, the paths of the list, jail and ban files, and the exact detection thresholds of every cluster arg set - enough for an attacker to stay just below them. The server is off unless `statsListen` is set; when you set it, keep it on loopback (`127.0.0.1:8666`) or put it behind a reverse proxy that authenticates. If a remote enforcement point needs the ban list, expose only `/bans` through that proxy.
+- **User-Agent whitelist.** The User-Agent is client-controlled: one request with a listed string makes the sender's IP immune, including against the manual blacklist. See the warning in [Filtering]({{< relref "/docs/reference/filtering/#user-agent-whitelist" >}}).
+- **Client IP behind a proxy.** flokbn bans whatever address the log line names as the client. If that address comes from an `X-Forwarded-For` header, only the element appended by **your own** proxy is trustworthy; anything to its left was supplied by the client and can name any address they want banned. See [Log Formats]({{< relref "/docs/reference/log-formats/" >}}).
+- **Jail and ban files.** Keep them in a directory only the flokbn user can write (for example `/var/lib/flokbn`), not in a world-writable location such as `/tmp`: whoever can write the ban file controls your firewall rules.
 
 ## Firewall Integration
 
@@ -119,7 +145,7 @@ Monitor the ban file and update iptables rules when it changes:
 ```bash
 #!/bin/bash
 # watch-banfile.sh
-BANFILE="/etc/flokbn/ban.txt"
+BANFILE="/var/lib/flokbn/ban.txt"
 LAST_HASH=""
 
 while true; do
@@ -162,7 +188,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/flokbn /etc/flokbn
+ReadWritePaths=/var/lib/flokbn
 
 [Install]
 WantedBy=multi-user.target
@@ -171,7 +197,9 @@ WantedBy=multi-user.target
 ```bash
 sudo useradd -r -s /bin/false flokbn
 sudo mkdir -p /var/lib/flokbn /etc/flokbn
-sudo chown flokbn:flokbn /var/lib/flokbn /etc/flokbn
+sudo chown flokbn:flokbn /var/lib/flokbn   # state: jail and ban file
+sudo chmod 750 /var/lib/flokbn
+# /etc/flokbn (config, list files) stays root-owned: the service only reads it
 sudo systemctl daemon-reload
 sudo systemctl enable flokbn
 sudo systemctl start flokbn
@@ -203,7 +231,7 @@ format = "text"  # text or json
 
 ## HTTP Endpoints
 
-For machine-readable live data, set `statsListen` in `[live]` (config file only - no CLI flag). Bind to localhost unless you have a reason not to:
+For machine-readable live data, set `statsListen` in `[live]` (config file only - no CLI flag). The endpoints are unauthenticated and `/stats` discloses your whitelist and detection thresholds, so bind to loopback or put an authenticating reverse proxy in front (see [Security Considerations](#security-considerations)):
 
 ```toml
 [live]
@@ -227,10 +255,10 @@ All three return `503` with a `Retry-After` header until the loop has completed 
 journalctl -u flokbn -f
 
 # Monitor ban file
-tail -f /etc/flokbn/ban.txt
+tail -f /var/lib/flokbn/ban.txt
 
 # Check jail state
-cat /etc/flokbn/jail.json | jq '.Cells | length'
+cat /var/lib/flokbn/jail.json | jq '.Cells | length'
 ```
 
 The jail file uses a tiered cell structure with escalating bans (stage 1-5: 10 minutes, 4 hours, 7 days, 30 days, 180 days; re-detection after expiry moves a range to the next stage). See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the jail data model.

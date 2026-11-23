@@ -104,6 +104,8 @@ flokbn static --logfile /var/log/nginx/access.log \
 
 **`flokbn live`** monitors continuously, ingesting over the Lumberjack protocol (Filebeat-compatible). Sliding windows watch recent traffic; detected ranges go into a persistent jail with escalating ban stages. HTTP endpoints expose `/stats`, `/bans`, and Prometheus `/metrics`. A Docker demo stack wires it into closed-loop deny enforcement with a Grafana dashboard.
 
+> **Live mode ignores `--logFormat`.** It always reads the client IP from the first field of each log line (standard combined format). If your logs put a proxy address first and the client in `X-Forwarded-For` - the layout static mode's default format expects - change the web server's log format before using live mode, or flokbn will ban your proxy.
+
 ## Performance
 
 - ~4M requests/sec full parse with a User-Agent filter active (measured)

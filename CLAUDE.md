@@ -66,13 +66,18 @@ cd flokbn/src && go test -run TestName ./cidr
 cd e2e && bash e2e_static_test.sh        # non-docker e2e scripts
 ```
 
-Go 1.23. Test deps: testify, go-cmp. ~72 `_test.go` files including differential
-fuzz (`cidr/removewhitelisted_diff_test.go`) and invariant tests
+Go 1.23. No test dependencies: tests use the standard library `testing` package only
+(go.mod has no testify or go-cmp). ~93 `_test.go` files including
+differential fuzz (`cidr/removewhitelisted_diff_test.go`) and invariant tests
 (`jail/whitelist_invariant_test.go`). Real-world benchmarks are env-gated (run manually).
 
 CI (`.github/workflows/ci.yml`): prepare (go mod tidy must be clean) → lint → test
 (race + coverage → Codecov) → cross-platform build matrix. Release on `v*` tag via
 GoReleaser. No golangci-lint config; lint = gofmt + vet + staticcheck only.
+Actions are pinned to full commit SHAs (version in a trailing comment), staticcheck to
+`v0.6.1` (the last release that builds with Go 1.23) and GoReleaser to an exact
+version in `release.yml`. `.goreleaser.yaml` has no before-hooks: the release job
+holds a write token, and tests run in the CI job it requires.
 
 ## Core concepts
 
@@ -88,12 +93,19 @@ GoReleaser. No golangci-lint config; lint = gofmt + vet + staticcheck only.
   durations 10m → 4h → 7d → 30d → 180d. A CIDR escalates to the next cell on
   re-detection after expiry. Parent ranges consolidate contained sub-ranges (prevents
   fragment explosion). Persisted as JSON; bounds cached as uint32 to avoid re-parsing.
-- **Whitelist semantics:** a blacklist CIDR is dropped only if **fully covered by a
-  single whitelist entry** - the union of multiple entries does NOT count (deliberate;
-  see jail invariant tests). `RemoveWhitelisted` parses the whitelist once
+- **Whitelist semantics:** the whitelist (CIDR file + User-Agent-whitelisted IPs as
+  /32) is applied at two points with different rules.
+  *Before the jail* (`cidr.DropFullyWhitelisted`): a detected CIDR is dropped only if
+  **fully covered by a single whitelist entry**; coverage by the union of several
+  entries does NOT drop it and partial overlaps are kept whole (deliberate: carving
+  around many /32 holes would explode the jail into fragments).
+  *At publish* (`cidr.ComposeBanLists` -> `RemoveWhitelisted`): the whitelist is
+  subtracted exactly from active bans AND the manual blacklist, so anything covered by
+  the union of entries is removed and partial overlaps are carved. This is the choke
+  point that guarantees a whitelisted address is never published (see
+  `jail/whitelist_invariant_test.go`). `RemoveWhitelisted` parses the whitelist once
   (O(B+W), not O(B*W)) and is byte-identical to the old path for IPv4 (proven by
-  differential fuzz). Whitelist is applied at **publish time** (`ComposeBanLists`),
-  not when entering the jail.
+  differential fuzz).
 - **IPv4-only gate:** discriminator is `len(ipNet.Mask) != 4` (4 bytes = IPv4,
   16 = IPv6 incl. IPv4-mapped `::ffff:`). Rejected at config load; skipped/kept-verbatim
   in hot paths as defense-in-depth.
