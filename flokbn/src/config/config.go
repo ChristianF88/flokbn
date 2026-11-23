@@ -465,6 +465,53 @@ func validateTrieTimestamps(diags *ConfigDiagnostics, section string,
 	}
 }
 
+// topLevelSections are the recognized top-level tables, in the order
+// checkTopLevelSectionTypes reports them.
+var topLevelSections = [...]string{"global", "static", "live", "log"}
+
+// checkTopLevelSectionTypes rejects a recognized top-level section that is not
+// a TOML table (`global = "x"`, `[[global]]`). LoadConfig's dispatch only acts
+// on table values, so a wrong-typed section would otherwise be dropped whole
+// and leave an empty section behind - the same fail-open as a misspelled
+// section header, hence the same hard error rather than a diagnostic.
+func checkTopLevelSectionTypes(raw map[string]any) error {
+	for _, name := range topLevelSections {
+		value, present := raw[name]
+		if !present {
+			continue
+		}
+		if _, isTable := value.(map[string]any); !isTable {
+			return fmt.Errorf("section [%s] must be a table, got %s (write it as a [%s] header followed by key = value lines)",
+				name, tomlTypeName(value), name)
+		}
+	}
+	return nil
+}
+
+// tomlTypeName names the TOML type of a decoded value for an error message.
+func tomlTypeName(v any) string {
+	switch v.(type) {
+	case string:
+		return "a string"
+	case int64:
+		return "an integer"
+	case float64:
+		return "a float"
+	case bool:
+		return "a boolean"
+	case time.Time:
+		return "a datetime"
+	case []map[string]any:
+		return "an array of tables"
+	case []any:
+		return "an array"
+	case map[string]any:
+		return "a table"
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
 func LoadConfig(configPath string) (*Config, error) {
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
@@ -474,6 +521,10 @@ func LoadConfig(configPath string) (*Config, error) {
 	var rawConfig map[string]any
 	if _, err := toml.Decode(string(configData), &rawConfig); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	if err := checkTopLevelSectionTypes(rawConfig); err != nil {
+		return nil, err
 	}
 
 	config := &Config{
