@@ -27,6 +27,14 @@ type FieldExtractor struct {
 	// is a format literal and the value is a bare token. Computed at compile time
 	// so the per-field cost is the same single flag test as before.
 	autoQuote bool
+	// after is the separator that follows this field once its closing quote or
+	// bracket has been consumed: for a slot the format closes ("%u"| or [%t]|)
+	// the literal behind the closer, for a bare slot (%^|) the slot's own
+	// delimiter, which is what follows a value that turned out to be quoted. It
+	// is consumed together with the closer so the next field does not start on
+	// it. A space (also used when there is no such literal) is harmless: the
+	// next field skips leading spaces anyway.
+	after byte
 }
 
 // CompiledFormat represents a pre-compiled log format for fast parsing
@@ -1131,6 +1139,15 @@ func validateFormat(format string) error {
 		if format[i] == '%' && i+1 < len(format) {
 			field := format[i+1]
 
+			// A quote that closes a GROUP of fields ("%^ %r %^") is consumed by a
+			// bare token scan, which does not also consume a delimiter behind
+			// it. With a space that does not matter; with any other delimiter
+			// every later field would be off by one, so refuse the format.
+			if groupDelimiterAt(format, i) {
+				return fmt.Errorf("the quoted group ending in %%%c\" is followed by %q - a quoted group of several fields must be followed by a space (or quote each field on its own, e.g. \"%%r\"%c)",
+					field, format[i+3], format[i+3])
+			}
+
 			// Skip validation for skip field (%^)
 			if field == '^' {
 				continue
@@ -1156,6 +1173,19 @@ func validateFormat(format string) error {
 	}
 
 	return nil
+}
+
+// groupDelimiterAt reports whether the specifier at format[i] is the LAST field
+// of a quoted group (closing quote behind it, no opening quote in front of it)
+// that is directly followed by a literal other than a space.
+func groupDelimiterAt(format string, i int) bool {
+	if format[i] != '%' || i+3 >= len(format) || format[i+2] != '"' {
+		return false
+	}
+	if i > 0 && format[i-1] == '"' {
+		return false // a self-contained quoted slot: "%r"
+	}
+	return format[i+3] != ' ' && format[i+3] != '%'
 }
 
 // compileFormat converts a format string into optimized field extractors
@@ -1244,6 +1274,18 @@ func compileFormat(format string) (*CompiledFormat, error) {
 			opensGroup := i > 0 && format[i-1] == '"' && extractor.Delimiter != '"'
 			extractor.autoQuote = extractor.Quoted || !opensGroup
 
+			// Separator behind the closing quote/bracket (see FieldExtractor.after).
+			extractor.after = extractor.Delimiter
+			if extractor.Delimiter == '"' || (extractor.Delimiter == ']' && extractor.Brackets) {
+				extractor.after = ' '
+				if i+3 < len(format) {
+					extractor.after = format[i+3]
+				}
+			}
+			if extractor.after == '%' {
+				extractor.after = ' ' // the next specifier follows directly: no separator
+			}
+
 			extractors = append(extractors, extractor)
 			i++ // Skip format character
 		}
@@ -1309,6 +1351,9 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 			next = pos
 			if pos < len(line) {
 				next++ // closing quote
+				if next < len(line) && line[next] == extractor.after {
+					next++ // and the delimiter behind it
+				}
 			}
 		} else if c == '[' && extractor.Brackets {
 			pos++ // skip opening bracket
@@ -1321,6 +1366,9 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 			next = pos
 			if pos < len(line) {
 				next++ // closing bracket
+				if next < len(line) && line[next] == extractor.after {
+					next++ // and the delimiter behind it
+				}
 			}
 		} else {
 			// Regular field - scan until delimiter or space
@@ -1486,6 +1534,9 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 			next = pos
 			if pos < len(line) {
 				next++ // closing quote
+				if next < len(line) && line[next] == extractor.after {
+					next++ // and the delimiter behind it
+				}
 			}
 		} else if c == '[' && extractor.Brackets {
 			pos++ // skip opening bracket
@@ -1498,6 +1549,9 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 			next = pos
 			if pos < len(line) {
 				next++ // closing bracket
+				if next < len(line) && line[next] == extractor.after {
+					next++ // and the delimiter behind it
+				}
 			}
 		} else {
 			delimiter := extractor.Delimiter

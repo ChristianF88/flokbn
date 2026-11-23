@@ -171,8 +171,10 @@ func refFieldBounds(cf *CompiledFormat, line []byte) [][2]int {
 			pos++
 		}
 		start := pos
+		closedSlot := false // the value was scanned as a quoted or bracketed string
 		switch {
 		case e.autoQuote && pos < len(line) && line[pos] == '"':
+			closedSlot = true
 			pos++
 			start = pos
 			for pos < len(line) {
@@ -188,6 +190,7 @@ func refFieldBounds(cf *CompiledFormat, line []byte) [][2]int {
 				pos++
 			}
 		case e.Brackets && pos < len(line) && line[pos] == '[':
+			closedSlot = true
 			pos++
 			start = pos
 			for pos < len(line) && line[pos] != ']' {
@@ -200,11 +203,18 @@ func refFieldBounds(cf *CompiledFormat, line []byte) [][2]int {
 		}
 		out[i] = [2]int{start, pos}
 
+		closerConsumed := false
 		if e.autoQuote && pos < len(line) && line[pos] == '"' {
 			pos++
+			closerConsumed = true
 		} else if e.Brackets && pos < len(line) && line[pos] == ']' {
 			pos++
+			closerConsumed = true
 		} else if pos < len(line) && line[pos] == e.Delimiter {
+			pos++
+		}
+		// The delimiter behind a closing quote/bracket belongs to the field.
+		if closedSlot && closerConsumed && pos < len(line) && line[pos] == e.after {
 			pos++
 		}
 	}
@@ -226,6 +236,11 @@ var alignmentFormats = []string{
 	`%^ %^ "%u" %U %h`,
 	`%t %u %h`,
 	drupalLogFormat,
+	`%h|[%t]|%m|%U|%s`,
+	`[%t]|"%u"|%U|%h`,
+	`%^,"%u",%h,%s`,
+	`%^|%^|%h`,
+	`"%u";[%t];%h`,
 }
 
 // alignmentTokens are the pieces random lines are assembled from: plain
@@ -236,6 +251,7 @@ var alignmentTokens = []string{
 	"200", "1234", "Mozilla/5.0", "(X11; Linux)", "http://a", "10/Oct/2025:13:55:36 +0200",
 	`"http://a b"`, `"8.8.8.7"`, `"203.0.113.9"`, `[10/Oct/2025:13:55:36 +0200]`, `"GET /x HTTP/1.1"`,
 	`"8.8.8.7, 203.0.113.9"`, "8.8.8.7,203.0.113.9", ", ",
+	"|", "|", ";", `"|`, `]|`, `";`, "||",
 }
 
 // TestDiffFieldWalk_AgainstReference cross-checks both production walkers

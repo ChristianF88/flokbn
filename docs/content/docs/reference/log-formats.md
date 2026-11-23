@@ -116,11 +116,16 @@ LogFormat "%h %l %u %t \"%r\" %>s %b" common
 
 ### Custom Pipe-Delimited
 
-Log: `192.0.2.1|09/Oct/2025:10:15:23|GET|/index.html|200`
+Log: `192.0.2.1|[09/Oct/2025:10:15:23 +0000]|GET|/index.html|200`
 
 ```
 --logFormat "%h|[%t]|%m|%U|%s"
 ```
+
+The same works with any single-character delimiter (`,`, `;`, tab) and with quoted fields: `%h|\"%r\"|%s|\"%u\"` for `192.0.2.1|"GET / HTTP/1.1"|200|"curl/8"`. Two rules apply to delimiter-separated logs:
+
+- A value that is neither quoted nor bracketed ends at the delimiter **or at a space**. A value containing spaces (a timestamp with a zone offset, a User-Agent, a request line) must therefore be bracketed or quoted in the log. `%h|%t|%m` only works for a timestamp without an offset, such as `09/Oct/2025:10:15:23`.
+- An empty value between two delimiters (`192.0.2.1||GET`) is one empty field.
 
 ### Syslog Prefix
 
@@ -181,6 +186,8 @@ One request per line, terminated by `\n` or `\r\n`. The rules are the same for s
 2. **Quotes** in the format string must match quotes in the log (`\"%r\"` for `"GET /"`, `\"%^\"` for a quoted field you skip)
 3. **Brackets** must be included if present (`[%t]` for `[timestamp]`)
 4. **Delimiters** must match (spaces, pipes, etc.)
+5. **Quoted groups**: several fields inside one pair of quotes (`\"%^ %U %^\"` for `"GET /x HTTP/1.1"` when you want the path via `%U`) must begin with `%^` (it absorbs the opening quote) and be followed by a space. A group followed by another delimiter (`\"%^ %U %^\"|%s`) is rejected at startup; use `\"%r\"` there instead.
+6. **Literal words are not matched.** Only the specifiers and the single character after each one are compiled. A standalone word such as `- -` between specifiers is not consumed from the log, so write `%h %^ %^ [%t]`, not `%h - - [%t]`.
 
 ## Testing Your Format
 
