@@ -58,7 +58,11 @@ type App struct {
 
 	// Atomic flags for cross-goroutine signaling (no mutex needed)
 	analysisComplete atomic.Bool
-	switchingTrie    atomic.Bool
+	// analysisFailed is set by ShowError. It stops the progress animation, which
+	// would otherwise keep looping (analysisComplete is only set on success) and
+	// overwrite the error text with its next frame.
+	analysisFailed atomic.Bool
+	switchingTrie  atomic.Bool
 	// shuttingDown is set true when Run() returns (the tview application has
 	// stopped). The analysis setters check it first so a late-finishing
 	// background analysis cannot QueueUpdateDraw on a stopped application.
@@ -135,17 +139,27 @@ func (a *App) SetAnalysisResults(multiResult *output.JSONOutput) {
 	// SetRequestData (which has the request data needed to populate it).
 }
 
+// statusAnalysisFailed is the status-bar text of a failed run.
+const statusAnalysisFailed = "[red]Analysis failed![white] | Press 'q' to quit"
+
 // ShowError displays an error message in the TUI and stops the progress animation
 func (a *App) ShowError(message string) {
 	if a.shuttingDown.Load() {
 		return
 	}
+	// Stop the animation BEFORE queueing the error: the animation loop checks
+	// this flag both before queueing a frame and inside the queued closure, so
+	// no frame can be drawn over the error text once it is on screen.
+	a.analysisFailed.Store(true)
 	a.app.QueueUpdateDraw(func() {
-		// Update progress view to show error
+		// Update progress view to show error. Error messages are long single
+		// lines (wrapped paths, nested causes), so let them wrap instead of
+		// being clipped at the right border.
+		a.progressView.SetWrap(true).SetWordWrap(true)
 		a.progressView.SetText(fmt.Sprintf("[red]Error:[white] %s\n\n[yellow]Press 'q' to quit[white]", message))
 
 		// Update status bar
-		a.setStatusBarText("[red]Analysis failed![white] | Press 'q' to quit")
+		a.setStatusBarText(statusAnalysisFailed)
 
 		// Make sure we're on the progress page to show the error
 		a.pages.SwitchToPage("progress")
@@ -282,8 +296,7 @@ func (a *App) setupUI() {
 			}
 			return nil
 		case 'p', 'P':
-			a.pages.SwitchToPage("progress")
-			a.setStatusBarText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
+			a.showProgressPage()
 			return nil
 		case 'v', 'V':
 			if a.analysisComplete.Load() {
@@ -573,6 +586,27 @@ func (a *App) Run() error {
 	return err
 }
 
+// progressTick is the frame interval of the progress animation.
+const progressTick = 200 * time.Millisecond
+
+// showProgressPage switches to the progress page ('p' key). Must run on the UI
+// goroutine. A failed run keeps its failure status: the page then shows the
+// error text, not a running analysis.
+func (a *App) showProgressPage() {
+	a.pages.SwitchToPage("progress")
+	if a.analysisFailed.Load() {
+		a.setStatusBarText(statusAnalysisFailed)
+		return
+	}
+	a.setStatusBarText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
+}
+
+// progressAnimationDone reports whether the progress animation must stop: the
+// analysis finished (results or error), or the application is shutting down.
+func (a *App) progressAnimationDone() bool {
+	return a.analysisComplete.Load() || a.analysisFailed.Load() || a.shuttingDown.Load()
+}
+
 // animateProgress shows a fake progress animation
 func (a *App) animateProgress() {
 	stages := []string{
@@ -589,7 +623,7 @@ func (a *App) animateProgress() {
 	stageIndex := 0
 	dots := 0
 
-	for !a.analysisComplete.Load() {
+	for !a.progressAnimationDone() {
 		stage := stages[stageIndex%len(stages)]
 		dotStr := strings.Repeat(".", dots%4)
 
@@ -619,10 +653,16 @@ func (a *App) animateProgress() {
 `, stage, dotStr, a.logFile, clusterSets, cidrRanges)
 
 		a.app.QueueUpdateDraw(func() {
+			// Re-check on the UI goroutine: the analysis may have finished
+			// between the loop condition and this frame being drawn, and a
+			// frame queued behind ShowError must not replace the error text.
+			if a.progressAnimationDone() {
+				return
+			}
 			a.progressView.SetText(content)
 		})
 
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(progressTick)
 		dots++
 
 		if dots%20 == 0 {
@@ -1098,6 +1138,10 @@ func (a *App) updateFocusBorders() {
 }
 
 func (a *App) updateStatusBar() {
+	if a.analysisFailed.Load() {
+		a.setStatusBarText(statusAnalysisFailed)
+		return
+	}
 	if !a.analysisComplete.Load() {
 		a.setStatusBarText("[yellow]Analysis in progress...[white] | 'r' for results, 'q' to quit")
 		return
