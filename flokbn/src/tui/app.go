@@ -166,6 +166,15 @@ func (a *App) ShowError(message string) {
 	})
 }
 
+// requestData returns the parsed requests handed over by SetRequestData (nil
+// until then). a.requests is written by the analysis goroutine and read by the
+// UI goroutine and the precache goroutines, so every read goes through a.mu.
+func (a *App) requestData() []ingestor.Request {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.requests
+}
+
 // errorText renders the error screen shown by ShowError. The message is
 // escaped: errors quote config sections ("[static] ...") and paths, and tview
 // would otherwise consume anything bracketed as a style tag.
@@ -188,14 +197,15 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 	}
 	a.mu.Lock()
 	a.requests = requests
+	multiResult := a.multiTrieResult
 	a.mu.Unlock()
 
 	// Signal that requests are available (kept for any external waiters).
 	close(a.requestsReady)
 
-	if a.trieCache != nil && a.multiTrieResult != nil {
+	if a.trieCache != nil && multiResult != nil {
 		go func() {
-			a.trieCache.PreCacheAllTries(a, a.multiTrieResult, requests)
+			a.trieCache.PreCacheAllTries(a, multiResult, requests)
 		}()
 	}
 
@@ -733,7 +743,7 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 			// tview UI goroutine remains their sole owner.
 			if a.multiTrieResult != nil && newTrieIndex < len(a.multiTrieResult.Tries) {
 				go func() {
-					if a.trieCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requests) {
+					if a.trieCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requestData()) {
 						a.app.QueueUpdateDraw(func() {
 							// Re-render only if the user is still on this trie.
 							if a.currentTrie != newTrieIndex {
@@ -1215,8 +1225,8 @@ func (a *App) showVisualization() {
 		a.pages.AddPage("visualization", visualizationLayout, true, false)
 
 		// Process data if we have requests (fallback for immediate use)
-		if len(a.requests) > 0 {
-			a.visualizationView.ProcessTrafficData(a.requests)
+		if requests := a.requestData(); len(requests) > 0 {
+			a.visualizationView.ProcessTrafficData(requests)
 			a.visualizationView.Render()
 		}
 	}

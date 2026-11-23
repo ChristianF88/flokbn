@@ -29,7 +29,7 @@ type TrieCache struct {
 	clusteredMatrixes map[int]map[int][256][256]uint32
 
 	// Ground-truth traffic over ALL parsed requests, identical for every trie.
-	// Computed once on the first cacheTrafficData call.
+	// Computed once, by the first precache that has request data.
 	globalTraffic      [256][256]uint32
 	globalMaxTraffic   uint32
 	globalTrafficReady bool
@@ -52,31 +52,26 @@ func NewTrieCache() *TrieCache {
 	}
 }
 
-// PreCacheAllTries processes and caches all trie data upfront
+// PreCacheAllTries processes and caches all trie data upfront.
+//
+// Locking: every full request scan and every text render runs WITHOUT ftc.mu;
+// the write lock is only taken to publish one finished trie at a time (map
+// stores plus a matrix copy). The UI goroutine reads this cache under the read
+// lock on every trie switch, so holding the write lock across the scans would
+// freeze the TUI for the whole precache.
 func (ftc *TrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOutput, requests []ingestor.Request) {
 	if multiResult == nil || len(multiResult.Tries) == 0 {
 		return
 	}
 
-	ftc.mu.Lock()
-	defer ftc.mu.Unlock()
-
 	// Process each trie and cache everything
 	for trieIndex := 0; trieIndex < len(multiResult.Tries); trieIndex++ {
-		// 1. Convert to single-trie output and cache
-		trieOutput := app.singleTrieOutput(trieIndex)
-		if trieOutput != nil {
-			ftc.trieOutput[trieIndex] = trieOutput
-
-			// 2. Pre-render all text components
-			ftc.cacheTrieTexts(trieIndex, trieOutput, app)
-
-			// 3. Pre-process traffic data for visualization
-			ftc.cacheTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
-		}
+		ftc.precacheTrie(app, trieIndex, multiResult, requests)
 	}
 
+	ftc.mu.Lock()
 	ftc.lastUpdated = time.Now()
+	ftc.mu.Unlock()
 }
 
 // PreCacheSingleTrie caches a specific trie with priority
@@ -84,64 +79,94 @@ func (ftc *TrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResult *o
 	if multiResult == nil || trieIndex >= len(multiResult.Tries) {
 		return false
 	}
+	return ftc.precacheTrie(app, trieIndex, multiResult, requests)
+}
+
+// precacheTrie computes everything the cache holds for one trie and publishes
+// it. The computation (single-trie conversion, text rendering, request scans)
+// runs unlocked on local values; ftc.mu is held only for the final stores.
+// Renders from the locally-derived single-trie output and index - it does NOT
+// touch app.jsonResult/currentTrie, which are owned exclusively by the tview UI
+// goroutine. Returns false when the trie cannot be converted.
+func (ftc *TrieCache) precacheTrie(app *App, trieIndex int, multiResult *output.JSONOutput, requests []ingestor.Request) bool {
+	// 1. Convert to single-trie output
+	trieOutput := app.singleTrieOutput(trieIndex)
+	if trieOutput == nil {
+		return false
+	}
+
+	// 2. Pre-render all text components
+	summary := app.buildSummaryTextFor(trieOutput, trieIndex)
+	clustering := app.buildClusteringTextFor(trieOutput)
+	cidr := app.buildCidrAnalysisTextFor(trieOutput)
+	diagnostics := app.buildDiagnosticsTextFor(trieOutput)
+
+	// 3. Pre-process traffic data for visualization
+	traffic, maxTraffic := ftc.globalTrafficData(requests)
+	clustered := clusteredGrids(requests, multiResult.Tries[trieIndex])
 
 	ftc.mu.Lock()
 	defer ftc.mu.Unlock()
 
-	// Convert to single-trie output and cache
-	trieOutput := app.singleTrieOutput(trieIndex)
-	if trieOutput != nil {
-		ftc.trieOutput[trieIndex] = trieOutput
+	ftc.trieOutput[trieIndex] = trieOutput
+	ftc.summaryTexts[trieIndex] = summary
+	ftc.clusterTexts[trieIndex] = clustering
+	ftc.cidrTexts[trieIndex] = cidr
+	ftc.diagnosticTexts[trieIndex] = diagnostics
+	ftc.trafficMatrixes[trieIndex] = *traffic
+	ftc.maxTraffics[trieIndex] = maxTraffic
+	ftc.clusteredMatrixes[trieIndex] = clustered
+	return true
+}
 
-		// Pre-render all text components
-		ftc.cacheTrieTexts(trieIndex, trieOutput, app)
-
-		// Pre-process traffic data for visualization
-		ftc.cacheTrafficData(trieIndex, requests, multiResult.Tries[trieIndex])
-
-		return true
+// globalTrafficData returns the traffic matrix over ALL parsed requests and its
+// busiest /16 bin. The matrix is ground truth - identical for every trie - so
+// it is computed once and reused; only the clustered grids are trie-specific.
+//
+// The scan runs without ftc.mu. Two concurrent first callers may both scan;
+// they compute the same matrix and the first to finish publishes it. An empty
+// request slice (a precache that runs before the request data has arrived) is
+// never published as the final matrix, so a later call with the real requests
+// still computes it.
+func (ftc *TrieCache) globalTrafficData(requests []ingestor.Request) (*[256][256]uint32, uint32) {
+	ftc.mu.RLock()
+	if ftc.globalTrafficReady {
+		m, maxTraffic := ftc.globalTraffic, ftc.globalMaxTraffic
+		ftc.mu.RUnlock()
+		return &m, maxTraffic
 	}
-	return false
-}
+	ftc.mu.RUnlock()
 
-// cacheTrieTexts pre-renders all text components for a trie.
-// Must hold ftc.mu (write lock) on entry. Renders from the locally-derived
-// single-trie output and index - it does NOT mutate app.jsonResult/currentTrie,
-// which are owned exclusively by the tview UI goroutine.
-func (ftc *TrieCache) cacheTrieTexts(trieIndex int, trieOutput *output.JSONOutput, app *App) {
-	ftc.summaryTexts[trieIndex] = app.buildSummaryTextFor(trieOutput, trieIndex)
-	ftc.clusterTexts[trieIndex] = app.buildClusteringTextFor(trieOutput)
-	ftc.cidrTexts[trieIndex] = app.buildCidrAnalysisTextFor(trieOutput)
-	ftc.diagnosticTexts[trieIndex] = app.buildDiagnosticsTextFor(trieOutput)
-}
-
-// cacheTrafficData pre-processes traffic data for visualization.
-// The traffic matrix is ground truth over ALL parsed requests - identical for
-// every trie - so it is computed once and reused. Only the clustered grids are
-// trie-specific (they depend on the trie's detected cluster ranges).
-func (ftc *TrieCache) cacheTrafficData(trieIndex int, requests []ingestor.Request, trieResult output.TrieResult) {
-	if !ftc.globalTrafficReady {
-		var m [256][256]uint32
-		var maxTraffic uint32
-		for i := range requests {
-			ip := requests[i].IPUint32
-			if ip == 0 {
-				continue
-			}
-			a := byte(ip >> 24)
-			b := byte(ip >> 16)
-			m[a][b]++
-			if m[a][b] > maxTraffic {
-				maxTraffic = m[a][b]
-			}
+	m := new([256][256]uint32)
+	var maxTraffic uint32
+	for i := range requests {
+		ip := requests[i].IPUint32
+		if ip == 0 {
+			continue
 		}
-		ftc.globalTraffic = m
-		ftc.globalMaxTraffic = maxTraffic
-		ftc.globalTrafficReady = true
+		a := byte(ip >> 24)
+		b := byte(ip >> 16)
+		m[a][b]++
+		if m[a][b] > maxTraffic {
+			maxTraffic = m[a][b]
+		}
 	}
-	ftc.trafficMatrixes[trieIndex] = ftc.globalTraffic
-	ftc.maxTraffics[trieIndex] = ftc.globalMaxTraffic
 
+	if len(requests) > 0 {
+		ftc.mu.Lock()
+		if !ftc.globalTrafficReady {
+			ftc.globalTraffic = *m
+			ftc.globalMaxTraffic = maxTraffic
+			ftc.globalTrafficReady = true
+		}
+		ftc.mu.Unlock()
+	}
+	return m, maxTraffic
+}
+
+// clusteredGrids builds one clustered-traffic grid per cluster set of a trie in
+// a single pass over the requests. It touches no cache state and takes no lock.
+func clusteredGrids(requests []ingestor.Request, trieResult output.TrieResult) map[int][256][256]uint32 {
 	// Pre-parse each cluster set's detected ranges once into sorted intervals so
 	// membership is an allocation-free binary search in the hot loop. One
 	// clustered grid is accumulated per cluster set in a single pass.
@@ -172,7 +197,7 @@ func (ftc *TrieCache) cacheTrafficData(trieIndex int, requests []ingestor.Reques
 	for s := range clusteredPerSet {
 		setGrids[s] = *clusteredPerSet[s]
 	}
-	ftc.clusteredMatrixes[trieIndex] = setGrids
+	return setGrids
 }
 
 // GetClusteredData returns the cached clustered-traffic grid for a (trie,
