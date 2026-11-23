@@ -395,13 +395,14 @@ func runLiveLoop(ctx context.Context, ing ingestor.Ingestor, cfg *config.Config,
 		statsState = newLiveStatsState(cfg, whitelistCIDRs, blacklistCIDRs)
 	}
 
-	logger.Info("waiting for Filebeat to connect")
-
+	// Accept only starts serving the listener; it does not wait for a client.
+	// Real connects and disconnects are logged by the ingestor ("Filebeat
+	// connected" / "Filebeat disconnected") and counted in its stats.
 	if err := ing.Accept(); err != nil {
 		return fmt.Errorf("accepting connection: %w", err)
 	}
 
-	logger.Info("Filebeat connected")
+	logger.Info("waiting for Filebeat to connect")
 
 	// Cancellation watcher: closing the ingestor unblocks the loop below.
 	// Started only after Accept so ing's internal state is never written

@@ -22,8 +22,11 @@ func renderMetrics(sn *statsSnapshot) []byte {
 		connected = 1.0
 	}
 	writeMetric(&b, "flokbn_ingest_connected", "gauge",
-		"Whether the ingestor is connected (1) or closed (0).",
+		"Whether at least one log shipper is connected to the ingestor (1) or none is (0).",
 		sample{value: connected})
+	writeMetric(&b, "flokbn_ingest_open_connections", "gauge",
+		"Log shipper connections currently open on the ingestor.",
+		sample{value: float64(sn.Ingest.OpenConnections)})
 	writeMetric(&b, "flokbn_ingest_queue_depth", "gauge",
 		"Batches buffered in the ingest queue.",
 		sample{value: float64(sn.Ingest.QueueDepth)})
