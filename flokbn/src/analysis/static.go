@@ -479,7 +479,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, parsed *parsedL
 	// The trie is built by this goroutine alone, from ascending input, so the
 	// lock-free sequential allocator and the prefix-stack build apply
 	// (bit-identical to InsertSorted, ~2x faster).
-	trieInstance := trie.NewLockedTrieSeq()
+	trieInstance := trie.NewTrieSeq()
 	trieInstance.BuildSorted(ips)
 
 	insertDuration := time.Since(insertStart)
@@ -538,7 +538,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, parsed *parsedL
 	}
 
 	// Clustering
-	processClustering(trieConfig, trieInstance.Trie, jsonOutput, &trieResult)
+	processClustering(trieConfig, trieInstance, jsonOutput, &trieResult)
 
 	return trieResult, userAgentWhitelistIPs, userAgentBlacklistIPs
 }
