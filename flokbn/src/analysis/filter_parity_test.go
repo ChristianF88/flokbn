@@ -76,8 +76,12 @@ func TestConcurrentSequentialParity_Corpus(t *testing.T) {
 
 	configs := map[string]func() *config.TrieConfig{
 		"no_trie_filter": func() *config.TrieConfig { return &config.TrieConfig{} },
-		"ua_regex":       func() *config.TrieConfig { return &config.TrieConfig{UserAgentRegex: "(?i)curl|goodbot|evil"} },
-		"endpoint_regex": func() *config.TrieConfig { return &config.TrieConfig{EndpointRegex: "^/(api|admin)/"} },
+		"ua_regex": func() *config.TrieConfig {
+			return &config.TrieConfig{TrieCommon: config.TrieCommon{UserAgentRegex: "(?i)curl|goodbot|evil"}}
+		},
+		"endpoint_regex": func() *config.TrieConfig {
+			return &config.TrieConfig{TrieCommon: config.TrieCommon{EndpointRegex: "^/(api|admin)/"}}
+		},
 		"wall_clock_window": func() *config.TrieConfig {
 			tc := &config.TrieConfig{}
 			tc.SetStartTimeBound(start, false, "")
@@ -85,12 +89,14 @@ func TestConcurrentSequentialParity_Corpus(t *testing.T) {
 			return tc
 		},
 		"instant_window_and_regexes": func() *config.TrieConfig {
-			tc := &config.TrieConfig{UserAgentRegex: "curl|python|Evil", EndpointRegex: "login"}
+			tc := &config.TrieConfig{TrieCommon: config.TrieCommon{UserAgentRegex: "curl|python|Evil", EndpointRegex: "login"}}
 			tc.SetStartTimeBound(start, true, "")
 			tc.SetEndTimeBound(end, true, "")
 			return tc
 		},
-		"matches_nothing": func() *config.TrieConfig { return &config.TrieConfig{EndpointRegex: "^/nope$"} },
+		"matches_nothing": func() *config.TrieConfig {
+			return &config.TrieConfig{TrieCommon: config.TrieCommon{EndpointRegex: "^/nope$"}}
+		},
 	}
 	matchers := map[string]*cidr.UserAgentMatcher{"ua_lists": matcher, "no_ua_lists": nil}
 

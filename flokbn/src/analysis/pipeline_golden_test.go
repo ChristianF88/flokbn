@@ -136,14 +136,18 @@ func goldenScenarios() []goldenScenario {
 			Static: &config.StaticConfig{LogFile: logFile, LogFormat: goldenLogFormat},
 			StaticTries: map[string]*config.TrieConfig{
 				"all": {
-					CIDRRanges:     []string{"10.20.0.0/16", "192.168.0.0/20", "203.0.113.0/24", "not-a-cidr"},
-					ClusterArgSets: clusterSets,
+					CIDRRanges: []string{"10.20.0.0/16", "192.168.0.0/20", "203.0.113.0/24", "not-a-cidr"},
+					TrieCommon: config.TrieCommon{
+						ClusterArgSets: clusterSets,
+					},
 				},
 				"coarse": {
-					ClusterArgSets: []config.ClusterArgSet{
-						{MinClusterSize: 5000, MinDepth: 8, MaxDepth: 20, MeanSubnetDifference: 0.3},
-						// Invalid on purpose: the placeholder entry must stay.
-						{MinClusterSize: 10, MinDepth: 24, MaxDepth: 16, MeanSubnetDifference: 0.1},
+					TrieCommon: config.TrieCommon{
+						ClusterArgSets: []config.ClusterArgSet{
+							{MinClusterSize: 5000, MinDepth: 8, MaxDepth: 20, MeanSubnetDifference: 0.3},
+							// Invalid on purpose: the placeholder entry must stay.
+							{MinClusterSize: 10, MinDepth: 24, MaxDepth: 16, MeanSubnetDifference: 0.1},
+						},
 					},
 				},
 				"no_clustering": {},
@@ -153,31 +157,35 @@ func goldenScenarios() []goldenScenario {
 
 	filtered := func(t *testing.T, dir, logFile string) *config.Config {
 		window := &config.TrieConfig{
-			CIDRRanges:     []string{"10.20.0.0/16"},
-			ClusterArgSets: clusterSets[1:],
+			CIDRRanges: []string{"10.20.0.0/16"},
+			TrieCommon: config.TrieCommon{
+				ClusterArgSets: clusterSets[1:],
+			},
 		}
 		// Zone-less bounds: compared against each line's wall clock.
 		window.SetStartTimeBound(*goldenTime(t, "2025-02-02T06:00:00Z"), false, "2025-02-02 06")
 		window.SetEndTimeBound(*goldenTime(t, "2025-02-03T03:30:00Z"), false, "2025-02-03 03:30")
 
 		combined := &config.TrieConfig{
-			UserAgentRegex: "curl|python-requests",
-			EndpointRegex:  "^/(api|admin)/",
-			ClusterArgSets: clusterSets[1:],
+			TrieCommon: config.TrieCommon{
+				UserAgentRegex: "curl|python-requests",
+				EndpointRegex:  "^/(api|admin)/",
+				ClusterArgSets: clusterSets[1:],
+			},
 		}
 		// Bounds with an explicit offset: compared as instants.
 		combined.SetStartTimeBound(*goldenTime(t, "2025-02-01T12:00:00+01:00"), true, "2025-02-01T12:00:00+01:00")
 
-		nothing := &config.TrieConfig{ClusterArgSets: clusterSets}
+		nothing := &config.TrieConfig{TrieCommon: config.TrieCommon{ClusterArgSets: clusterSets}}
 		nothing.SetStartTimeBound(*goldenTime(t, "2030-01-01T00:00:00Z"), true, "2030-01-01T00:00:00Z")
 
 		return &config.Config{
 			Static: &config.StaticConfig{LogFile: logFile, LogFormat: goldenLogFormat},
 			StaticTries: compileTries(t, map[string]*config.TrieConfig{
 				// No filter of its own in a config that needs the full parse.
-				"baseline": {CIDRRanges: []string{"203.0.113.0/24"}, ClusterArgSets: clusterSets},
-				"bots":     {UserAgentRegex: "(?i)curl|python-requests|googlebot", ClusterArgSets: clusterSets},
-				"api":      {EndpointRegex: "^/api/", CIDRRanges: []string{"192.168.0.0/20"}, ClusterArgSets: clusterSets},
+				"baseline": {CIDRRanges: []string{"203.0.113.0/24"}, TrieCommon: config.TrieCommon{ClusterArgSets: clusterSets}},
+				"bots":     {TrieCommon: config.TrieCommon{UserAgentRegex: "(?i)curl|python-requests|googlebot", ClusterArgSets: clusterSets}},
+				"api":      {TrieCommon: config.TrieCommon{EndpointRegex: "^/api/", ClusterArgSets: clusterSets}, CIDRRanges: []string{"192.168.0.0/20"}},
 				"window":   window,
 				"combined": combined,
 				"nothing":  nothing,
@@ -187,9 +195,11 @@ func goldenScenarios() []goldenScenario {
 
 	lists := func(t *testing.T, dir, logFile string) *config.Config {
 		endpoint := &config.TrieConfig{
-			EndpointRegex:  "^/(login|admin)",
-			ClusterArgSets: clusterSets,
-			UseForJail:     []bool{false, true},
+			TrieCommon: config.TrieCommon{
+				EndpointRegex:  "^/(login|admin)",
+				ClusterArgSets: clusterSets,
+				UseForJail:     []bool{false, true},
+			},
 		}
 		return &config.Config{
 			Global: &config.GlobalConfig{
@@ -205,9 +215,11 @@ func goldenScenarios() []goldenScenario {
 			Static: &config.StaticConfig{LogFile: logFile, LogFormat: goldenLogFormat},
 			StaticTries: compileTries(t, map[string]*config.TrieConfig{
 				"baseline": {
-					CIDRRanges:     []string{"10.20.0.0/16"},
-					ClusterArgSets: clusterSets,
-					UseForJail:     []bool{true, false},
+					CIDRRanges: []string{"10.20.0.0/16"},
+					TrieCommon: config.TrieCommon{
+						ClusterArgSets: clusterSets,
+						UseForJail:     []bool{true, false},
+					},
 				},
 				"endpoint": endpoint,
 			}),

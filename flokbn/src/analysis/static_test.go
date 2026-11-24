@@ -26,8 +26,10 @@ func TestStaticFromConfigBasic(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"basic": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 				CIDRRanges: []string{"192.168.0.0/16"},
 			},
@@ -82,20 +84,26 @@ func TestStaticFromConfigMultipleTries(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"all_traffic": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 50, MinDepth: 24, MaxDepth: 30, MeanSubnetDifference: 0.3},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 50, MinDepth: 24, MaxDepth: 30, MeanSubnetDifference: 0.3},
+					},
 				},
 			},
 			"filtered_endpoints": {
-				EndpointRegex: ".*\\.php$",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 10, MinDepth: 20, MaxDepth: 28, MeanSubnetDifference: 0.4},
+				TrieCommon: config.TrieCommon{
+					EndpointRegex: ".*\\.php$",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 10, MinDepth: 20, MaxDepth: 28, MeanSubnetDifference: 0.4},
+					},
 				},
 			},
 			"bot_traffic": {
-				UserAgentRegex: ".*[Bb]ot.*",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 5, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					UserAgentRegex: ".*[Bb]ot.*",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 5, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -159,10 +167,12 @@ func TestStaticFromConfigWithTimeRange(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"time_filtered": {
-				StartTime: &startTime,
-				EndTime:   &endTime,
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					StartTime: &startTime,
+					EndTime:   &endTime,
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -196,8 +206,10 @@ func TestStaticFromConfigInvalidLogFile(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"test": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -227,8 +239,10 @@ func TestStaticFromConfigInvalidClusterParams(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"invalid_params": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 32, MaxDepth: 24, MeanSubnetDifference: 0.2}, // Invalid: minDepth > maxDepth
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 32, MaxDepth: 24, MeanSubnetDifference: 0.2}, // Invalid: minDepth > maxDepth
+					},
 				},
 			},
 		},
@@ -266,8 +280,10 @@ func TestStaticFromConfigMaxDepthAbove32(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"maxdepth_too_large": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 24, MaxDepth: 33, MeanSubnetDifference: 0.2}, // Invalid: maxDepth > 32
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 24, MaxDepth: 33, MeanSubnetDifference: 0.2}, // Invalid: maxDepth > 32
+					},
 				},
 			},
 		},
@@ -299,9 +315,11 @@ func TestStaticFromConfigTiming(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"timing_test": {
-				EndpointRegex: ".*\\.html$",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 5, MinDepth: 20, MaxDepth: 28, MeanSubnetDifference: 0.3},
+				TrieCommon: config.TrieCommon{
+					EndpointRegex: ".*\\.html$",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 5, MinDepth: 20, MaxDepth: 28, MeanSubnetDifference: 0.3},
+					},
 				},
 			},
 		},
@@ -413,8 +431,10 @@ Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"test_trie": {
-				ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
-				UseForJail:     []bool{true},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
+					UseForJail:     []bool{true},
+				},
 			},
 		},
 	}
@@ -494,8 +514,10 @@ EvilScraper/2.0
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"test_trie": {
-				ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
-				UseForJail:     []bool{true},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
+					UseForJail:     []bool{true},
+				},
 			},
 		},
 	}
@@ -571,10 +593,12 @@ Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"test_trie": {
-				StartTime:      &startTime,
-				EndTime:        &endTime,
-				ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
-				UseForJail:     []bool{true},
+				TrieCommon: config.TrieCommon{
+					StartTime:      &startTime,
+					EndTime:        &endTime,
+					ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
+					UseForJail:     []bool{true},
+				},
 			},
 		},
 	}
@@ -666,8 +690,10 @@ EvilScraper/2.0
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"test_trie": {
-				ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
-				UseForJail:     []bool{true},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
+					UseForJail:     []bool{true},
+				},
 			},
 		},
 	}
@@ -742,8 +768,10 @@ func TestStaticWhitelistBeatsManualBlacklist(t *testing.T) {
 			},
 			StaticTries: map[string]*config.TrieConfig{
 				"test_trie": {
-					ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
-					UseForJail:     []bool{true},
+					TrieCommon: config.TrieCommon{
+						ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
+						UseForJail:     []bool{true},
+					},
 				},
 			},
 		}

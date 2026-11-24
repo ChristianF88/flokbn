@@ -119,10 +119,23 @@ holds a write token, and tests run in the CI job it requires.
   parse is IP-only when no trie filters and the caller does not want the requests,
   else full. Tries without filters share one sorted IP list (`parsedLog.sortedIPs`);
   tries with filters go through the single request filter (`filterResult.add` in
-  `analysis/filter.go`, concurrent above 50,000 requests). The `[global]` list files
-  are read once per run (`analysis/lists.go`). Golden snapshots of the observable
-  output live in `analysis/testdata/static_pipeline/` (regenerate only for an intended
-  change: `go test ./analysis -run TestStaticPipelineGolden -update`).
+  `analysis/filter.go`, concurrent above 50,000 requests). Golden snapshots of the
+  observable output live in `analysis/testdata/static_pipeline/` (regenerate only for
+  an intended change: `go test ./analysis -run TestStaticPipelineGolden -update`).
+- **Trie tables in config** (`config/config.go`): `TrieConfig` (`[static.<name>]`) and
+  `SlidingTrieConfig` (`[live.<name>]`) embed one `TrieCommon` by value: regex filters
+  with their compiled state, time bounds, cluster-arg sets, `useForJail`. Its fields
+  and methods are promoted (`tc.UserAgentRegex`, `tc.ShouldIncludeRequest(req)`), but
+  a composite literal must name it:
+  `config.TrieConfig{TrieCommon: config.TrieCommon{UserAgentRegex: "bot"}}`.
+  Both tables share one parser (`TrieCommon.parse`, `parseCIDRRanges`) and one
+  validation loop (`Config.eachTrie`); add a shared key there, not per table.
+- **`[global]` list files** (whitelist, blacklist, both User-Agent lists) are read once
+  per `Config` (`config/lists.go`): the first `Load...` call reads the file - in a CLI
+  run that is `Validate` at the barrier - and every later call returns the kept
+  entries or the kept error. The static pipeline, the ban publish and the live loop
+  therefore enforce exactly what was validated. An edited list file needs a new
+  `Config` (a new run).
 - **IPv4-only gate:** discriminator is `len(ipNet.Mask) != 4` (4 bytes = IPv4,
   16 = IPv6 incl. IPv4-mapped `::ffff:`). Rejected at config load; skipped/kept-verbatim
   in hot paths as defense-in-depth.

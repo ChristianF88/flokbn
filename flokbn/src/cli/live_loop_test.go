@@ -154,12 +154,14 @@ func testClusterArgSet() config.ClusterArgSet {
 func newWindowConfigSized(t *testing.T, endpointRegex string, useForJail bool, maxTime time.Duration, maxSize int) *config.SlidingTrieConfig {
 	t.Helper()
 	stc := &config.SlidingTrieConfig{
-		EndpointRegex:          endpointRegex,
+		TrieCommon: config.TrieCommon{
+			EndpointRegex:  endpointRegex,
+			ClusterArgSets: []config.ClusterArgSet{testClusterArgSet()},
+			UseForJail:     []bool{useForJail},
+		},
 		SlidingWindowMaxTime:   maxTime,
 		SlidingWindowMaxSize:   maxSize,
 		SleepBetweenIterations: 0, // keep the loop fast in tests
-		ClusterArgSets:         []config.ClusterArgSet{testClusterArgSet()},
-		UseForJail:             []bool{useForJail},
 	}
 	if err := stc.CompileRegex(); err != nil {
 		t.Fatalf("CompileRegex: %v", err)

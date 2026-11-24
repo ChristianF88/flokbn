@@ -60,8 +60,10 @@ func TestStaticUnreadableUAWhitelistFailsLoud(t *testing.T) {
 			// NO UserAgentRegex / EndpointRegex / StartTime / EndTime: must not
 			// force needsNonIPFields=true, otherwise the full path masks the bug.
 			"t": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -116,8 +118,10 @@ func TestStaticUnreadableUABlacklistFailsLoud(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"t": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -183,9 +187,11 @@ func TestStaticWithRequestsUnreadableUAWhitelistFailsLoud(t *testing.T) {
 			// reached this through Static()'s dispatch it would pick the full path;
 			// here we call StaticWithRequests directly, which is always the full path.
 			"t": {
-				UserAgentRegex: "Mozilla",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					UserAgentRegex: "Mozilla",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -254,9 +260,11 @@ func TestStaticWithRequestsUnreadableUABlacklistFailsLoud(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"t": {
-				UserAgentRegex: "Mozilla",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					UserAgentRegex: "Mozilla",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -305,8 +313,10 @@ func TestStaticOmittedUAListFastPathIntact(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"t": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},

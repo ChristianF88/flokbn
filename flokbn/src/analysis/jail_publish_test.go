@@ -48,8 +48,10 @@ func publishCfg(t *testing.T, dir, logContent string) *config.Config {
 		Static: &config.StaticConfig{LogFile: logFile, LogFormat: publishLogFormat},
 		StaticTries: map[string]*config.TrieConfig{
 			"t": {
-				ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
-				UseForJail:     []bool{true},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5}},
+					UseForJail:     []bool{true},
+				},
 			},
 		},
 	}
