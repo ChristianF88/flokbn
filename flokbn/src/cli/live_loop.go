@@ -558,11 +558,7 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 
 	// Publish the snapshot before the iteration line so anyone reacting
 	// to the log already sees the matching /stats state.
-	if l.stats != nil {
-		l.statsState.uaActiveWhitelistIPs = len(l.uaWhitelistIPs)
-		l.statsState.uaActiveBlacklistIPs = len(l.uaBlacklistIPs)
-		l.publishSnapshot(loopEnd, false)
-	}
+	l.publishSnapshot(loopEnd, false)
 
 	l.logger.Info("iteration",
 		"window", windows.requests,
@@ -707,6 +703,12 @@ func (l *liveLoop) publishSnapshot(duration time.Duration, heartbeat bool) {
 	if l.stats == nil {
 		return
 	}
+	// The number of tracked listed-UA IPs is read here, for every snapshot:
+	// an iteration adds and forgets IPs, and the idle path forgets them too
+	// (purgeUserAgentIPs), so a heartbeat snapshot must not repeat the counts
+	// of the last iteration.
+	l.statsState.uaActiveWhitelistIPs = len(l.uaWhitelistIPs)
+	l.statsState.uaActiveBlacklistIPs = len(l.uaBlacklistIPs)
 	l.stats.publish(buildSnapshot(l.statsState, l.ing, l.cfg, l.windows, l.clusterStats, &l.jail, duration, l.sleepS, heartbeat))
 }
 
