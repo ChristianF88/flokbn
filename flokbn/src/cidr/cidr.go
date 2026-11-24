@@ -2,6 +2,8 @@ package cidr
 
 import (
 	"strings"
+
+	"github.com/ChristianF88/flokbn/iputils"
 )
 
 // NumericCIDR represents a CIDR range using numeric values to avoid string allocations
@@ -14,44 +16,11 @@ type NumericCIDR struct {
 // Uses manual byte building to avoid fmt.Sprintf allocation overhead.
 func (nc NumericCIDR) String() string {
 	// Max: "255.255.255.255/255" = 19 bytes (PrefixLen is uint8, can be > 99)
-	var buf [19]byte
-	pos := 0
-
-	pos = appendOctet(buf[:], pos, byte(nc.IP>>24))
-	buf[pos] = '.'
-	pos++
-	pos = appendOctet(buf[:], pos, byte(nc.IP>>16))
-	buf[pos] = '.'
-	pos++
-	pos = appendOctet(buf[:], pos, byte(nc.IP>>8))
-	buf[pos] = '.'
-	pos++
-	pos = appendOctet(buf[:], pos, byte(nc.IP))
+	var buf [iputils.MaxIPv4Len + 4]byte
+	pos := iputils.PutIPv4(buf[:], nc.IP)
 	buf[pos] = '/'
-	pos++
-	pos = appendOctet(buf[:], pos, nc.PrefixLen)
-
+	pos = iputils.PutUint8(buf[:], pos+1, nc.PrefixLen)
 	return string(buf[:pos])
-}
-
-func appendOctet(buf []byte, pos int, v byte) int {
-	if v >= 100 {
-		buf[pos] = '0' + v/100
-		pos++
-		buf[pos] = '0' + (v%100)/10
-		pos++
-		buf[pos] = '0' + v%10
-		pos++
-	} else if v >= 10 {
-		buf[pos] = '0' + v/10
-		pos++
-		buf[pos] = '0' + v%10
-		pos++
-	} else {
-		buf[pos] = '0' + v
-		pos++
-	}
-	return pos
 }
 
 // LargestCIDRSize finds the largest CIDR block size that fits at the given start address
