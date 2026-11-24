@@ -51,8 +51,10 @@ func TestInvalidClusterSetKeepsUseForJailAligned(t *testing.T) {
 			t.Run(runName+"/"+tc.name, func(t *testing.T) {
 				cfg := publishCfg(t, t.TempDir(), alignmentLog())
 				cfg.StaticTries["t"] = &config.TrieConfig{
-					ClusterArgSets: []config.ClusterArgSet{invalid, valid},
-					UseForJail:     tc.useForJail,
+					TrieCommon: config.TrieCommon{
+						ClusterArgSets: []config.ClusterArgSet{invalid, valid},
+						UseForJail:     tc.useForJail,
+					},
 				}
 
 				out, err := run(cfg)

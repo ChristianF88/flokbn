@@ -30,7 +30,7 @@ flokbn uses TOML configuration files for complex multi-trie setups. Both CLI fla
 
 A config file may contain both `[static]` and `[live]` sections; the `static` command only reads `[static]` (plus `[global]`/`[log]`), the `live` command only reads `[live]`. Keeping one file per mode is still the clearer setup.
 
-Each of the four top-level names must be a table: a `[global]` header followed by `key = value` lines. Writing one as a value (`global = "x"`) or as an array of tables (`[[global]]`) aborts the load with `section [global] must be a table`.
+Each of the four top-level names must be a table: a `[global]` header followed by `key = value` lines. Writing one as a value (`global = "x"`) or as an array of tables (`[[global]]`) aborts the load with `section [global] must be a table`. The same goes for a trie or window one level down: `[[static.NAME]]` or `[[live.NAME]]` aborts the load with `section [static.NAME] must be a table`.
 
 ## [global] Section
 
@@ -156,7 +156,7 @@ Enforced at load/startup (the run aborts with an error):
 3. `statsListen`, when set, must be a valid `host:port`; `topTalkers` must be >= 0. `listen`, when set, must be an IP address or host name without a port. `tlsCert` and `tlsKey` must be set together and load as a key pair; `tlsClientCA` requires both and must contain at least one PEM certificate.
 4. Regex patterns and duration strings must compile/parse
 5. When using `--config`, most other CLI flags produce an error (static allows `--tui`, `--compact`, `--plain`; live allows only `--logLevel`)
-6. **Unknown top-level sections and unknown keys are rejected.** A misspelled section header (e.g. `[gloabl]`, `[satic]`) aborts the load naming the unknown section. A known section that is not a table (`global = "x"`, `[[global]]`) aborts the load with `section [global] must be a table`. Unknown keys in `[global]`, `[static]`, `[live]`, `[log]`, and every `[static.NAME]`/`[live.NAME]` trie sub-table are rejected naming the offending key and section. A wrong-typed scalar (e.g. `port = 8080` as an integer instead of a string) also fails loud at load.
+6. **Unknown top-level sections and unknown keys are rejected.** A misspelled section header (e.g. `[gloabl]`, `[satic]`) aborts the load naming the unknown section. A known section that is not a table (`global = "x"`, `[[global]]`) aborts the load with `section [global] must be a table`. So does a trie or window written as an array of tables (`[[static.NAME]]`, `[[live.NAME]]`). Unknown keys in `[global]`, `[static]`, `[live]`, `[log]`, and every `[static.NAME]`/`[live.NAME]` trie sub-table are rejected naming the offending key and section. A wrong-typed scalar (e.g. `port = 8080` as an integer instead of a string) also fails loud at load.
 7. `[log]` rejects invalid `level`/`format` values.
 8. **Each `clusterArgSets` row must have exactly 4 numeric values** `[minSize, minDepth, maxDepth, threshold]`:
    - `minSize`: a whole number from `1` to `4294967295`

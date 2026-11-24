@@ -62,8 +62,8 @@ func TestGeneralUniqueIPsCountsWholeLog(t *testing.T) {
 			LogFormat: publishLogFormat,
 		},
 		StaticTries: compileTries(t, map[string]*config.TrieConfig{
-			"admin": {EndpointRegex: "^/admin"},
-			"login": {EndpointRegex: "^/login"},
+			"admin": {TrieCommon: config.TrieCommon{EndpointRegex: "^/admin"}},
+			"login": {TrieCommon: config.TrieCommon{EndpointRegex: "^/login"}},
 		}),
 	}
 
@@ -151,7 +151,7 @@ func TestUserAgentIPListsSorted(t *testing.T) {
 				},
 				StaticTries: compileTries(t, map[string]*config.TrieConfig{
 					"a": {},
-					"b": {EndpointRegex: "^/"},
+					"b": {TrieCommon: config.TrieCommon{EndpointRegex: "^/"}},
 				}),
 			}
 			first, _, err := StaticWithRequests(cfg)
@@ -195,7 +195,7 @@ func TestInvalidIPWarningNamesTrie(t *testing.T) {
 				out, _, err := StaticWithRequests(cfg)
 				return out, err
 			},
-			map[string]*config.TrieConfig{"alpha": {}, "beta": {EndpointRegex: "^/"}},
+			map[string]*config.TrieConfig{"alpha": {}, "beta": {TrieCommon: config.TrieCommon{EndpointRegex: "^/"}}},
 		},
 	}
 	for name, tc := range runs {

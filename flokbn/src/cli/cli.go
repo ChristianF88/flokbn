@@ -3,12 +3,10 @@ package cli
 import (
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/logging"
 	"github.com/ChristianF88/flokbn/logparser"
 	"github.com/ChristianF88/flokbn/version"
@@ -344,8 +342,10 @@ func handleLiveFlagsMode(c *cli.Context) error {
 	}
 
 	slidingConfig := &config.SlidingTrieConfig{
-		UserAgentRegex:         c.String("useragentRegex"),
-		EndpointRegex:          c.String("endpointRegex"),
+		TrieCommon: config.TrieCommon{
+			UserAgentRegex: c.String("useragentRegex"),
+			EndpointRegex:  c.String("endpointRegex"),
+		},
 		SlidingWindowMaxTime:   c.Duration("slidingWindowMaxTime"),
 		SlidingWindowMaxSize:   c.Int("slidingWindowMaxSize"),
 		SleepBetweenIterations: c.Int("sleepBetweenIterations"),
@@ -450,8 +450,10 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	diags := cfg.Diagnostics()
 
 	trieConfig := &config.TrieConfig{
-		UserAgentRegex: c.String("useragentRegex"),
-		EndpointRegex:  c.String("endpointRegex"),
+		TrieCommon: config.TrieCommon{
+			UserAgentRegex: c.String("useragentRegex"),
+			EndpointRegex:  c.String("endpointRegex"),
+		},
 	}
 
 	// A bad --useragentRegex/--endpointRegex routes into cfg.diags; the barrier
@@ -460,16 +462,11 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	trieConfig.CompileRegexInto("static.cli_trie", diags)
 
 	// Validate --rangesCidr into cfg.diags, storing ONLY valid IPv4 entries on the
-	// trie (drop IPv6/malformed before append - never store a bad entry, parity
-	// with the TOML cidrRanges path). A bare IPv4 address is stored as /32: the
-	// trie counts ranges via net.ParseCIDR, which rejects a bare address.
+	// trie (an IPv6/malformed value is never stored), with the rules and
+	// messages of the TOML cidrRanges path. A bare IPv4 address is stored as
+	// /32: the trie counts ranges via net.ParseCIDR, which rejects a bare address.
 	for i, cidrStr := range c.StringSlice("rangesCidr") {
-		normalized, ok := iputils.NormalizeIPv4CIDR(cidrStr)
-		if !ok {
-			diags.AddRaw(fmt.Sprintf("[static.cli_trie] invalid rangesCidr[%d] %s", i, strconv.Quote(cidrStr)))
-			continue
-		}
-		trieConfig.CIDRRanges = append(trieConfig.CIDRRanges, normalized)
+		trieConfig.AddCIDRRange("rangesCidr", "static.cli_trie", i, cidrStr, diags)
 	}
 
 	// A malformed --startTime/--endTime hard-errors here (parseFlexibleTime); the

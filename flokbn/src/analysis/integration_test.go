@@ -210,33 +210,41 @@ func buildCLIConfig(t *testing.T, logFile string) *config.Config {
 		StaticTries: map[string]*config.TrieConfig{
 			"trie_1": {
 				CIDRRanges: []string{"14.160.0.0/12", "77.88.0.0/16"},
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 1000, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
-					{MinClusterSize: 2000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 1000, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
+						{MinClusterSize: 2000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+					},
+					UseForJail: []bool{true, true},
 				},
-				UseForJail: []bool{true, true},
 			},
 			"trie_2": {
-				UserAgentRegex: ".*Googlebot.*",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 500, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					UserAgentRegex: ".*Googlebot.*",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 500, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
+					UseForJail: []bool{true},
 				},
-				UseForJail: []bool{true},
 			},
 			"trie_3": {
-				EndpointRegex: "/api/.*",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 1000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					EndpointRegex: "/api/.*",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 1000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+					},
+					UseForJail: []bool{true},
 				},
-				UseForJail: []bool{true},
 			},
 			"trie_4": {
-				StartTime: &startTime,
-				EndTime:   &endTime,
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 1000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					StartTime: &startTime,
+					EndTime:   &endTime,
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 1000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+					},
+					UseForJail: []bool{true},
 				},
-				UseForJail: []bool{true},
 			},
 		},
 	}
@@ -645,9 +653,11 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 
 	// CLI path: invalid regex causes CompileRegex to fail (error channel preserved)
 	cliTrie := &config.TrieConfig{
-		UserAgentRegex: "[invalid regex",
-		ClusterArgSets: []config.ClusterArgSet{
-			{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
+		TrieCommon: config.TrieCommon{
+			UserAgentRegex: "[invalid regex",
+			ClusterArgSets: []config.ClusterArgSet{
+				{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
+			},
 		},
 	}
 	cliErr := cliTrie.CompileRegex()
@@ -696,7 +706,9 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 
 	// CLI path
 	cliTrie := &config.TrieConfig{
-		EndpointRegex: "*invalid",
+		TrieCommon: config.TrieCommon{
+			EndpointRegex: "*invalid",
+		},
 	}
 	cliErr := cliTrie.CompileRegex()
 	if cliErr == nil {
@@ -723,8 +735,10 @@ func TestInvalidLogFileParity(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"test": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -738,8 +752,10 @@ func TestInvalidLogFileParity(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"test": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -800,8 +816,10 @@ func TestInvalidClusterArgsParity(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"bad_depth": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 32, MaxDepth: 24, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 32, MaxDepth: 24, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -861,8 +879,10 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"trie_1": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
+					},
 				},
 			},
 		},

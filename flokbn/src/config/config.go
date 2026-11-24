@@ -43,12 +43,22 @@ type ClusterArgSet struct {
 	MeanSubnetDifference float64
 }
 
-type TrieConfig struct {
-	UserAgentRegex string     `toml:"useragentRegex"`
-	EndpointRegex  string     `toml:"endpointRegex"`
+// TrieCommon holds what a [static.<name>] trie and a [live.<name>] window have
+// in common: the request filters and the cluster-arg sets with their jail
+// flags. TrieConfig and SlidingTrieConfig embed it by value, so its fields and
+// methods are promoted (tc.UserAgentRegex, tc.ShouldIncludeRequest(req)) and a
+// call costs the same as on the outer type. Only a composite literal has to
+// name it:
+//
+//	config.TrieConfig{TrieCommon: config.TrieCommon{UserAgentRegex: "bot"}}
+type TrieCommon struct {
+	UserAgentRegex string `toml:"useragentRegex"`
+	EndpointRegex  string `toml:"endpointRegex"`
+	// StartTime and EndTime filter requests in a static trie. A live window
+	// parses and validates them the same way but does not apply them (the
+	// window is bounded by SlidingWindowMaxTime; see Config.LiveWarnings).
 	StartTime      *time.Time `toml:"startTime"`
 	EndTime        *time.Time `toml:"endTime"`
-	CIDRRanges     []string   `toml:"cidrRanges"`
 	ClusterArgSets []ClusterArgSet
 	UseForJail     []bool `toml:"useForJail"`
 
@@ -85,39 +95,18 @@ type TrieConfig struct {
 	useForJailHadError     bool
 }
 
+// TrieConfig is one [static.<name>] trie.
+type TrieConfig struct {
+	TrieCommon
+	CIDRRanges []string `toml:"cidrRanges"`
+}
+
+// SlidingTrieConfig is one [live.<name>] window.
 type SlidingTrieConfig struct {
-	UserAgentRegex         string        `toml:"useragentRegex"`
-	EndpointRegex          string        `toml:"endpointRegex"`
+	TrieCommon
 	SlidingWindowMaxTime   time.Duration `toml:"slidingWindowMaxTime"`
 	SlidingWindowMaxSize   int           `toml:"slidingWindowMaxSize"`
 	SleepBetweenIterations int           `toml:"sleepBetweenIterations"`
-	ClusterArgSets         []ClusterArgSet
-	UseForJail             []bool `toml:"useForJail"`
-
-	// Sliding tries do not consume these bounds for filtering (the window is
-	// time-bounded by SlidingWindowMaxTime); they exist only so Validate(LiveMode)
-	// can surface a malformed or inverted [live.<name>] startTime/endTime, parsed
-	// identically to a [static.<name>] bound.
-	StartTime          *time.Time `toml:"-"`
-	EndTime            *time.Time `toml:"-"`
-	StartTimeHasOffset bool       `toml:"-"`
-	EndTimeHasOffset   bool       `toml:"-"`
-	// Original timestamp literal (see TrieConfig.startTimeRaw).
-	startTimeRaw string
-	endTimeRaw   string
-
-	// Compiled regex patterns for fast filtering
-	userAgentRegexCompiled *regexp.Regexp
-	endpointRegexCompiled  *regexp.Regexp
-
-	// Required-literal prefilters screen inputs before the regex runs.
-	// nil means no prefilter is available (run the regex directly).
-	userAgentPrefilter *regexprefilter.Prefilter
-	endpointPrefilter  *regexprefilter.Prefilter
-
-	// CFG-02 collect-all guard flags (see TrieConfig).
-	clusterArgSetsHadError bool
-	useForJailHadError     bool
 
 	// ignoredKeys lists the keys present in this [live.<name>] table that are
 	// accepted but have no effect in live mode (see Config.LiveWarnings).
@@ -224,7 +213,8 @@ var logScalarKeys = map[string]struct{}{
 	"format": {},
 }
 
-// trieKeys are the recognized keys of a [static.<name>] trie sub-table.
+// trieKeys are the recognized keys of a [static.<name>] trie sub-table: the
+// keys TrieCommon.parse reads, plus cidrRanges.
 var trieKeys = map[string]struct{}{
 	"useragentRegex": {},
 	"endpointRegex":  {},
@@ -236,21 +226,26 @@ var trieKeys = map[string]struct{}{
 }
 
 // slidingTrieKeys are the recognized keys of a [live.<name>] sliding-trie
-// sub-table: the trie filter keys plus the per-window sliding parameters.
+// sub-table: every static trie key plus the per-window sliding parameters.
 // startTime/endTime/cidrRanges are accepted (parity with the static trie key
 // surface) but not consumed by sliding tries; this matches the prior tolerant
 // behavior so a config that set them does not start failing now.
-var slidingTrieKeys = map[string]struct{}{
-	"useragentRegex":         {},
-	"endpointRegex":          {},
-	"startTime":              {},
-	"endTime":                {},
-	"cidrRanges":             {},
-	"clusterArgSets":         {},
-	"useForJail":             {},
-	"slidingWindowMaxTime":   {},
-	"slidingWindowMaxSize":   {},
-	"sleepBetweenIterations": {},
+var slidingTrieKeys = withKeys(trieKeys,
+	"slidingWindowMaxTime",
+	"slidingWindowMaxSize",
+	"sleepBetweenIterations",
+)
+
+// withKeys returns a copy of base extended by extra.
+func withKeys(base map[string]struct{}, extra ...string) map[string]struct{} {
+	keys := make(map[string]struct{}, len(base)+len(extra))
+	for k := range base {
+		keys[k] = struct{}{}
+	}
+	for _, k := range extra {
+		keys[k] = struct{}{}
+	}
+	return keys
 }
 
 type Config struct {
@@ -279,6 +274,10 @@ type Config struct {
 	// cfg.diags never accumulates across calls. A hand-built Config (flags mode
 	// or tests) may leave this nil; ensureDiags allocates lazily.
 	diags *ConfigDiagnostics
+
+	// lists keeps the content of the [global] list files after their first
+	// read, so one run reads each file once (see lists.go).
+	lists listFiles
 }
 
 // Diagnostics returns the persistent parse/flags-phase accumulator, allocating
@@ -316,10 +315,13 @@ const (
 //   - Because it never mutates cfg.diags and every check is deterministic,
 //     calling Validate twice yields identical Len() and identical Report().
 //
-// I/O: Validate is NO LONGER pure - it READS the configured whitelist/blacklist/
-// UA-list files and the log format. It remains side-effect-free w.r.t. on-disk
-// state (it only reads). It is called EXACTLY ONCE per run, at the barrier seam
-// in executeStaticAnalysis / executeLiveAnalysis.
+// I/O: Validate is NOT pure - it READS the configured whitelist/blacklist/
+// UA-list files (unless this Config already read them: each list file is read
+// once per Config and kept, see lists.go), the jail file, and stats the log
+// file and plot directory. It remains side-effect-free w.r.t. on-disk state
+// (it only reads). It is called EXACTLY ONCE per run, at the barrier seam in
+// executeStaticAnalysis / executeLiveAnalysis; the run that follows gets the
+// list entries read here without opening the files again.
 //
 // NIL-SAFETY: Validate derefs c.Static for the logFormat + logfile-exists checks
 // (guarded by `if c.Static != nil`) and calls validateLiveInto (which guards a
@@ -334,20 +336,15 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 		diags.msgs = append(diags.msgs, c.diags.msgs...)
 	}
 
+	// Per-table checks: the same for a [static.<name>] trie and a
+	// [live.<name>] window.
+	c.eachTrie(mode, func(section string, t *TrieCommon) {
+		t.validateTimestamps(diags, section)
+		t.validateUseForJailAlignment(diags, section)
+	})
+
 	switch mode {
 	case StaticMode:
-		for name, tc := range c.StaticTries {
-			if tc == nil {
-				continue
-			}
-			validateTrieTimestamps(diags, "static."+name,
-				tc.startTimeRaw, tc.endTimeRaw,
-				tc.StartTime, tc.EndTime,
-				tc.StartTimeHasOffset, tc.EndTimeHasOffset)
-			validateUseForJailAlignment("static."+name,
-				tc.ClusterArgSets, tc.UseForJail,
-				tc.clusterArgSetsHadError, tc.useForJailHadError, diags)
-		}
 		// logFormat: the SAME empty->default fallback analysis applies (an empty
 		// logFormat is valid; the default is used). validateFormat("") FAILS for
 		// the missing %h, so the fallback MUST precede the check.
@@ -362,7 +359,7 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 			} else {
 				// A filter needing a field the format never extracts would
 				// silently match nothing (or everything); reject it here.
-				c.validateFilterFields(diags, effFormat)
+				c.validateFilterFields(diags, StaticMode, effFormat)
 			}
 			// logFile-exists migrated from the CLI handler (CFG-02): a configured
 			// but absent logfile enumerates alongside (e.g.) a bad startTime instead
@@ -382,31 +379,40 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 		}
 		c.validateListFiles(diags)
 		// Static processes the jail only when both jailFile and banFile are set
-		// (see ProcessJailWithWhitelist's guard); validate the jail at the barrier
-		// only when it will actually be loaded.
+		// (see the guard in analysis.publishJailAndBans); validate the jail at
+		// the barrier only when it will actually be loaded.
 		if c.Global != nil && c.Global.JailFile != "" && c.Global.BanFile != "" {
 			c.validateJailFile(diags)
 		}
 	case LiveMode:
-		for name, stc := range c.LiveTries {
-			if stc == nil {
-				continue
-			}
-			validateTrieTimestamps(diags, "live."+name,
-				stc.startTimeRaw, stc.endTimeRaw,
-				stc.StartTime, stc.EndTime,
-				stc.StartTimeHasOffset, stc.EndTimeHasOffset)
-			validateUseForJailAlignment("live."+name,
-				stc.ClusterArgSets, stc.UseForJail,
-				stc.clusterArgSetsHadError, stc.useForJailHadError, diags)
-		}
 		c.validateLiveInto(diags)
 		c.validateListFiles(diags)
-		// Live always loads the jail (runLiveLoop reads it unconditionally), so
+		// Live always loads the jail (newLiveLoop reads it unconditionally), so
 		// validate it at the barrier in every live run.
 		c.validateJailFile(diags)
 	}
 	return diags
+}
+
+// eachTrie calls fn for every table of the mode - the [static.<name>] tries or
+// the [live.<name>] windows - with the table's section name as diagnostics
+// spell it ("static.<name>" / "live.<name>", no brackets) and the part both
+// kinds share. Tables are visited in map order.
+func (c *Config) eachTrie(mode RunMode, fn func(section string, t *TrieCommon)) {
+	switch mode {
+	case StaticMode:
+		for name, tc := range c.StaticTries {
+			if tc != nil {
+				fn("static."+name, &tc.TrieCommon)
+			}
+		}
+	case LiveMode:
+		for name, stc := range c.LiveTries {
+			if stc != nil {
+				fn("live."+name, &stc.TrieCommon)
+			}
+		}
+	}
 }
 
 // plotPathDiagnostic returns a non-empty diagnostic line when a configured
@@ -435,10 +441,12 @@ func plotPathDiagnostic(plotPath string) string {
 // verbatim AddRaw line (the loader error text already quotes the path and
 // offending value with the unified grammar). This is the SOLE list-load-for-
 // validation site: the flags handler must NOT also load lists (that would
-// double-count). The list bytes validated here are read again by the downstream
-// enforcers (runLiveLoop / computeGlobalFilters / ProcessJailWithWhitelist); the
-// 2-3x read with a TOCTOU window is accepted (documented in the commit body) -
-// the barrier's job is to catch a structurally broken/unreadable list at start.
+// double-count).
+//
+// The entries read here are kept on the Config (lists.go): the enforcers
+// downstream (analysis.loadGlobalLists, the static ban publish, newLiveLoop)
+// call the same Load methods and get these entries back, so a run reads each
+// list file once and enforces exactly what was validated.
 //
 // The c.Global wrappers internally guard a nil c.Global and an empty path, so a
 // nil/absent [global] section yields zero list-file diagnostics.
@@ -469,26 +477,24 @@ func (c *Config) validateJailFile(diags *ConfigDiagnostics) {
 	}
 }
 
-// validateTrieTimestamps runs the (a) startTime-format, (b) endTime-format, and
-// (c) endTime<startTime range checks for one trie, in that order, with NO early
-// return: a single trie with BOTH a bad startTime AND a bad endTime yields TWO
+// validateTimestamps runs the (a) startTime-format, (b) endTime-format, and
+// (c) endTime<startTime range checks for one table, in that order, with NO early
+// return: a single table with BOTH a bad startTime AND a bad endTime yields TWO
 // messages. The section is passed WITHOUT brackets (Add/AddRange add them) and
 // matches the unknown-key grammar prefix ("static."+name / "live."+name).
-func validateTrieTimestamps(diags *ConfigDiagnostics, section string,
-	startRaw, endRaw string, start, end *time.Time, startHasOffset, endHasOffset bool) {
-
+func (t *TrieCommon) validateTimestamps(diags *ConfigDiagnostics, section string) {
 	// Format: raw captured (non-empty) but never parsed => no accepted layout matched.
-	if startRaw != "" && start == nil {
-		diags.Add(section, "startTime", startRaw, TimeBoundFormats, nil)
+	if t.startTimeRaw != "" && t.StartTime == nil {
+		diags.Add(section, "startTime", t.startTimeRaw, TimeBoundFormats, nil)
 	}
-	if endRaw != "" && end == nil {
-		diags.Add(section, "endTime", endRaw, TimeBoundFormats, nil)
+	if t.endTimeRaw != "" && t.EndTime == nil {
+		diags.Add(section, "endTime", t.endTimeRaw, TimeBoundFormats, nil)
 	}
 	// Range: only when both bounds parsed. The offset-equality gate matches
 	// makeTimeBounds (URGENT-09): a zone-less wall-clock bound and an
 	// offset-bearing instant are not comparable via time.Before, so skip then.
-	if start != nil && end != nil && startHasOffset == endHasOffset && end.Before(*start) {
-		diags.AddRange(section, endRaw, startRaw)
+	if t.StartTime != nil && t.EndTime != nil && t.StartTimeHasOffset == t.EndTimeHasOffset && t.EndTime.Before(*t.StartTime) {
+		diags.AddRange(section, t.endTimeRaw, t.startTimeRaw)
 	}
 }
 
@@ -510,6 +516,41 @@ func checkTopLevelSectionTypes(raw map[string]any) error {
 		if _, isTable := value.(map[string]any); !isTable {
 			return fmt.Errorf("section [%s] must be a table, got %s (write it as a [%s] header followed by key = value lines)",
 				name, tomlTypeName(value), name)
+		}
+	}
+	return nil
+}
+
+// checkSubTableTypes rejects a trie or window written as an array of tables
+// (`[[static.name]]`, `[[live.name]]`). Such an entry decodes to a list, so
+// the dispatch in LoadConfig would not parse it as a trie, and the section
+// parser would report its name as an unknown key of the parent section. It is
+// the same mistake as `[[static]]` one level down and gets the same hard
+// error. With several offenders the first by name is reported.
+//
+// Only an array of tables under a non-scalar key qualifies: any other
+// non-table value is a misspelled or misplaced key and stays an unknown-key
+// diagnostic, and a recognized scalar key keeps its own type error.
+func checkSubTableTypes(raw map[string]any) error {
+	for _, parent := range [...]struct {
+		name       string
+		scalarKeys map[string]struct{}
+	}{{"static", staticScalarKeys}, {"live", liveScalarKeys}} {
+		section, _ := raw[parent.name].(map[string]any)
+		var offenders []string
+		for key, value := range section {
+			if _, isScalar := parent.scalarKeys[key]; isScalar {
+				continue
+			}
+			if _, isArrayOfTables := value.([]map[string]any); isArrayOfTables {
+				offenders = append(offenders, key)
+			}
+		}
+		if len(offenders) > 0 {
+			sort.Strings(offenders)
+			name := parent.name + "." + offenders[0]
+			return fmt.Errorf("section [%s] must be a table, got %s (write it as a [%s] header followed by key = value lines)",
+				name, tomlTypeName(section[offenders[0]]), name)
 		}
 	}
 	return nil
@@ -551,6 +592,9 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	if err := checkTopLevelSectionTypes(rawConfig); err != nil {
+		return nil, err
+	}
+	if err := checkSubTableTypes(rawConfig); err != nil {
 		return nil, err
 	}
 
@@ -1019,28 +1063,23 @@ func parseTimeBound(m map[string]any, key string) (raw string, t *time.Time, has
 	return s, nil, false, nil
 }
 
-func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*TrieConfig, error) {
-	section := "static." + name
-	checkUnknownKeys(m, trieKeys, "["+section+"] trie", diags)
-	uaRegex, epRegex, err := parseRegexFields(m)
-	if err != nil {
-		return nil, err
+// parse reads the keys a [static.<name>] and a [live.<name>] table share into
+// t: the two regex filters (compiled here), clusterArgSets, useForJail and the
+// two time bounds. It is THE parser of those keys for both tables, so the two
+// cannot drift. section is "static.<name>" / "live.<name>". A wrong-TYPED
+// value is a hard error; every other problem is recorded in diags and parsing
+// continues. cidrRanges is not read here: each table parses it last, after its
+// own keys (parseCIDRRanges).
+func (t *TrieCommon) parse(section string, m map[string]any, diags *ConfigDiagnostics) error {
+	var err error
+	if t.UserAgentRegex, t.EndpointRegex, err = parseRegexFields(m); err != nil {
+		return err
 	}
-	clusterArgSets, clusterHadError, err := parseClusterArgSetsFromTOML(m, section, diags)
-	if err != nil {
-		return nil, err
+	if t.ClusterArgSets, t.clusterArgSetsHadError, err = parseClusterArgSetsFromTOML(m, section, diags); err != nil {
+		return err
 	}
-	useForJail, useForJailHadError, err := parseUseForJail(m, section, diags)
-	if err != nil {
-		return nil, err
-	}
-	tc := &TrieConfig{
-		UserAgentRegex:         uaRegex,
-		EndpointRegex:          epRegex,
-		ClusterArgSets:         clusterArgSets,
-		UseForJail:             useForJail,
-		clusterArgSetsHadError: clusterHadError,
-		useForJailHadError:     useForJailHadError,
+	if t.UseForJail, t.useForJailHadError, err = parseUseForJail(m, section, diags); err != nil {
+		return err
 	}
 	// ANTI-MISALIGNMENT (security): when a clusterArgSets row was dropped, the
 	// surviving (shorter) slice must NOT be jailed by a mis-sized useForJail.
@@ -1049,40 +1088,63 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 	// even a hypothetical barrier-bypass cannot apply useForJail[i] to a shifted
 	// survivor. The alignment check (in Validate) is skipped when either flag is
 	// set, so it never emits a spurious second mismatch.
-	if clusterHadError {
-		tc.UseForJail = nil
+	if t.clusterArgSetsHadError {
+		t.UseForJail = nil
 	}
-	tc.CompileRegexInto(section, diags)
-	// A non-empty but non-RFC3339 startTime/endTime sets the raw carrier (not the
-	// parsed pointer) and is surfaced as a diagnostic at Validate, not here; a
-	// wrong-TYPE value stays a hard fail-fast. The raw literal is also captured
+	t.CompileRegexInto(section, diags)
+	// A non-empty but unparseable startTime/endTime sets the raw carrier (not
+	// the parsed pointer) and is surfaced as a diagnostic at Validate, not here;
+	// a wrong-TYPE value stays a hard fail-fast. The raw literal is also captured
 	// on success so the range diagnostic echoes the operator's original text.
-	if tc.startTimeRaw, tc.StartTime, tc.StartTimeHasOffset, err = parseTimeBound(m, "startTime"); err != nil {
-		return nil, err
+	if t.startTimeRaw, t.StartTime, t.StartTimeHasOffset, err = parseTimeBound(m, "startTime"); err != nil {
+		return err
 	}
-	if tc.endTimeRaw, tc.EndTime, tc.EndTimeHasOffset, err = parseTimeBound(m, "endTime"); err != nil {
-		return nil, err
+	if t.endTimeRaw, t.EndTime, t.EndTimeHasOffset, err = parseTimeBound(m, "endTime"); err != nil {
+		return err
 	}
-	if v, present := m["cidrRanges"]; present {
-		arr, ok := v.([]any)
+	return nil
+}
+
+// parseCIDRRanges reads the cidrRanges key of a trie table and returns its
+// valid entries (a bare IPv4 address as /32). A non-array value or a
+// non-string element is a hard error.
+//
+// SECURITY: ONLY valid IPv4 entries are returned - an IPv6/malformed entry is
+// dropped so an invalid string never lands on TrieConfig.CIDRRanges (a
+// pre-barrier reader / negative-shift panic guard). COLLECT-ALL:
+// validateCIDRRangeEntry records each bad entry and the loop continues.
+func parseCIDRRanges(m map[string]any, section string, diags *ConfigDiagnostics) ([]string, error) {
+	v, present := m["cidrRanges"]
+	if !present {
+		return nil, nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("cidrRanges must be an array of strings, got %T", v)
+	}
+	var ranges []string
+	for i, item := range arr {
+		str, ok := item.(string)
 		if !ok {
-			return nil, fmt.Errorf("cidrRanges must be an array of strings, got %T", v)
+			return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
 		}
-		for i, item := range arr {
-			str, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
-			}
-			// SECURITY: append ONLY valid IPv4 entries - drop (continue) on an
-			// IPv6/malformed entry BEFORE the append so an invalid string never
-			// lands on tc.CIDRRanges (a pre-barrier reader / negative-shift panic
-			// guard). COLLECT-ALL: validateCIDRRangeEntry records each bad entry.
-			cidrStr, valid := validateCIDRRangeEntry("cidrRanges", section, i, str, diags)
-			if !valid {
-				continue
-			}
-			tc.CIDRRanges = append(tc.CIDRRanges, cidrStr)
+		if cidrStr, valid := validateCIDRRangeEntry("cidrRanges", section, i, str, diags); valid {
+			ranges = append(ranges, cidrStr)
 		}
+	}
+	return ranges, nil
+}
+
+func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*TrieConfig, error) {
+	section := "static." + name
+	checkUnknownKeys(m, trieKeys, "["+section+"] trie", diags)
+	tc := &TrieConfig{}
+	if err := tc.TrieCommon.parse(section, m, diags); err != nil {
+		return nil, err
+	}
+	var err error
+	if tc.CIDRRanges, err = parseCIDRRanges(m, section, diags); err != nil {
+		return nil, err
 	}
 	return tc, nil
 }
@@ -1125,28 +1187,10 @@ func validateCIDRRangeEntry(field, section string, i int, str string, diags *Con
 func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*SlidingTrieConfig, error) {
 	section := "live." + name
 	checkUnknownKeys(m, slidingTrieKeys, "["+section+"] sliding-trie", diags)
-	uaRegex, epRegex, err := parseRegexFields(m)
-	if err != nil {
-		return nil, err
-	}
-	clusterArgSets, clusterHadError, err := parseClusterArgSetsFromTOML(m, section, diags)
-	if err != nil {
-		return nil, err
-	}
-	useForJail, useForJailHadError, err := parseUseForJail(m, section, diags)
-	if err != nil {
-		return nil, err
-	}
 	stc := &SlidingTrieConfig{
-		UserAgentRegex: uaRegex,
-		EndpointRegex:  epRegex,
 		// Same default as the --sleepBetweenIterations flag; overwritten below
 		// when the key is present (an explicit 0 is honored).
 		SleepBetweenIterations: DefaultSleepBetweenIterations,
-		ClusterArgSets:         clusterArgSets,
-		UseForJail:             useForJail,
-		clusterArgSetsHadError: clusterHadError,
-		useForJailHadError:     useForJailHadError,
 	}
 	// Keys that are validated below but never consumed by a sliding trie; the
 	// live command warns about each one (Config.LiveWarnings).
@@ -1155,20 +1199,10 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 			stc.ignoredKeys = append(stc.ignoredKeys, key)
 		}
 	}
-	if clusterHadError {
-		stc.UseForJail = nil // belt-and-suspenders (see parseTrieConfig)
-	}
-	stc.CompileRegexInto(section, diags)
-	// Sliding tries never consume these bounds for filtering; they feed only
-	// Validate(LiveMode), so a [live.<n>] bound is parsed (and thus accepted or
-	// rejected) identically to a [static.<n>] bound via the shared helper. A live
-	// config that previously set a non-RFC3339 startTime/endTime was silently
-	// ignored and now fails load at the barrier (deliberate strictness increase,
-	// mirroring the cidrRanges validate-and-discard precedent in this function).
-	if stc.startTimeRaw, stc.StartTime, stc.StartTimeHasOffset, err = parseTimeBound(m, "startTime"); err != nil {
-		return nil, err
-	}
-	if stc.endTimeRaw, stc.EndTime, stc.EndTimeHasOffset, err = parseTimeBound(m, "endTime"); err != nil {
+	// Sliding tries never consume the time bounds for filtering; they feed only
+	// Validate(LiveMode), so a [live.<n>] bound is accepted or rejected exactly
+	// like a [static.<n>] bound.
+	if err := stc.TrieCommon.parse(section, m, diags); err != nil {
 		return nil, err
 	}
 	if v, present := m["slidingWindowMaxTime"]; present {
@@ -1198,25 +1232,11 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 	}
 	// cidrRanges is accepted (parity with the static trie key surface) but not
 	// consumed by sliding tries (SlidingTrieConfig has no CIDRRanges field, so a
-	// live config never reaches trie.CountInRange). We still validate-and-discard
-	// each entry so IPv6 fails loud at load identically to static mode. NOTE:
-	// this is a deliberate strictness increase - a live config that previously
-	// set an IPv6 cidrRanges value was tolerated (ignored) and now fails load;
-	// IPv4 cidrRanges remain tolerated-and-ignored exactly as before.
-	if v, present := m["cidrRanges"]; present {
-		arr, ok := v.([]any)
-		if !ok {
-			return nil, fmt.Errorf("cidrRanges must be an array of strings, got %T", v)
-		}
-		for i, item := range arr {
-			str, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
-			}
-			// Validate-and-discard (sliding tries do not consume cidrRanges); a
-			// bad entry records a diagnostic. COLLECT-ALL: never returns early.
-			validateCIDRRangeEntry("cidrRanges", section, i, str, diags)
-		}
+	// live config never reaches trie.CountInRange). The entries are still
+	// validated, and then discarded, so IPv6 fails loud at load identically to
+	// static mode; IPv4 cidrRanges are tolerated and ignored.
+	if _, err := parseCIDRRanges(m, section, diags); err != nil {
+		return nil, err
 	}
 	return stc, nil
 }
@@ -1227,23 +1247,35 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 // useForJail[i], so a present-but-mismatched array silently shifts and disables
 // operator-requested jail rules - the landmine the ticket calls out.
 //
-// GUARD (CFG-02, security): SKIP the check when clusterHadError || jailHadError
-// for this trie - EITHER producer dropped a row/element, shortening its slice,
+// GUARD (CFG-02, security): SKIP the check when clusterArgSetsHadError ||
+// useForJailHadError - EITHER producer dropped a row/element, shortening its slice,
 // which would emit a SPURIOUS mismatch. The guard trips on ANY error for the
 // trie (not per-row). The barrier already aborts on the producer's diagnostic.
 //
 // An OMITTED useForJail (len 0) is valid regardless of clusterArgSets length:
 // it is the explicit "cluster but never jail" default, an omitted-optional-
 // field, not a misalignment.
-func validateUseForJailAlignment(section string, clusterArgSets []ClusterArgSet, useForJail []bool, clusterHadError, jailHadError bool, diags *ConfigDiagnostics) {
-	if clusterHadError || jailHadError {
+func (t *TrieCommon) validateUseForJailAlignment(diags *ConfigDiagnostics, section string) {
+	if t.clusterArgSetsHadError || t.useForJailHadError {
 		return
 	}
-	if len(useForJail) == 0 {
+	if len(t.UseForJail) == 0 {
 		return
 	}
-	if len(useForJail) != len(clusterArgSets) {
-		diags.AddRaw(fmt.Sprintf("[%s] useForJail has %d entries but clusterArgSets has %d; they must match one-to-one (omit useForJail to apply no jail rules)", section, len(useForJail), len(clusterArgSets)))
+	if len(t.UseForJail) != len(t.ClusterArgSets) {
+		diags.AddRaw(fmt.Sprintf("[%s] useForJail has %d entries but clusterArgSets has %d; they must match one-to-one (omit useForJail to apply no jail rules)", section, len(t.UseForJail), len(t.ClusterArgSets)))
+	}
+}
+
+// AddCIDRRange appends one range that was given outside a config file (the
+// --rangesCidr flag) to CIDRRanges, applying the rules of a TOML cidrRanges
+// entry: a bare IPv4 address is stored as /32, and an IPv6 or malformed value
+// is not stored but recorded in diags with the same two messages. field and i
+// name the input in the message ("rangesCidr", position on the command line);
+// section is the trie's section name without brackets.
+func (tc *TrieConfig) AddCIDRRange(field, section string, i int, value string, diags *ConfigDiagnostics) {
+	if cidrStr, valid := validateCIDRRangeEntry(field, section, i, value, diags); valid {
+		tc.CIDRRanges = append(tc.CIDRRanges, cidrStr)
 	}
 }
 
@@ -1371,7 +1403,7 @@ func (c *Config) validateLiveInto(diags *ConfigDiagnostics) {
 			diags.Add("live", "logFormat", c.Live.LogFormat,
 				"a valid log format string with exactly one %h", err)
 		} else {
-			c.validateLiveFilterFields(diags, effFormat)
+			c.validateFilterFields(diags, LiveMode, effFormat)
 		}
 	}
 
@@ -1444,52 +1476,40 @@ func regexGate(compiled *regexp.Regexp, pf *regexprefilter.Prefilter, value stri
 	return compiled.MatchString(value)
 }
 
-// ShouldIncludeRequest checks if a request should be included based on regex filters
-func (tc *TrieConfig) ShouldIncludeRequest(req accesslog.Request) bool {
+// ShouldIncludeRequest reports whether a request passes the regex filters. It
+// is promoted to TrieConfig and SlidingTrieConfig: the static pipeline calls
+// it once per request and trie, live mode once per request and window.
+func (t *TrieCommon) ShouldIncludeRequest(req accesslog.Request) bool {
 	// Apply useragent regex filter (short-circuit on empty UserAgent)
-	if !regexGate(tc.userAgentRegexCompiled, tc.userAgentPrefilter, req.UserAgent) {
+	if !regexGate(t.userAgentRegexCompiled, t.userAgentPrefilter, req.UserAgent) {
 		return false
 	}
 
 	// Apply endpoint regex filter (short-circuit on empty URI)
-	if !regexGate(tc.endpointRegexCompiled, tc.endpointPrefilter, req.URI) {
+	if !regexGate(t.endpointRegexCompiled, t.endpointPrefilter, req.URI) {
 		return false
 	}
 
 	return true
 }
 
-// ShouldIncludeRequest checks if a request should be included based on regex filters
-func (stc *SlidingTrieConfig) ShouldIncludeRequest(req accesslog.Request) bool {
-	// Apply useragent regex filter (short-circuit on empty UserAgent)
-	if !regexGate(stc.userAgentRegexCompiled, stc.userAgentPrefilter, req.UserAgent) {
-		return false
-	}
-
-	// Apply endpoint regex filter (short-circuit on empty URI)
-	if !regexGate(stc.endpointRegexCompiled, stc.endpointPrefilter, req.URI) {
-		return false
-	}
-
-	return true
-}
-
-// LoadWhitelistCIDRs loads CIDR ranges from whitelist file
+// LoadWhitelistCIDRs returns the CIDR ranges of the [global] whitelist file
+// (nil when none is configured). The file is read on the first call for this
+// Config; later calls return the same entries, or the same error (lists.go).
 func (c *Config) LoadWhitelistCIDRs() ([]string, error) {
 	if c.Global == nil || c.Global.Whitelist == "" {
 		return nil, nil
 	}
-
-	return loadCIDRFile(c.Global.Whitelist)
+	return c.lists.get(&c.lists.whitelist, c.Global.Whitelist, loadCIDRFile)
 }
 
-// LoadBlacklistCIDRs loads CIDR ranges from blacklist file
+// LoadBlacklistCIDRs returns the CIDR ranges of the [global] blacklist file,
+// read once per Config like LoadWhitelistCIDRs.
 func (c *Config) LoadBlacklistCIDRs() ([]string, error) {
 	if c.Global == nil || c.Global.Blacklist == "" {
 		return nil, nil
 	}
-
-	return loadCIDRFile(c.Global.Blacklist)
+	return c.lists.get(&c.lists.blacklist, c.Global.Blacklist, loadCIDRFile)
 }
 
 // compileFilterRegex compiles one filter pattern (key is the config key,
@@ -1531,50 +1551,29 @@ func recordRegexErrors(section string, diags *ConfigDiagnostics, errs ...error) 
 // compileRegexFields compiles both filter patterns INDEPENDENTLY: a bad
 // useragentRegex does not stop the endpointRegex from being compiled (and
 // reported), so one pass surfaces every bad pattern of the trie.
-func (tc *TrieConfig) compileRegexFields() (uaErr, epErr error) {
-	tc.userAgentRegexCompiled, tc.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", tc.UserAgentRegex)
-	tc.endpointRegexCompiled, tc.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", tc.EndpointRegex)
+func (t *TrieCommon) compileRegexFields() (uaErr, epErr error) {
+	t.userAgentRegexCompiled, t.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", t.UserAgentRegex)
+	t.endpointRegexCompiled, t.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", t.EndpointRegex)
 	return uaErr, epErr
 }
 
-// CompileRegex compiles the regex patterns for a TrieConfig and returns the
+// CompileRegex compiles the regex patterns of a trie or window and returns the
 // compile errors of both fields (joined; nil when both compile). It is a PUBLIC
 // thin wrapper retained for direct callers (config_test.go TestCompileRegex,
 // prefilter_wiring_test.go, cli/live_loop_test.go) that assert the error
 // channel; do NOT remove it. Flags/parse paths use CompileRegexInto to route
 // the same failures into a diagnostics accumulator.
-func (tc *TrieConfig) CompileRegex() error {
-	return errors.Join(tc.compileRegexFields())
+func (t *TrieCommon) CompileRegex() error {
+	return errors.Join(t.compileRegexFields())
 }
 
 // CompileRegexInto compiles the regex patterns and records every failure into
-// diags, naming the section (e.g. "static.t2_bots"). It NEVER returns an error;
-// callers proceed to build the Config and the barrier aborts before any
-// ShouldIncludeRequest call. A failed field leaves BOTH its compiled regex and
-// its prefilter nil (see compileFilterRegex).
-func (tc *TrieConfig) CompileRegexInto(section string, diags *ConfigDiagnostics) {
-	uaErr, epErr := tc.compileRegexFields()
-	recordRegexErrors(section, diags, uaErr, epErr)
-}
-
-// compileRegexFields is the SlidingTrieConfig counterpart (see
-// TrieConfig.compileRegexFields).
-func (stc *SlidingTrieConfig) compileRegexFields() (uaErr, epErr error) {
-	stc.userAgentRegexCompiled, stc.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", stc.UserAgentRegex)
-	stc.endpointRegexCompiled, stc.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", stc.EndpointRegex)
-	return uaErr, epErr
-}
-
-// CompileRegex compiles the regex patterns for a SlidingTrieConfig (public thin
-// wrapper; see TrieConfig.CompileRegex).
-func (stc *SlidingTrieConfig) CompileRegex() error {
-	return errors.Join(stc.compileRegexFields())
-}
-
-// CompileRegexInto is the SlidingTrieConfig counterpart (see
-// TrieConfig.CompileRegexInto).
-func (stc *SlidingTrieConfig) CompileRegexInto(section string, diags *ConfigDiagnostics) {
-	uaErr, epErr := stc.compileRegexFields()
+// diags, naming the section (e.g. "static.t2_bots", "live.window"). It NEVER
+// returns an error; callers proceed to build the Config and the barrier aborts
+// before any ShouldIncludeRequest call. A failed field leaves BOTH its compiled
+// regex and its prefilter nil (see compileFilterRegex).
+func (t *TrieCommon) CompileRegexInto(section string, diags *ConfigDiagnostics) {
+	uaErr, epErr := t.compileRegexFields()
 	recordRegexErrors(section, diags, uaErr, epErr)
 }
 
@@ -1618,20 +1617,22 @@ func ParseClusterArgSetsFromStrings(args []string) ([]ClusterArgSet, error) {
 	return sets, nil
 }
 
-// LoadUserAgentWhitelistPatterns loads User-Agent patterns from whitelist file
+// LoadUserAgentWhitelistPatterns returns the entries of the [global]
+// userAgentWhitelist file, read once per Config like LoadWhitelistCIDRs.
 func (c *Config) LoadUserAgentWhitelistPatterns() ([]string, error) {
 	if c.Global == nil || c.Global.UserAgentWhitelist == "" {
 		return nil, nil
 	}
-	return loadPatternFile(c.Global.UserAgentWhitelist)
+	return c.lists.get(&c.lists.uaWhitelist, c.Global.UserAgentWhitelist, loadPatternFile)
 }
 
-// LoadUserAgentBlacklistPatterns loads User-Agent patterns from blacklist file
+// LoadUserAgentBlacklistPatterns returns the entries of the [global]
+// userAgentBlacklist file, read once per Config like LoadWhitelistCIDRs.
 func (c *Config) LoadUserAgentBlacklistPatterns() ([]string, error) {
 	if c.Global == nil || c.Global.UserAgentBlacklist == "" {
 		return nil, nil
 	}
-	return loadPatternFile(c.Global.UserAgentBlacklist)
+	return c.lists.get(&c.lists.uaBlacklist, c.Global.UserAgentBlacklist, loadPatternFile)
 }
 
 // stripCommentLine normalizes one raw line from a CIDR list file: trims

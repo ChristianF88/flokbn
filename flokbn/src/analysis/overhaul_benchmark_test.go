@@ -20,9 +20,11 @@ func benchOverhaulConfig(b *testing.B) *config.Config {
 		StaticTries: map[string]*config.TrieConfig{
 			"bench_trie": {
 				CIDRRanges: []string{"14.160.0.0/12", "77.88.0.0/16"},
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 1000, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
-					{MinClusterSize: 2000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 1000, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
+						{MinClusterSize: 2000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},

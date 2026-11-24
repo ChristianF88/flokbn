@@ -30,9 +30,9 @@ func benchFilteredConfig(b *testing.B) *config.Config {
 		{MinClusterSize: 2000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
 	}
 	tries := map[string]*config.TrieConfig{
-		"ua_lists_only": {ClusterArgSets: clusterSets},
-		"bots":          {UserAgentRegex: "Googlebot|python-requests", ClusterArgSets: clusterSets},
-		"api":           {EndpointRegex: "^/api/", ClusterArgSets: clusterSets},
+		"ua_lists_only": {TrieCommon: config.TrieCommon{ClusterArgSets: clusterSets}},
+		"bots":          {TrieCommon: config.TrieCommon{UserAgentRegex: "Googlebot|python-requests", ClusterArgSets: clusterSets}},
+		"api":           {TrieCommon: config.TrieCommon{EndpointRegex: "^/api/", ClusterArgSets: clusterSets}},
 	}
 	for name, tc := range tries {
 		if err := tc.CompileRegex(); err != nil {

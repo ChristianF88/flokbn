@@ -61,70 +61,51 @@ func (c *Config) validateGlobalFilterFields(fields logFormatFields, missing func
 	}
 }
 
-// validateLiveFilterFields is validateFilterFields for live mode: every
-// [live.<name>] window filter and the [global] User-Agent lists against the
-// effective [live] logFormat. It also requires the timestamp itself: a
+// validateFilterFields cross-checks every filter of the mode's tables, and the
+// [global] User-Agent lists, against the fields the mode's effective logFormat
+// extracts. It records one diagnostic per filter whose field is missing
+// (collect-all): tables first, [global] last.
+//
+// The modes differ in the timestamp. Live mode needs it for every request: a
 // sliding window is bounded in time, and a request without a timestamp never
-// enters one.
-func (c *Config) validateLiveFilterFields(diags *ConfigDiagnostics, effFormat string) {
+// enters one. Static mode needs it only for a trie with a startTime/endTime. A
+// live window does not apply those bounds (Config.LiveWarnings), so they are
+// not checked against the live format.
+func (c *Config) validateFilterFields(diags *ConfigDiagnostics, mode RunMode, effFormat string) {
 	fields := scanLogFormatFields(effFormat)
-	if !fields.timestamp {
-		diags.AddRaw(fmt.Sprintf("[live] logFormat %s has no %%t field; live mode needs the timestamp of each request for its sliding windows - add %%t to logFormat",
-			quoteCapped(effFormat)))
-	}
-	if fields.userAgent && fields.uri {
-		return
-	}
-	missing := missingFieldReporter(diags, "[live] logFormat", effFormat)
-
-	for name, stc := range c.LiveTries {
-		if stc == nil {
-			continue
-		}
-		section := "live." + name
-		if !fields.userAgent && stc.UserAgentRegex != "" {
-			missing(section, "useragentRegex", "User-Agent", "%u")
-		}
-		if !fields.uri && stc.EndpointRegex != "" {
-			missing(section, "endpointRegex", "request URI", "%r or %U")
-		}
-	}
-	c.validateGlobalFilterFields(fields, missing)
-}
-
-// validateFilterFields cross-checks every static filter against the fields the
-// effective [static] logFormat extracts and records one diagnostic per filter
-// whose field is missing (collect-all). Live mode has its own logFormat and
-// its own check, validateLiveFilterFields.
-func (c *Config) validateFilterFields(diags *ConfigDiagnostics, effFormat string) {
-	fields := scanLogFormatFields(effFormat)
-	if fields.userAgent && fields.uri && fields.timestamp {
-		return
-	}
-	missing := missingFieldReporter(diags, "logFormat", effFormat)
-
-	for name, tc := range c.StaticTries {
-		if tc == nil {
-			continue
-		}
-		section := "static." + name
-		if !fields.userAgent && tc.UserAgentRegex != "" {
-			missing(section, "useragentRegex", "User-Agent", "%u")
-		}
-		if !fields.uri && tc.EndpointRegex != "" {
-			missing(section, "endpointRegex", "request URI", "%r or %U")
-		}
+	formatKey := "logFormat"
+	boundsNeedTimestamp := !fields.timestamp
+	if mode == LiveMode {
+		formatKey = "[live] logFormat"
+		boundsNeedTimestamp = false
 		if !fields.timestamp {
+			diags.AddRaw(fmt.Sprintf("[live] logFormat %s has no %%t field; live mode needs the timestamp of each request for its sliding windows - add %%t to logFormat",
+				quoteCapped(effFormat)))
+		}
+	}
+	if fields.userAgent && fields.uri && !boundsNeedTimestamp {
+		return
+	}
+	missing := missingFieldReporter(diags, formatKey, effFormat)
+
+	c.eachTrie(mode, func(section string, t *TrieCommon) {
+		if !fields.userAgent && t.UserAgentRegex != "" {
+			missing(section, "useragentRegex", "User-Agent", "%u")
+		}
+		if !fields.uri && t.EndpointRegex != "" {
+			missing(section, "endpointRegex", "request URI", "%r or %U")
+		}
+		if boundsNeedTimestamp {
 			// A bound that failed to parse is already reported by
-			// validateTrieTimestamps; the raw carrier still marks it as set.
-			if tc.StartTime != nil || tc.startTimeRaw != "" {
+			// validateTimestamps; the raw carrier still marks it as set.
+			if t.StartTime != nil || t.startTimeRaw != "" {
 				missing(section, "startTime", "timestamp", "%t")
 			}
-			if tc.EndTime != nil || tc.endTimeRaw != "" {
+			if t.EndTime != nil || t.endTimeRaw != "" {
 				missing(section, "endTime", "timestamp", "%t")
 			}
 		}
-	}
+	})
 
 	c.validateGlobalFilterFields(fields, missing)
 }

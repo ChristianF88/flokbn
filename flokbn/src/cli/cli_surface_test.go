@@ -66,7 +66,8 @@ func TestStaticRangesCidrBareIPIsCounted(t *testing.T) {
 	}
 }
 
-// A bare IPv6 address stays rejected at the barrier.
+// A bare IPv6 address stays rejected at the barrier, with the message a TOML
+// cidrRanges entry gets (it used to be a bare "invalid rangesCidr[0]").
 func TestStaticRangesCidrBareIPv6Rejected(t *testing.T) {
 	dir := t.TempDir()
 	logFile := writeFile(t, dir, "access.log", sampleLogLine)
@@ -76,8 +77,9 @@ func TestStaticRangesCidrBareIPv6Rejected(t *testing.T) {
 		"--rangesCidr", "2001:db8::1",
 		"--jailFile", filepath.Join(dir, "jail.json"),
 		"--banFile", filepath.Join(dir, "ban.txt"))
-	if code != 1 || !strings.Contains(stderr, "invalid rangesCidr") {
-		t.Fatalf("want exit 1 with an invalid rangesCidr diagnostic, got exit %d:\n%s", code, stderr)
+	const want = `[static.cli_trie] IPv6 not supported (IPv4-only tool) in rangesCidr[0]: "2001:db8::1"`
+	if code != 1 || !strings.Contains(stderr, want) {
+		t.Fatalf("want exit 1 with %q, got exit %d:\n%s", want, code, stderr)
 	}
 }
 

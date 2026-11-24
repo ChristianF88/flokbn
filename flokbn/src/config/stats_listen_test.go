@@ -67,7 +67,9 @@ func TestValidateLive_StatsListen(t *testing.T) {
 				"w": {
 					SlidingWindowMaxSize: 100,
 					SlidingWindowMaxTime: time.Hour,
-					ClusterArgSets:       []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
+					TrieCommon: TrieCommon{
+						ClusterArgSets: []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
+					},
 				},
 			},
 		}
