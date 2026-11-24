@@ -357,6 +357,33 @@ func (t *Trie) CountInRangeIPNet(ipNet *net.IPNet) uint32 {
 	return t.countInRange(t.Root, rangeStart, rangeEnd, 0, 0)
 }
 
+// CountInCIDR returns how many inserted IPs (duplicates included) lie in the
+// block nc. It is the numeric counterpart of CountInRangeIPNet for callers
+// that already hold a NumericCIDR: no parsing, no *net.IPNet.
+//
+// A CIDR block is exactly one trie node - the one reached by following the
+// first PrefixLen bits of the address - and the Count of that node is the
+// answer, so this is a walk of at most 32 steps. Host bits set in nc.IP are
+// ignored. A prefix length above 32 is not an IPv4 block and counts 0.
+func (t *Trie) CountInCIDR(nc cidr.NumericCIDR) uint32 {
+	if nc.PrefixLen == 0 {
+		// The Count of the Root itself is never incremented; CountAll sums
+		// its children.
+		return t.CountAll()
+	}
+	if nc.PrefixLen > 32 || t.Root == nil {
+		return 0
+	}
+	node := t.Root
+	for shift, last := 31, 32-int(nc.PrefixLen); shift >= last; shift-- {
+		node = node.Children[(nc.IP>>uint(shift))&1]
+		if node == nil {
+			return 0
+		}
+	}
+	return node.Count
+}
+
 // countInRange traverses the trie efficiently using proper range intersection
 func (t *Trie) countInRange(node *TrieNode, rangeStart, rangeEnd uint32, currentPrefix, depth uint32) uint32 {
 	if node == nil {
@@ -474,7 +501,7 @@ func (t *Trie) collectCIDRsNode(node *TrieNode, prefix uint32, depth uint32, res
 		// tie). The result order is therefore deterministic for a given trie
 		// but NOT sorted by prefix: a lighter right half is emitted before a
 		// heavier left half. Callers that need address order must sort
-		// (cidr.MergeIPNets does). Recursion depth is bounded by trie height
+		// (cidr.MergeCIDRs does). Recursion depth is bounded by trie height
 		// (<=32) regardless of child order.
 		// Only process children that meet minimum cluster size requirement
 		if leftCount <= rightCount {
@@ -575,7 +602,9 @@ func (t *Trie) CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth uint32, me
 }
 
 // CollectCIDRs runs sequential CIDR clustering and returns the results as
-// strings. String-returning wrapper around CollectCIDRsNumeric.
+// strings. String-returning wrapper around CollectCIDRsNumeric for tests and
+// tools; the static and live pipelines call CollectCIDRsNumeric and keep the
+// ranges numeric through counting and merging.
 func (t *Trie) CollectCIDRs(minClusterSize, minDepth, maxDepth uint32, meanSubnetDifference float64) []string {
 	// Use the numeric version and convert to strings only at the end
 	numericResults := t.CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth, meanSubnetDifference)

@@ -14,8 +14,9 @@ import (
 
 // The hardcoded live parser that TCPIngestor used before it switched to the
 // logparser format compiler. It is kept, verbatim apart from the "legacy"
-// prefix on its names, as the reference the differential test
-// (live_parser_diff_test.go) compares the compiled default live format with.
+// prefix on its names and the removed Request.IP assignment, as the reference
+// the differential test (live_parser_diff_test.go) compares the compiled
+// default live format with.
 // It is not part of the build.
 
 // legacyParseLine parses one access-log line (the "message" field of a lumberjack
@@ -47,7 +48,7 @@ func legacyParseLine(msg string, out *accesslog.Request) (malformed int, err err
 	if ip4 == nil {
 		return 0, fmt.Errorf("IPv6 not supported (IPv4-only tool): %q", ipTok)
 	}
-	out.IP = ip
+	// (The original also stored ip in Request.IP here; that field is gone.)
 	out.IPUint32 = binary.BigEndian.Uint32(ip4)
 
 	// 2. Extract timestamp

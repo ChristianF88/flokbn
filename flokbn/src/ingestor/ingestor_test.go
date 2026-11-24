@@ -60,8 +60,8 @@ func TestParseEvent_RejectsIPv6(t *testing.T) {
 			if !errors.Is(err, logparser.ErrInvalidIP) {
 				t.Errorf("IPv6 %q rejected with %v, want %v", tc.ip, err, logparser.ErrInvalidIP)
 			}
-			if req.IP != nil {
-				t.Errorf("IPv6 must not be stored: req.IP = %v", req.IP)
+			if ip := req.GetIPNet(); ip != nil {
+				t.Errorf("IPv6 must not be stored: GetIPNet() = %v", ip)
 			}
 			if req.IPUint32 != 0 {
 				t.Errorf("IPv6 must not set IPUint32: got %d", req.IPUint32)
@@ -253,7 +253,7 @@ func TestParseEvent_SetsIPUint32(t *testing.T) {
 	if req.IPUint32 != want {
 		t.Errorf("expected IPUint32 %d, got %d", want, req.IPUint32)
 	}
-	// The legacy net.IP field is not filled; GetIPNet derives it.
+	// GetIPNet derives the net.IP from IPUint32.
 	if req.GetIPNet().String() != "192.168.1.100" {
 		t.Errorf("expected IP 192.168.1.100, got %v", req.GetIPNet())
 	}
@@ -376,10 +376,10 @@ func TestParseEventSafe_Transparent(t *testing.T) {
 	if mA != mB || (eA == nil) != (eB == nil) {
 		t.Errorf("safe wrapper diverged on valid: (%d,%v) vs (%d,%v)", mA, eA, mB, eB)
 	}
-	// Request contains a net.IP slice, so compare the parsed fields directly.
+	// Compare the parsed fields directly (Timestamp by instant, not by ==).
 	if a.IPUint32 != b.IPUint32 || a.Status != b.Status || a.Bytes != b.Bytes ||
 		a.Method != b.Method || a.URI != b.URI || a.UserAgent != b.UserAgent ||
-		!a.Timestamp.Equal(b.Timestamp) || !a.IP.Equal(b.IP) {
+		!a.Timestamp.Equal(b.Timestamp) {
 		t.Errorf("safe wrapper produced different Request: %+v vs %+v", a, b)
 	}
 

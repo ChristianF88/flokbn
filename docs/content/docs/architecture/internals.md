@@ -145,11 +145,10 @@ type Request struct {
     // Cold fields - second cache line (only accessed during output or string filtering)
     URI       string
     UserAgent string
-    IP        net.IP // Legacy: set only by the live TCP ingestor; nil from the log parser
 }
 ```
 
-IPs are stored as `uint32` - no string allocation per IP, no `net.IP` overhead. The struct also carries a legacy `net.IP` field that only the live ingestor path populates (the static log parser leaves it nil); non-hot-path code derives `net.IP` from `IPUint32` on demand.
+IPs are stored as `uint32` - no string allocation per IP, no `net.IP` overhead. Non-hot-path code derives a `net.IP` from `IPUint32` on demand (`Request.GetIPNet`).
 
 ### Binary Trie
 
@@ -378,7 +377,7 @@ The server side is flokbn's own reader (`ingestor/lumberjack.go`), not a third-p
 
 ### Memory Pools
 
-Pre-allocated object pools (trie nodes, scratch slices) reduce allocation and GC pressure.
+Trie nodes come from chunked bump allocators (`pools/`), which reduces allocation and GC pressure.
 
 ### Regex Compilation and Prefiltering
 
@@ -409,7 +408,7 @@ flokbn/src/
 ├── logging/             # Leveled slog setup for live mode
 ├── logparser/           # Log format parsing
 ├── output/              # Output formatting (JSON, plain text)
-├── pools/               # Memory pool management, TrieNode struct
+├── pools/               # Trie node allocators, TrieNode struct
 ├── sliding/             # Sliding window for live mode
 ├── trie/                # IP trie building and cluster detection
 ├── tui/                 # Terminal user interface

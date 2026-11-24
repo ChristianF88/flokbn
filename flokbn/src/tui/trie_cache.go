@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/ChristianF88/flokbn/accesslog"
+	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/output"
 )
 
@@ -182,7 +183,7 @@ func clusteredGrids(requests []accesslog.Request, trieResult output.TrieResult) 
 	// Pre-parse each cluster set's detected ranges once into sorted intervals so
 	// membership is an allocation-free binary search in the hot loop. One
 	// clustered grid is accumulated per cluster set in a single pass.
-	intervalsPerSet := make([]*clusterIntervals, len(trieResult.Data))
+	intervalsPerSet := make([]cidr.IntervalSet, len(trieResult.Data))
 	clusteredPerSet := make([]*[256][256]uint32, len(trieResult.Data))
 	for s := range trieResult.Data {
 		intervalsPerSet[s] = buildClusterIntervals(&trieResult.Data[s])

@@ -20,11 +20,11 @@ flokbn/src/          # THE GO MODULE lives here, not at repo root
   main.go            # entry: cli.App.Run(os.Args)
   cli/               # command defs (urfave/cli v2), api.go entry points, live_loop.go (liveLoop), stats server, plain_output.go, generate, synthlog
   config/            # TOML + flag parsing; regexprefilter/ subpkg
-  accesslog/         # leaf package: the Request record every parser fills, HTTPMethod, Uint32ToIPString
+  accesslog/         # the Request record every parser fills, HTTPMethod, Uint32ToIPString (imports only iputils)
   logparser/         # format-string compiler; Parser (files, multi-worker) and LineParser (single lines, live mode)
   ingestor/          # TCPIngestor + own size-limited Lumberjack v2 reader (lumberjack.go); parses with logparser.LineParser
-  trie/              # binary trie, CollectCIDRsNumeric clustering walk
-  cidr/              # CIDR merge/subtract, RemoveWhitelisted, UserAgentMatcher
+  trie/              # binary trie, CollectCIDRsNumeric clustering walk, CountInCIDR
+  cidr/              # NumericCIDR, Parse, IntervalSet, MergeCIDRs, whitelist subtraction (RemoveWhitelisted), UserAgentMatcher
   analysis/          # Static() / StaticWithRequests(): one pipeline (runStatic) parse→filter→trie→cluster→publish; UpdateBans
   sliding/           # time+size bounded window for live mode
   jail/              # persistent escalating ban state (jail.go, io.go)
@@ -94,7 +94,19 @@ holds a write token, and tests run in the CI job it requires.
   minSize >= 1, whole depths with 0 <= minDepth <= maxDepth <= 32, threshold in [0, 2].
 - **Trie clustering** (`trie.CollectCIDRsNumeric`): DFS walk emitting a node's prefix
   as a `NumericCIDR{IP uint32, PrefixLen uint8}` when balance/size/depth gates pass;
-  early-exits to avoid overlapping ranges.
+  early-exits to avoid overlapping ranges. Both pipelines keep the ranges numeric
+  after the walk: count with `Trie.CountInCIDR`, merge with `cidr.MergeCIDRs` (in
+  place), and build each string once, for the JSON output, the /stats snapshot and
+  the jail (`processClustering` in `analysis/static.go`, `liveLoop.clusterWindow`
+  in `cli/live_loop.go`). The jail and the list files stay string-based.
+- **CIDR strings to numbers** (`cidr/numeric.go`): `cidr.Parse` is the one parser
+  outside config and jail. It accepts exactly what `net.ParseCIDR` accepts with a
+  4-byte mask (canonical spelling without allocating, anything else via
+  `net.ParseCIDR`; `FuzzParse` holds it to that). `cidr.IntervalSet` is the one
+  sorted, merged `[start,end]` form of a CIDR list: the whitelist in
+  `RemoveWhitelisted` and the TUI cluster overlay (`tui/cluster_membership.go`) use
+  it. The jail keeps its own bounds cache. The `*net.IPNet` merge the numeric one
+  replaced (`MergeIPNets`) lives on as test oracle in `cidr/merge_ref_test.go`.
 - **Jail** (`jail/`): persistent escalating ban state for live mode. 5 cells with
   durations 10m → 4h → 7d → 30d → 180d. A CIDR escalates to the next cell on
   re-detection after expiry. Parent ranges consolidate contained sub-ranges (prevents
@@ -110,8 +122,8 @@ holds a write token, and tests run in the CI job it requires.
   the union of entries is removed and partial overlaps are carved. This is the choke
   point that guarantees a whitelisted address is never published (see
   `jail/whitelist_invariant_test.go`). `RemoveWhitelisted` parses the whitelist once
-  (O(B+W), not O(B*W)) and is byte-identical to the old path for IPv4 (proven by
-  differential fuzz).
+  (O(B+W), not O(B*W); `ComposeBanLists` once for both lists) and is byte-identical
+  to the old path for IPv4 (proven by differential fuzz).
   `analysis.UpdateBans(*jail.Jail, BanInput)` runs both points plus ban expiry and the
   jail update on an in-memory jail, without I/O. Every mode publishes through it:
   static in `analysis/publish.go`, live in `liveLoop.publishBans` (`cli/live_loop.go`).
@@ -138,13 +150,14 @@ holds a write token, and tests run in the CI job it requires.
   `Config` (a new run).
 - **IPv4-only gate:** discriminator is `len(ipNet.Mask) != 4` (4 bytes = IPv4,
   16 = IPv6 incl. IPv4-mapped `::ffff:`). Rejected at config load; skipped/kept-verbatim
-  in hot paths as defense-in-depth.
+  in hot paths as defense-in-depth (`cidr.Parse` applies the gate for the cidr
+  package and the TUI).
 
 ## Conventions / gotchas
 
 - Hot paths avoid allocations: `NumericCIDR` over strings, custom `.String()` without
-  `fmt.Sprintf`, memory pools for trie nodes, IP-only fast path skips URI/UA parsing
-  when no regex filter is set.
+  `fmt.Sprintf` (one octet formatter: `iputils.PutUint8` / `PutIPv4`), memory pools
+  for trie nodes, IP-only fast path skips URI/UA parsing when no regex filter is set.
 - Log format strings: exactly one `%h`, no duplicate specifiers (except `%^`).
   Static default (`logparser.DefaultLogFormat`) is
   `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"`: `%h` last, every quoted slot quoted.

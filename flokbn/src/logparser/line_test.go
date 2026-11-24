@@ -41,9 +41,6 @@ func TestLineParser_DefaultLiveFormat(t *testing.T) {
 	if req.UserAgent != "Mozilla/5.0 (X11; Linux x86_64)" {
 		t.Errorf("UserAgent = %q", req.UserAgent)
 	}
-	if req.IP != nil {
-		t.Errorf("legacy IP field set: %v", req.IP)
-	}
 }
 
 // The format is honoured, not assumed: the same parser type reads the client

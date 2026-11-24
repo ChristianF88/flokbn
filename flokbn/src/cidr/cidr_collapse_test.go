@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-// TestMergeIPNets_MultiLevelCollapse covers merges that need more than two
+// TestMergeCIDRs_MultiLevelCollapse covers merges that need more than two
 // levels of sibling collapsing. The old collapseCIDRs made one greedy pass
 // plus exactly one extra pass, so a chain where each merge enables the next
 // one further LEFT stopped early and left two adjacent, aligned, equal-prefix
 // ranges un-merged (10.0.0.0/24 + 10.0.1.0/24 in the first case).
-func TestMergeIPNets_MultiLevelCollapse(t *testing.T) {
+func TestMergeCIDRs_MultiLevelCollapse(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
@@ -65,24 +65,24 @@ func TestMergeIPNets_MultiLevelCollapse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ipNetsToStrings(MergeIPNets(mustParseCIDRs(t, tt.input)))
+			got := mergeBoth(t, tt.input)
 			sort.Strings(got)
 			want := append([]string(nil), tt.expected...)
 			sort.Strings(want)
 			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("MergeIPNets(%v) = %v, want %v", tt.input, got, want)
+				t.Fatalf("MergeCIDRs(%v) = %v, want %v", tt.input, got, want)
 			}
 		})
 	}
 }
 
-// TestMergeIPNets_MatchesCanonicalDecomposition is a randomized differential
+// TestMergeCIDRs_MatchesCanonicalDecomposition is a randomized differential
 // check: for CIDR inputs the fully merged result is unique - it is the minimal
 // CIDR decomposition of every maximal interval of the input union. Compare
-// MergeIPNets against that reference (built from appendOptimalNumeric on the
+// MergeCIDRs against that reference (built from appendOptimalNumeric on the
 // merged union) over inputs drawn from a small address window, so adjacency,
 // containment and multi-level sibling chains are all dense.
-func TestMergeIPNets_MatchesCanonicalDecomposition(t *testing.T) {
+func TestMergeCIDRs_MatchesCanonicalDecomposition(t *testing.T) {
 	rng := rand.New(rand.NewSource(20240611))
 	for iter := 0; iter < 5000; iter++ {
 		n := 1 + rng.Intn(24)
@@ -104,11 +104,11 @@ func TestMergeIPNets_MatchesCanonicalDecomposition(t *testing.T) {
 				want = append(want, nc.String())
 			}
 		}
-		got := ipNetsToStrings(MergeIPNets(mustParseCIDRs(t, in)))
+		got := mergeBoth(t, in)
 		sort.Strings(got)
 		sort.Strings(want)
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("iteration %d: MergeIPNets(%v)\n got  %v\n want %v", iter, in, got, want)
+			t.Fatalf("iteration %d: MergeCIDRs(%v)\n got  %v\n want %v", iter, in, got, want)
 		}
 	}
 }

@@ -13,10 +13,9 @@ type TrieNode struct {
 // NodeAllocator pre-allocates chunks of nodes for better performance and
 // is safe for concurrent GetNode calls (mutex-guarded). Its only user is
 // trie.NewTrie(), which no production path calls any more: both the static
-// pipeline (trie.NewLockedTrieSeq) and the live sliding window
-// (trie.NewTrieSeq) build their tries from a single goroutine on the
-// lock-free SeqNodeAllocator below. NewTrie() remains for tests and
-// benchmarks.
+// pipeline and the live sliding window build their tries from a single
+// goroutine with trie.NewTrieSeq, on the lock-free SeqNodeAllocator below.
+// NewTrie() remains for tests and benchmarks.
 type NodeAllocator struct {
 	mu           sync.Mutex
 	chunks       [][]TrieNode
@@ -91,34 +90,4 @@ func (a *SeqNodeAllocator) GetNode() *TrieNode {
 	n := &a.chunk[a.idx]
 	a.idx++
 	return n
-}
-
-// GlobalPools provides centralized memory pooling for performance optimization
-type GlobalPools struct {
-	StringSlices sync.Pool
-}
-
-// Pools is the global instance of memory pools
-var Pools = &GlobalPools{
-	StringSlices: sync.Pool{
-		New: func() interface{} {
-			slice := make([]string, 0, 256)
-			return &slice
-		},
-	},
-}
-
-// GetStringSlice gets a string slice from the pool and resets it
-func (gp *GlobalPools) GetStringSlice() []string {
-	slicePtr := gp.StringSlices.Get().(*[]string)
-	*slicePtr = (*slicePtr)[:0]
-	return *slicePtr
-}
-
-// ReturnStringSlice returns a string slice to the pool
-func (gp *GlobalPools) ReturnStringSlice(slice []string) {
-	if cap(slice) < 2048 {
-		emptySlice := slice[:0]
-		gp.StringSlices.Put(&emptySlice)
-	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"time"
 
 	"github.com/ChristianF88/flokbn/accesslog"
@@ -12,7 +11,6 @@ import (
 	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/ingestor"
-	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/ChristianF88/flokbn/sliding"
@@ -427,11 +425,11 @@ type clusterSetResult struct {
 	argSet     config.ClusterArgSet
 	useForJail bool
 	duration   time.Duration
-	// detected holds the ranges with their request counts, nets the same
-	// ranges parsed, index for index. Both are freshly allocated: detected
-	// goes into a published snapshot, which owns it from then on.
+	// detected holds the ranges with their request counts, cidrs the same
+	// ranges in numeric form, index for index. Both are freshly allocated:
+	// detected goes into a published snapshot, which owns it from then on.
 	detected []output.LiveCIDR
-	nets     []*net.IPNet
+	cidrs    []cidr.NumericCIDR
 }
 
 // clusterWindow runs every cluster arg set on the window as it is now. It is
@@ -446,7 +444,7 @@ func (l *liveLoop) clusterWindow(w *slidingWindowInstance) []clusterSetResult {
 		r.useForJail = i < len(w.config.UseForJail) && w.config.UseForJail[i]
 
 		start := time.Now()
-		cidrs := w.window.Trie.CollectCIDRs(
+		cidrs := w.window.Trie.CollectCIDRsNumeric(
 			argSet.MinClusterSize,
 			argSet.MinDepth,
 			argSet.MaxDepth,
@@ -457,22 +455,15 @@ func (l *liveLoop) clusterWindow(w *slidingWindowInstance) []clusterSetResult {
 			continue
 		}
 
-		// Parse each range once: the net serves the count here and the
-		// merge before the jail.
-		r.detected = make([]output.LiveCIDR, 0, len(cidrs))
-		r.nets = make([]*net.IPNet, 0, len(cidrs))
-		for _, cidrStr := range cidrs {
-			_, ipNet, err := net.ParseCIDR(cidrStr)
-			if err != nil {
-				l.logger.Warn("cidr parse error", "cidr", cidrStr, "err", err)
-				continue
+		// The ranges stay numeric for the count here and the merge before
+		// the jail; the string is built once, for the snapshot.
+		r.cidrs = cidrs
+		r.detected = make([]output.LiveCIDR, len(cidrs))
+		for k, nc := range cidrs {
+			r.detected[k] = output.LiveCIDR{
+				CIDR:  nc.String(),
+				Count: w.window.Trie.CountInCIDR(nc),
 			}
-			r.nets = append(r.nets, ipNet)
-			r.detected = append(r.detected, output.LiveCIDR{
-				CIDR: cidrStr,
-				// Use IPNet-native count function for speed
-				Count: w.window.Trie.CountInRangeIPNet(ipNet),
-			})
 		}
 	}
 	return results
@@ -480,10 +471,10 @@ func (l *liveLoop) clusterWindow(w *slidingWindowInstance) []clusterSetResult {
 
 // windowsRound is what one iteration found across all windows.
 type windowsRound struct {
-	jailNets  []*net.IPNet // ranges detected by the cluster sets flagged useForJail
-	detected  int          // ranges detected by any cluster set
-	requests  int          // requests held by the windows after the update
-	clusterUS int64        // time spent clustering, in microseconds
+	jailCIDRs []cidr.NumericCIDR // ranges detected by the cluster sets flagged useForJail
+	detected  int                // ranges detected by any cluster set
+	requests  int                // requests held by the windows after the update
+	clusterUS int64              // time spent clustering, in microseconds
 }
 
 // updateWindows feeds the batch to every window and clusters each of them.
@@ -509,7 +500,7 @@ func (l *liveLoop) updateWindows(batch []accesslog.Request, now time.Time) windo
 			round.clusterUS += r.duration.Microseconds()
 			round.detected += len(r.detected)
 			if r.useForJail {
-				round.jailNets = append(round.jailNets, r.nets...)
+				round.jailCIDRs = append(round.jailCIDRs, r.cidrs...)
 			}
 			l.logger.Debug("cluster set",
 				"window", w.name,
@@ -550,11 +541,15 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 
 	windows := l.updateWindows(batch, loopStart)
 
-	// Merge the ranges collected across windows and cluster sets, then back
-	// to strings for the jail.
+	// Merge the ranges collected across windows and cluster sets (in place:
+	// jailCIDRs is a copy made by updateWindows), then to strings for the
+	// jail, which is keyed by them.
 	var mergedCIDRs []string
-	for _, ipNet := range cidr.MergeIPNets(windows.jailNets) {
-		mergedCIDRs = append(mergedCIDRs, ipNet.String())
+	if merged := cidr.MergeCIDRs(windows.jailCIDRs); len(merged) > 0 {
+		mergedCIDRs = make([]string, len(merged))
+		for i, nc := range merged {
+			mergedCIDRs[i] = nc.String()
+		}
 	}
 
 	bans := l.publishBans(mergedCIDRs, l.forcedBans(), false)
@@ -563,11 +558,7 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 
 	// Publish the snapshot before the iteration line so anyone reacting
 	// to the log already sees the matching /stats state.
-	if l.stats != nil {
-		l.statsState.uaActiveWhitelistIPs = len(l.uaWhitelistIPs)
-		l.statsState.uaActiveBlacklistIPs = len(l.uaBlacklistIPs)
-		l.publishSnapshot(loopEnd, false)
-	}
+	l.publishSnapshot(loopEnd, false)
 
 	l.logger.Info("iteration",
 		"window", windows.requests,
@@ -594,7 +585,7 @@ func composeAllWhitelists(whitelistCIDRs []string, uaWhitelistIPs map[uint32]tim
 	combined := make([]string, 0, len(whitelistCIDRs)+len(uaWhitelistIPs))
 	combined = append(combined, whitelistCIDRs...)
 	for ip := range uaWhitelistIPs {
-		combined = append(combined, iputils.Uint32ToIP(ip).String()+"/32")
+		combined = append(combined, cidr.NumericCIDR{IP: ip, PrefixLen: 32}.String())
 	}
 	return combined
 }
@@ -608,7 +599,7 @@ func (l *liveLoop) forcedBans() []string {
 	}
 	forced := make([]string, 0, len(l.uaBlacklistIPs))
 	for ip := range l.uaBlacklistIPs {
-		forced = append(forced, iputils.Uint32ToIP(ip).String()+"/32")
+		forced = append(forced, cidr.NumericCIDR{IP: ip, PrefixLen: 32}.String())
 	}
 	return forced
 }
@@ -712,6 +703,12 @@ func (l *liveLoop) publishSnapshot(duration time.Duration, heartbeat bool) {
 	if l.stats == nil {
 		return
 	}
+	// The number of tracked listed-UA IPs is read here, for every snapshot:
+	// an iteration adds and forgets IPs, and the idle path forgets them too
+	// (purgeUserAgentIPs), so a heartbeat snapshot must not repeat the counts
+	// of the last iteration.
+	l.statsState.uaActiveWhitelistIPs = len(l.uaWhitelistIPs)
+	l.statsState.uaActiveBlacklistIPs = len(l.uaBlacklistIPs)
 	l.stats.publish(buildSnapshot(l.statsState, l.ing, l.cfg, l.windows, l.clusterStats, &l.jail, duration, l.sleepS, heartbeat))
 }
 

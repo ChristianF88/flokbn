@@ -2,6 +2,7 @@ package cidr
 
 import (
 	"net"
+	"reflect"
 	"testing"
 )
 
@@ -30,7 +31,7 @@ func FuzzNumericCIDR_String(f *testing.F) {
 	})
 }
 
-// FuzzMergeCIDRs feeds MergeIPNets up to four CIDRs at once so the merge /
+// FuzzMergeCIDRs feeds MergeCIDRs up to four CIDRs at once so the merge /
 // containment / collapse logic is actually exercised (the old single-CIDR fuzzer
 // returned at len<=1 and never reached the fast-path overlap check - which is why
 // the top-of-space prevEnd+1 wraparound went uncaught). Post-merge invariants:
@@ -40,15 +41,18 @@ func FuzzNumericCIDR_String(f *testing.F) {
 //	    avoid wrap at 0xFFFFFFFF). Note adjacency (prevEnd+1 == currStart) is
 //	    legitimately allowed: two adjacent CIDRs of unequal/unaligned size cannot
 //	    always be expressed as a single larger CIDR (e.g. 10.0.0.0/7 +
-//	    12.0.0.0/10), so MergeIPNets correctly keeps them separate.
+//	    12.0.0.0/10), so MergeCIDRs correctly keeps them separate.
 //	(b) the covered address set (union of [start,end] intervals) is loss-free and
 //	    gain-free: it equals the union of the inputs;
 //	(c) no two adjacent output CIDRs of EQUAL prefix that form an aligned
 //	    power-of-two pair remain un-merged (the collapse must be complete for the
 //	    mergeable case - this is what the top-of-space bug broke).
 //
+// On top of the invariants the result must equal that of the *net.IPNet
+// implementation MergeCIDRs replaced (oldMergeIPNets), range for range.
+//
 // IPv4-only: entries whose parsed mask is not 4 bytes are skipped, never fed into
-// MergeIPNets (which reads the mask via BigEndian.Uint32).
+// the merge.
 func FuzzMergeCIDRs(f *testing.F) {
 	type quad [4]string
 	seeds := []quad{
@@ -74,6 +78,7 @@ func FuzzMergeCIDRs(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, a, b, c, d string) {
 		var nets []*net.IPNet
+		var numeric []NumericCIDR
 		for _, s := range []string{a, b, c, d} {
 			_, ipNet, err := net.ParseCIDR(s)
 			if err != nil {
@@ -84,6 +89,11 @@ func FuzzMergeCIDRs(f *testing.F) {
 				continue
 			}
 			nets = append(nets, ipNet)
+			nc, ok := Parse(s)
+			if !ok {
+				t.Fatalf("Parse rejects %q, which net.ParseCIDR accepts as IPv4", s)
+			}
+			numeric = append(numeric, nc)
 		}
 		if len(nets) == 0 {
 			t.Skip()
@@ -92,12 +102,16 @@ func FuzzMergeCIDRs(f *testing.F) {
 		// Union of the inputs as a uint64 interval set.
 		inputUnion := unionOf(t, nets)
 
-		merged := MergeIPNets(nets)
+		want := ipNetsToStrings(oldMergeIPNets(nets))
+		merged := MergeCIDRs(numeric)
+		if got := numericCIDRStrings(merged); !reflect.DeepEqual(got, want) {
+			t.Fatalf("MergeCIDRs = %v, oldMergeIPNets = %v (inputs a=%q b=%q c=%q d=%q)", got, want, a, b, c, d)
+		}
 
-		// All merged outputs must remain IPv4 (4-byte mask).
-		for _, n := range merged {
-			if len(n.Mask) != 4 {
-				t.Fatalf("merge produced a non-IPv4 result: %v", n)
+		// All merged outputs must remain IPv4 blocks.
+		for _, nc := range merged {
+			if nc.PrefixLen > 32 {
+				t.Fatalf("merge produced a non-IPv4 result: %v", nc)
 			}
 		}
 
@@ -107,10 +121,9 @@ func FuzzMergeCIDRs(f *testing.F) {
 			prefix     int
 		}
 		outs := make([]out, 0, len(merged))
-		for _, n := range merged {
-			s, e := rangeOf(t, n)
-			p, _ := n.Mask.Size()
-			outs = append(outs, out{s, e, p})
+		for _, nc := range merged {
+			iv := nc.Interval()
+			outs = append(outs, out{uint64(iv.Start), uint64(iv.End), int(nc.PrefixLen)})
 		}
 		// Sort by start (small slices; insertion sort).
 		for i := 1; i < len(outs); i++ {

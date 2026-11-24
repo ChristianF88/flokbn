@@ -10,7 +10,7 @@ import (
 // IPv6 whitelist entry could inject a bogus uint32 range into the numeric
 // subtraction path and silently wipe IPv4 bans (e.g. "::/0" -> {0,0xFFFFFFFF}
 // dropped EVERY ban; "2000::/3" -> {0,0x1FFFFFFF} wiped 0.0.0.0-31.255.255.255).
-// parseWhitelistRanges now skips non-IPv4 entries, and RemoveWhitelisted keeps a
+// ParseIntervalSet skips non-IPv4 entries, and RemoveWhitelisted keeps a
 // non-IPv4 blacklist CIDR verbatim instead of mangling it.
 
 // equalUnordered compares two string slices as multisets (order-independent),
@@ -137,7 +137,7 @@ func TestRemoveWhitelisted_IPv4PartialOverlapStillSubtracts(t *testing.T) {
 	}
 }
 
-// Direct unit test of the unexported parseWhitelistRanges: feed mixed IPv4 + IPv6
+// Direct unit test of the whitelist parser ParseIntervalSet: feed mixed IPv4 + IPv6
 // and assert only IPv4-derived numeric ranges come out. Without the fix, "::/0"
 // would yield {0, 0xFFFFFFFF} and "2000::/3" would yield {0, 0x1FFFFFFF}.
 func TestParseWhitelistRanges_SkipsIPv6(t *testing.T) {
@@ -149,28 +149,28 @@ func TestParseWhitelistRanges_SkipsIPv6(t *testing.T) {
 		"192.168.0.0/16", // IPv4 - kept
 	}
 
-	ranges := parseWhitelistRanges(whitelist)
+	ranges := ParseIntervalSet(whitelist)
 
 	// Expected: only the two IPv4 ranges, sorted+merged. They are disjoint and
 	// non-adjacent so no merging occurs.
 	// 10.0.0.0/8     -> [0x0A000000, 0x0AFFFFFF]
 	// 192.168.0.0/16 -> [0xC0A80000, 0xC0A8FFFF]
-	want := []rng32{
-		{start: 0x0A000000, end: 0x0AFFFFFF},
-		{start: 0xC0A80000, end: 0xC0A8FFFF},
+	want := IntervalSet{
+		{Start: 0x0A000000, End: 0x0AFFFFFF},
+		{Start: 0xC0A80000, End: 0xC0A8FFFF},
 	}
 
 	if len(ranges) != len(want) {
 		t.Fatalf("expected %d IPv4 ranges, got %d: %+v", len(want), len(ranges), ranges)
 	}
 	if !reflect.DeepEqual(ranges, want) {
-		t.Fatalf("parseWhitelistRanges injected IPv6-derived ranges.\n  got=%+v\n  want=%+v", ranges, want)
+		t.Fatalf("ParseIntervalSet injected IPv6-derived ranges.\n  got=%+v\n  want=%+v", ranges, want)
 	}
 
 	// Explicit guard against the historical bug: NO range may start at 0 (which is
 	// what every IPv6 entry collapsed to via IPToUint32==0).
 	for _, r := range ranges {
-		if r.start == 0 {
+		if r.Start == 0 {
 			t.Fatalf("found a range starting at 0 - IPv6 entry leaked into ranges: %+v", ranges)
 		}
 	}
@@ -193,11 +193,11 @@ func TestRemoveWhitelisted_MappedIPv6WhitelistIgnored(t *testing.T) {
 	}
 }
 
-// Direct unit test: parseWhitelistRanges must SKIP an IPv4-mapped IPv6 entry.
+// Direct unit test: ParseIntervalSet must SKIP an IPv4-mapped IPv6 entry.
 // Without the mask-length fix it yielded {16909056,16909056} (a single IP)
 // instead of being skipped.
 func TestParseWhitelistRanges_SkipsMappedIPv6(t *testing.T) {
-	ranges := parseWhitelistRanges([]string{"::ffff:1.2.3.0/120"})
+	ranges := ParseIntervalSet([]string{"::ffff:1.2.3.0/120"})
 	if len(ranges) != 0 {
 		t.Fatalf("expected mapped-IPv6 entry to be skipped, got %+v", ranges)
 	}

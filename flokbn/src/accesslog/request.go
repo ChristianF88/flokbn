@@ -1,7 +1,8 @@
 // Package accesslog holds the record one access-log line is parsed into. It
-// is a leaf package: the log parser fills a Request, the live ingestor and
-// the static pipeline pass it on, and none of them has to import another to
-// name the type.
+// sits at the bottom of the import graph (it imports only iputils, for the
+// IPv4 formatter): the log parser fills a Request, the live ingestor and the
+// static pipeline pass it on, and none of them has to import another to name
+// the type.
 package accesslog
 
 import (
@@ -55,16 +56,11 @@ type Request struct {
 	// Cold fields - second cache line (only accessed during output or string filtering)
 	URI       string
 	UserAgent string
-	IP        net.IP // Legacy: no parser fills it; use GetIPNet
 }
 
-// GetIPNet returns the IP as net.IP, deriving from IPUint32 if IP is nil
-// (which it is for every parsed request). Use this for non-hot-path code that
-// needs net.IP.
+// GetIPNet returns the IP as net.IP, derived from IPUint32 (nil for the
+// reject sentinel 0). Use this for non-hot-path code that needs net.IP.
 func (r *Request) GetIPNet() net.IP {
-	if r.IP != nil {
-		return r.IP
-	}
 	if r.IPUint32 == 0 {
 		return nil
 	}

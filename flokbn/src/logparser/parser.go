@@ -1202,7 +1202,7 @@ func groupDelimiterAt(format string, i int) bool {
 //
 // Supported format codes:
 //
-//	%h - IP address (required) - maps to Request.IP
+//	%h - IP address (required) - maps to Request.IPUint32
 //	%t - Timestamp in brackets [DD/MMM/YYYY:HH:mm:ss +zone] - maps to Request.Timestamp
 //	%r - Request line "METHOD URI HTTP/VERSION" - extracts Method and URI (ignores HTTP version)
 //	%m - HTTP method standalone - maps to Request.Method

@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// TestMergeIPNets_TopOfSpace is the regression guard for URGENT-07 finding 1:
-// the MergeIPNets fast-path used `currStart <= prevEnd+1` to detect overlap, but
+// TestMergeCIDRs_TopOfSpace is the regression guard for URGENT-07 finding 1:
+// the MergeIPNets fast-path (now MergeCIDRs) used `currStart <= prevEnd+1` to detect overlap, but
 // when the previous range already reaches 0xFFFFFFFF (e.g. 0.0.0.0/0, or any
 // range touching the top of IPv4 space) prevEnd+1 wraps to 0, so the comparison
 // became `currStart <= 0` which is false for every non-zero start. The sorted
@@ -16,7 +16,7 @@ import (
 //
 // Each case below FAILS on the pre-fix code (returns both inputs) and passes
 // after the `prevEnd == 0xFFFFFFFF || ...` guard is added.
-func TestMergeIPNets_TopOfSpace(t *testing.T) {
+func TestMergeCIDRs_TopOfSpace(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []string
@@ -47,16 +47,16 @@ func TestMergeIPNets_TopOfSpace(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ipNetsToStrings(MergeIPNets(mustParseCIDRs(t, tt.input)))
+			got := mergeBoth(t, tt.input)
 			sort.Strings(got)
 			want := append([]string(nil), tt.expected...)
 			sort.Strings(want)
 			if len(got) != len(want) {
-				t.Fatalf("MergeIPNets(%v) = %v, want %v", tt.input, got, want)
+				t.Fatalf("MergeCIDRs(%v) = %v, want %v", tt.input, got, want)
 			}
 			for i := range want {
 				if got[i] != want[i] {
-					t.Fatalf("MergeIPNets(%v) = %v, want %v", tt.input, got, want)
+					t.Fatalf("MergeCIDRs(%v) = %v, want %v", tt.input, got, want)
 				}
 			}
 		})

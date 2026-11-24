@@ -67,13 +67,11 @@ type BanUpdate struct {
 // package cli for live mode, where a heartbeat is a round with nothing
 // detected).
 func UpdateBans(j *jail.Jail, in BanInput) BanUpdate {
-	var toJail []string
-	dropped := 0
-	if len(in.Detected) > 0 {
-		toJail, dropped = cidr.DropFullyWhitelisted(in.Detected, in.Whitelist)
-	}
+	// Costs nothing when nothing was detected (a heartbeat): the whitelist is
+	// not even parsed then.
+	toJail, dropped := cidr.DropFullyWhitelisted(in.Detected, in.Whitelist)
 	if len(in.ForceBan) > 0 {
-		// Cap the capacity: with an empty whitelist toJail is in.Detected
+		// Cap the capacity: with nothing to filter toJail is in.Detected
 		// itself and must not be appended to in place.
 		toJail = append(toJail[:len(toJail):len(toJail)], in.ForceBan...)
 	}
