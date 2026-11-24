@@ -521,6 +521,41 @@ func checkTopLevelSectionTypes(raw map[string]any) error {
 	return nil
 }
 
+// checkSubTableTypes rejects a trie or window written as an array of tables
+// (`[[static.name]]`, `[[live.name]]`). Such an entry decodes to a list, so
+// the dispatch in LoadConfig would not parse it as a trie, and the section
+// parser would report its name as an unknown key of the parent section. It is
+// the same mistake as `[[static]]` one level down and gets the same hard
+// error. With several offenders the first by name is reported.
+//
+// Only an array of tables under a non-scalar key qualifies: any other
+// non-table value is a misspelled or misplaced key and stays an unknown-key
+// diagnostic, and a recognized scalar key keeps its own type error.
+func checkSubTableTypes(raw map[string]any) error {
+	for _, parent := range [...]struct {
+		name       string
+		scalarKeys map[string]struct{}
+	}{{"static", staticScalarKeys}, {"live", liveScalarKeys}} {
+		section, _ := raw[parent.name].(map[string]any)
+		var offenders []string
+		for key, value := range section {
+			if _, isScalar := parent.scalarKeys[key]; isScalar {
+				continue
+			}
+			if _, isArrayOfTables := value.([]map[string]any); isArrayOfTables {
+				offenders = append(offenders, key)
+			}
+		}
+		if len(offenders) > 0 {
+			sort.Strings(offenders)
+			name := parent.name + "." + offenders[0]
+			return fmt.Errorf("section [%s] must be a table, got %s (write it as a [%s] header followed by key = value lines)",
+				name, tomlTypeName(section[offenders[0]]), name)
+		}
+	}
+	return nil
+}
+
 // tomlTypeName names the TOML type of a decoded value for an error message.
 func tomlTypeName(v any) string {
 	switch v.(type) {
@@ -557,6 +592,9 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	if err := checkTopLevelSectionTypes(rawConfig); err != nil {
+		return nil, err
+	}
+	if err := checkSubTableTypes(rawConfig); err != nil {
 		return nil, err
 	}
 
@@ -1226,6 +1264,18 @@ func (t *TrieCommon) validateUseForJailAlignment(diags *ConfigDiagnostics, secti
 	}
 	if len(t.UseForJail) != len(t.ClusterArgSets) {
 		diags.AddRaw(fmt.Sprintf("[%s] useForJail has %d entries but clusterArgSets has %d; they must match one-to-one (omit useForJail to apply no jail rules)", section, len(t.UseForJail), len(t.ClusterArgSets)))
+	}
+}
+
+// AddCIDRRange appends one range that was given outside a config file (the
+// --rangesCidr flag) to CIDRRanges, applying the rules of a TOML cidrRanges
+// entry: a bare IPv4 address is stored as /32, and an IPv6 or malformed value
+// is not stored but recorded in diags with the same two messages. field and i
+// name the input in the message ("rangesCidr", position on the command line);
+// section is the trie's section name without brackets.
+func (tc *TrieConfig) AddCIDRRange(field, section string, i int, value string, diags *ConfigDiagnostics) {
+	if cidrStr, valid := validateCIDRRangeEntry(field, section, i, value, diags); valid {
+		tc.CIDRRanges = append(tc.CIDRRanges, cidrStr)
 	}
 }
 
