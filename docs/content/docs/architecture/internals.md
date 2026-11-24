@@ -398,11 +398,12 @@ See [Performance]({{< relref "/docs/architecture/performance/" >}}) for benchmar
 ```
 flokbn/src/
 ├── main.go              # Entry point
+├── accesslog/           # Request struct shared by the parsers (leaf package)
 ├── analysis/            # Analysis orchestration
-├── cidr/                # CIDR parsing utilities
+├── cidr/                # Numeric CIDRs, interval sets, merge, whitelist filters
 ├── cli/                 # CLI commands and API entry points
 ├── config/              # Configuration structs and loading
-├── ingestor/            # Static/live mode ingestion, Request struct
+├── ingestor/            # Live mode ingestion (Lumberjack server)
 ├── iputils/             # IP address utilities
 ├── jail/                # Ban/jail management (tiered cells)
 ├── logging/             # Leveled slog setup for live mode
