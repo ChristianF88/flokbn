@@ -259,7 +259,7 @@ func (st *liveStatsState) refreshTopTalkers(cfg *config.Config, windows []slidin
 // the loop goroutine only; everything reachable from the returned snapshot is
 // either freshly allocated here, immutable (strings), or never mutated after
 // startup (list CIDR slices). heartbeat snapshots (idle loop) do not count
-// as iterations and reuse the cached top-talker slices (runHeartbeat
+// as iterations and reuse the cached top-talker slices (the heartbeat
 // refreshes the cache itself when it expired window entries).
 func buildSnapshot(
 	st *liveStatsState,
