@@ -213,7 +213,8 @@ var logScalarKeys = map[string]struct{}{
 	"format": {},
 }
 
-// trieKeys are the recognized keys of a [static.<name>] trie sub-table.
+// trieKeys are the recognized keys of a [static.<name>] trie sub-table: the
+// keys TrieCommon.parse reads, plus cidrRanges.
 var trieKeys = map[string]struct{}{
 	"useragentRegex": {},
 	"endpointRegex":  {},
@@ -225,21 +226,26 @@ var trieKeys = map[string]struct{}{
 }
 
 // slidingTrieKeys are the recognized keys of a [live.<name>] sliding-trie
-// sub-table: the trie filter keys plus the per-window sliding parameters.
+// sub-table: every static trie key plus the per-window sliding parameters.
 // startTime/endTime/cidrRanges are accepted (parity with the static trie key
 // surface) but not consumed by sliding tries; this matches the prior tolerant
 // behavior so a config that set them does not start failing now.
-var slidingTrieKeys = map[string]struct{}{
-	"useragentRegex":         {},
-	"endpointRegex":          {},
-	"startTime":              {},
-	"endTime":                {},
-	"cidrRanges":             {},
-	"clusterArgSets":         {},
-	"useForJail":             {},
-	"slidingWindowMaxTime":   {},
-	"slidingWindowMaxSize":   {},
-	"sleepBetweenIterations": {},
+var slidingTrieKeys = withKeys(trieKeys,
+	"slidingWindowMaxTime",
+	"slidingWindowMaxSize",
+	"sleepBetweenIterations",
+)
+
+// withKeys returns a copy of base extended by extra.
+func withKeys(base map[string]struct{}, extra ...string) map[string]struct{} {
+	keys := make(map[string]struct{}, len(base)+len(extra))
+	for k := range base {
+		keys[k] = struct{}{}
+	}
+	for _, k := range extra {
+		keys[k] = struct{}{}
+	}
+	return keys
 }
 
 type Config struct {
@@ -1008,29 +1014,24 @@ func parseTimeBound(m map[string]any, key string) (raw string, t *time.Time, has
 	return s, nil, false, nil
 }
 
-func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*TrieConfig, error) {
-	section := "static." + name
-	checkUnknownKeys(m, trieKeys, "["+section+"] trie", diags)
-	uaRegex, epRegex, err := parseRegexFields(m)
-	if err != nil {
-		return nil, err
+// parse reads the keys a [static.<name>] and a [live.<name>] table share into
+// t: the two regex filters (compiled here), clusterArgSets, useForJail and the
+// two time bounds. It is THE parser of those keys for both tables, so the two
+// cannot drift. section is "static.<name>" / "live.<name>". A wrong-TYPED
+// value is a hard error; every other problem is recorded in diags and parsing
+// continues. cidrRanges is not read here: each table parses it last, after its
+// own keys (parseCIDRRanges).
+func (t *TrieCommon) parse(section string, m map[string]any, diags *ConfigDiagnostics) error {
+	var err error
+	if t.UserAgentRegex, t.EndpointRegex, err = parseRegexFields(m); err != nil {
+		return err
 	}
-	clusterArgSets, clusterHadError, err := parseClusterArgSetsFromTOML(m, section, diags)
-	if err != nil {
-		return nil, err
+	if t.ClusterArgSets, t.clusterArgSetsHadError, err = parseClusterArgSetsFromTOML(m, section, diags); err != nil {
+		return err
 	}
-	useForJail, useForJailHadError, err := parseUseForJail(m, section, diags)
-	if err != nil {
-		return nil, err
+	if t.UseForJail, t.useForJailHadError, err = parseUseForJail(m, section, diags); err != nil {
+		return err
 	}
-	tc := &TrieConfig{TrieCommon: TrieCommon{
-		UserAgentRegex:         uaRegex,
-		EndpointRegex:          epRegex,
-		ClusterArgSets:         clusterArgSets,
-		UseForJail:             useForJail,
-		clusterArgSetsHadError: clusterHadError,
-		useForJailHadError:     useForJailHadError,
-	}}
 	// ANTI-MISALIGNMENT (security): when a clusterArgSets row was dropped, the
 	// surviving (shorter) slice must NOT be jailed by a mis-sized useForJail.
 	// The barrier always aborts when a clusterArgSets diagnostic is present, so
@@ -1038,40 +1039,63 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 	// even a hypothetical barrier-bypass cannot apply useForJail[i] to a shifted
 	// survivor. The alignment check (in Validate) is skipped when either flag is
 	// set, so it never emits a spurious second mismatch.
-	if clusterHadError {
-		tc.UseForJail = nil
+	if t.clusterArgSetsHadError {
+		t.UseForJail = nil
 	}
-	tc.CompileRegexInto(section, diags)
-	// A non-empty but non-RFC3339 startTime/endTime sets the raw carrier (not the
-	// parsed pointer) and is surfaced as a diagnostic at Validate, not here; a
-	// wrong-TYPE value stays a hard fail-fast. The raw literal is also captured
+	t.CompileRegexInto(section, diags)
+	// A non-empty but unparseable startTime/endTime sets the raw carrier (not
+	// the parsed pointer) and is surfaced as a diagnostic at Validate, not here;
+	// a wrong-TYPE value stays a hard fail-fast. The raw literal is also captured
 	// on success so the range diagnostic echoes the operator's original text.
-	if tc.startTimeRaw, tc.StartTime, tc.StartTimeHasOffset, err = parseTimeBound(m, "startTime"); err != nil {
-		return nil, err
+	if t.startTimeRaw, t.StartTime, t.StartTimeHasOffset, err = parseTimeBound(m, "startTime"); err != nil {
+		return err
 	}
-	if tc.endTimeRaw, tc.EndTime, tc.EndTimeHasOffset, err = parseTimeBound(m, "endTime"); err != nil {
-		return nil, err
+	if t.endTimeRaw, t.EndTime, t.EndTimeHasOffset, err = parseTimeBound(m, "endTime"); err != nil {
+		return err
 	}
-	if v, present := m["cidrRanges"]; present {
-		arr, ok := v.([]any)
+	return nil
+}
+
+// parseCIDRRanges reads the cidrRanges key of a trie table and returns its
+// valid entries (a bare IPv4 address as /32). A non-array value or a
+// non-string element is a hard error.
+//
+// SECURITY: ONLY valid IPv4 entries are returned - an IPv6/malformed entry is
+// dropped so an invalid string never lands on TrieConfig.CIDRRanges (a
+// pre-barrier reader / negative-shift panic guard). COLLECT-ALL:
+// validateCIDRRangeEntry records each bad entry and the loop continues.
+func parseCIDRRanges(m map[string]any, section string, diags *ConfigDiagnostics) ([]string, error) {
+	v, present := m["cidrRanges"]
+	if !present {
+		return nil, nil
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("cidrRanges must be an array of strings, got %T", v)
+	}
+	var ranges []string
+	for i, item := range arr {
+		str, ok := item.(string)
 		if !ok {
-			return nil, fmt.Errorf("cidrRanges must be an array of strings, got %T", v)
+			return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
 		}
-		for i, item := range arr {
-			str, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
-			}
-			// SECURITY: append ONLY valid IPv4 entries - drop (continue) on an
-			// IPv6/malformed entry BEFORE the append so an invalid string never
-			// lands on tc.CIDRRanges (a pre-barrier reader / negative-shift panic
-			// guard). COLLECT-ALL: validateCIDRRangeEntry records each bad entry.
-			cidrStr, valid := validateCIDRRangeEntry("cidrRanges", section, i, str, diags)
-			if !valid {
-				continue
-			}
-			tc.CIDRRanges = append(tc.CIDRRanges, cidrStr)
+		if cidrStr, valid := validateCIDRRangeEntry("cidrRanges", section, i, str, diags); valid {
+			ranges = append(ranges, cidrStr)
 		}
+	}
+	return ranges, nil
+}
+
+func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*TrieConfig, error) {
+	section := "static." + name
+	checkUnknownKeys(m, trieKeys, "["+section+"] trie", diags)
+	tc := &TrieConfig{}
+	if err := tc.TrieCommon.parse(section, m, diags); err != nil {
+		return nil, err
+	}
+	var err error
+	if tc.CIDRRanges, err = parseCIDRRanges(m, section, diags); err != nil {
+		return nil, err
 	}
 	return tc, nil
 }
@@ -1114,27 +1138,7 @@ func validateCIDRRangeEntry(field, section string, i int, str string, diags *Con
 func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*SlidingTrieConfig, error) {
 	section := "live." + name
 	checkUnknownKeys(m, slidingTrieKeys, "["+section+"] sliding-trie", diags)
-	uaRegex, epRegex, err := parseRegexFields(m)
-	if err != nil {
-		return nil, err
-	}
-	clusterArgSets, clusterHadError, err := parseClusterArgSetsFromTOML(m, section, diags)
-	if err != nil {
-		return nil, err
-	}
-	useForJail, useForJailHadError, err := parseUseForJail(m, section, diags)
-	if err != nil {
-		return nil, err
-	}
 	stc := &SlidingTrieConfig{
-		TrieCommon: TrieCommon{
-			UserAgentRegex:         uaRegex,
-			EndpointRegex:          epRegex,
-			ClusterArgSets:         clusterArgSets,
-			UseForJail:             useForJail,
-			clusterArgSetsHadError: clusterHadError,
-			useForJailHadError:     useForJailHadError,
-		},
 		// Same default as the --sleepBetweenIterations flag; overwritten below
 		// when the key is present (an explicit 0 is honored).
 		SleepBetweenIterations: DefaultSleepBetweenIterations,
@@ -1146,20 +1150,10 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 			stc.ignoredKeys = append(stc.ignoredKeys, key)
 		}
 	}
-	if clusterHadError {
-		stc.UseForJail = nil // belt-and-suspenders (see parseTrieConfig)
-	}
-	stc.CompileRegexInto(section, diags)
-	// Sliding tries never consume these bounds for filtering; they feed only
-	// Validate(LiveMode), so a [live.<n>] bound is parsed (and thus accepted or
-	// rejected) identically to a [static.<n>] bound via the shared helper. A live
-	// config that previously set a non-RFC3339 startTime/endTime was silently
-	// ignored and now fails load at the barrier (deliberate strictness increase,
-	// mirroring the cidrRanges validate-and-discard precedent in this function).
-	if stc.startTimeRaw, stc.StartTime, stc.StartTimeHasOffset, err = parseTimeBound(m, "startTime"); err != nil {
-		return nil, err
-	}
-	if stc.endTimeRaw, stc.EndTime, stc.EndTimeHasOffset, err = parseTimeBound(m, "endTime"); err != nil {
+	// Sliding tries never consume the time bounds for filtering; they feed only
+	// Validate(LiveMode), so a [live.<n>] bound is accepted or rejected exactly
+	// like a [static.<n>] bound.
+	if err := stc.TrieCommon.parse(section, m, diags); err != nil {
 		return nil, err
 	}
 	if v, present := m["slidingWindowMaxTime"]; present {
@@ -1189,25 +1183,11 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 	}
 	// cidrRanges is accepted (parity with the static trie key surface) but not
 	// consumed by sliding tries (SlidingTrieConfig has no CIDRRanges field, so a
-	// live config never reaches trie.CountInRange). We still validate-and-discard
-	// each entry so IPv6 fails loud at load identically to static mode. NOTE:
-	// this is a deliberate strictness increase - a live config that previously
-	// set an IPv6 cidrRanges value was tolerated (ignored) and now fails load;
-	// IPv4 cidrRanges remain tolerated-and-ignored exactly as before.
-	if v, present := m["cidrRanges"]; present {
-		arr, ok := v.([]any)
-		if !ok {
-			return nil, fmt.Errorf("cidrRanges must be an array of strings, got %T", v)
-		}
-		for i, item := range arr {
-			str, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("cidrRanges[%d] must be a string, got %T", i, item)
-			}
-			// Validate-and-discard (sliding tries do not consume cidrRanges); a
-			// bad entry records a diagnostic. COLLECT-ALL: never returns early.
-			validateCIDRRangeEntry("cidrRanges", section, i, str, diags)
-		}
+	// live config never reaches trie.CountInRange). The entries are still
+	// validated, and then discarded, so IPv6 fails loud at load identically to
+	// static mode; IPv4 cidrRanges are tolerated and ignored.
+	if _, err := parseCIDRRanges(m, section, diags); err != nil {
+		return nil, err
 	}
 	return stc, nil
 }
