@@ -393,9 +393,117 @@ func (l *liveLoop) warnTimestampSkew(w *slidingWindowInstance, now time.Time) {
 	)
 }
 
-// iterate processes one batch: it feeds every window, clusters them, hands
-// the detected ranges to the jail, writes the files that changed and
-// publishes the snapshot.
+// clusterSetResult is what one cluster arg set found in one window.
+type clusterSetResult struct {
+	argSet     config.ClusterArgSet
+	useForJail bool
+	duration   time.Duration
+	// detected holds the ranges with their request counts, nets the same
+	// ranges parsed, index for index. Both are freshly allocated: detected
+	// goes into a published snapshot, which owns it from then on.
+	detected []output.LiveCIDR
+	nets     []*net.IPNet
+}
+
+// clusterWindow runs every cluster arg set on the window as it is now. It is
+// the one place live mode clusters. An iteration hands the ranges of the
+// sets flagged useForJail to the jail; a heartbeat, after it expired entries
+// from the window, only republishes the result for the stats view.
+func (l *liveLoop) clusterWindow(w *slidingWindowInstance) []clusterSetResult {
+	results := make([]clusterSetResult, len(w.config.ClusterArgSets))
+	for i, argSet := range w.config.ClusterArgSets {
+		r := &results[i]
+		r.argSet = argSet
+		r.useForJail = i < len(w.config.UseForJail) && w.config.UseForJail[i]
+
+		start := time.Now()
+		cidrs := w.window.Trie.CollectCIDRs(
+			argSet.MinClusterSize,
+			argSet.MinDepth,
+			argSet.MaxDepth,
+			argSet.MeanSubnetDifference,
+		)
+		r.duration = time.Since(start)
+		if len(cidrs) == 0 {
+			continue
+		}
+
+		// Parse each range once: the net serves the count here and the
+		// merge before the jail.
+		r.detected = make([]output.LiveCIDR, 0, len(cidrs))
+		r.nets = make([]*net.IPNet, 0, len(cidrs))
+		for _, cidrStr := range cidrs {
+			_, ipNet, err := net.ParseCIDR(cidrStr)
+			if err != nil {
+				l.logger.Warn("cidr parse error", "cidr", cidrStr, "err", err)
+				continue
+			}
+			r.nets = append(r.nets, ipNet)
+			r.detected = append(r.detected, output.LiveCIDR{
+				CIDR: cidrStr,
+				// Use IPNet-native count function for speed
+				Count: w.window.Trie.CountInRangeIPNet(ipNet),
+			})
+		}
+	}
+	return results
+}
+
+// windowsRound is what one iteration found across all windows.
+type windowsRound struct {
+	jailNets  []*net.IPNet // ranges detected by the cluster sets flagged useForJail
+	detected  int          // ranges detected by any cluster set
+	requests  int          // requests held by the windows after the update
+	clusterUS int64        // time spent clustering, in microseconds
+}
+
+// updateWindows feeds the batch to every window and clusters each of them.
+// With stats on it also records the per-set results for the snapshot (and
+// for the heartbeat snapshots that follow).
+func (l *liveLoop) updateWindows(batch []accesslog.Request, now time.Time) windowsRound {
+	var round windowsRound
+	var winClusterStats [][]clusterSetStats
+	if l.stats != nil {
+		winClusterStats = make([][]clusterSetStats, len(l.windows))
+	}
+
+	// By pointer: the lifetime counters persist.
+	for wi := range l.windows {
+		w := &l.windows[wi]
+		l.feedWindow(w, batch)
+		round.requests += len(w.window.IPQueue)
+		l.warnTimestampSkew(w, now)
+
+		results := l.clusterWindow(w)
+		for i := range results {
+			r := &results[i]
+			round.clusterUS += r.duration.Microseconds()
+			round.detected += len(r.detected)
+			if r.useForJail {
+				round.jailNets = append(round.jailNets, r.nets...)
+			}
+			l.logger.Debug("cluster set",
+				"window", w.name,
+				"set", i+1,
+				"min_size", r.argSet.MinClusterSize,
+				"min_depth", r.argSet.MinDepth,
+				"max_depth", r.argSet.MaxDepth,
+				"threshold", r.argSet.MeanSubnetDifference,
+				"detected", len(r.detected),
+				"duration_us", r.duration.Microseconds(),
+			)
+		}
+		if l.stats != nil {
+			winClusterStats[wi] = clusterStatsOf(results)
+		}
+	}
+	l.clusterStats = winClusterStats
+	return round
+}
+
+// iterate processes one batch: it feeds and clusters every window, hands the
+// detected ranges to the jail, writes the files that changed and publishes
+// the snapshot.
 func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopStart time.Time) {
 	if l.logger.Enabled(ctx, slog.LevelDebug) {
 		ingSt := l.ing.Stats()
@@ -411,102 +519,16 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 		batch = l.classifyUserAgents(batch)
 	}
 
-	// Collect all CIDRs to ban from all sliding windows
-	var allMergedCIDRs []*net.IPNet
-	var allDetectedCIDRs []output.LiveCIDR
-	totalClusterDuration := int64(0)
-	totalWindowSize := 0
+	windows := l.updateWindows(batch, loopStart)
 
-	// Per-window per-set snapshot data, built only when stats is enabled.
-	var winClusterStats [][]clusterSetStats
-	if l.stats != nil {
-		winClusterStats = make([][]clusterSetStats, len(l.windows))
-	}
-
-	// Process each sliding window (by pointer: lifetime counters persist)
-	for wi := range l.windows {
-		winInst := &l.windows[wi]
-		l.feedWindow(winInst, batch)
-		totalWindowSize += len(winInst.window.IPQueue)
-		l.warnTimestampSkew(winInst, loopStart)
-
-		// Run clustering for each ClusterArgSet on this window
-		for i, argSet := range winInst.config.ClusterArgSets {
-			useForJail := false
-			if i < len(winInst.config.UseForJail) {
-				useForJail = winInst.config.UseForJail[i]
-			}
-
-			clusterStart := time.Now()
-			cidrs := winInst.window.Trie.CollectCIDRs(
-				argSet.MinClusterSize,
-				argSet.MinDepth,
-				argSet.MaxDepth,
-				argSet.MeanSubnetDifference,
-			)
-			clusterDuration := time.Since(clusterStart)
-			totalClusterDuration += clusterDuration.Microseconds()
-
-			// Parse CIDRs once for reuse across operations
-			var cidrIPNets []*net.IPNet
-
-			// Per-set slice: appending it to allDetectedCIDRs below
-			// copies the values, so its backing array stays owned by
-			// the snapshot (never aliased by the emit path).
-			var setDetected []output.LiveCIDR
-
-			for _, cidrStr := range cidrs {
-				_, ipNet, err := net.ParseCIDR(cidrStr)
-				if err != nil {
-					l.logger.Warn("cidr parse error", "cidr", cidrStr, "err", err)
-					continue
-				}
-				cidrIPNets = append(cidrIPNets, ipNet)
-
-				// Use IPNet-native count function for speed
-				count := winInst.window.Trie.CountInRangeIPNet(ipNet)
-				setDetected = append(setDetected, output.LiveCIDR{
-					CIDR:  cidrStr,
-					Count: count,
-				})
-			}
-			allDetectedCIDRs = append(allDetectedCIDRs, setDetected...)
-
-			// Only add to jail if useForJail is true
-			if useForJail {
-				allMergedCIDRs = append(allMergedCIDRs, cidrIPNets...)
-			}
-
-			if l.stats != nil {
-				winClusterStats[wi] = append(winClusterStats[wi], newClusterSetStats(argSet, useForJail, clusterDuration, setDetected))
-			}
-
-			l.logger.Debug("cluster set",
-				"window", winInst.name,
-				"set", i+1,
-				"min_size", argSet.MinClusterSize,
-				"min_depth", argSet.MinDepth,
-				"max_depth", argSet.MaxDepth,
-				"threshold", argSet.MeanSubnetDifference,
-				"detected", len(setDetected),
-				"duration_us", clusterDuration.Microseconds(),
-			)
-		}
-	}
-
-	// Remember this iteration's cluster stats for heartbeat snapshots.
-	l.clusterStats = winClusterStats
-
-	// Merge all CIDRs collected across configurations
-	mergedIPNets := cidr.MergeIPNets(allMergedCIDRs)
-
-	// Convert back to strings for display and jail operations
+	// Merge the ranges collected across windows and cluster sets, then back
+	// to strings for the jail.
 	var mergedCIDRs []string
-	for _, ipNet := range mergedIPNets {
+	for _, ipNet := range cidr.MergeIPNets(windows.jailNets) {
 		mergedCIDRs = append(mergedCIDRs, ipNet.String())
 	}
 
-	round := l.publishBans(mergedCIDRs, l.forcedBans(), false)
+	bans := l.publishBans(mergedCIDRs, l.forcedBans(), false)
 
 	loopEnd := time.Since(loopStart)
 
@@ -519,17 +541,17 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 	}
 
 	l.logger.Info("iteration",
-		"window", totalWindowSize,
+		"window", windows.requests,
 		"batch", len(batch),
-		"detected", len(allDetectedCIDRs),
+		"detected", windows.detected,
 		"merged", len(mergedCIDRs),
-		"jailed", round.Jailed,
-		"pruned", round.pruned,
-		"active_bans", len(round.Bans),
-		"ban_file_written", round.banFileWritten,
-		"jail_file_written", round.jailFileWritten,
+		"jailed", bans.Jailed,
+		"pruned", bans.pruned,
+		"active_bans", len(bans.Bans),
+		"ban_file_written", bans.banFileWritten,
+		"jail_file_written", bans.jailFileWritten,
 		"loop_ms", loopEnd.Milliseconds(),
-		"cluster_ms", totalClusterDuration/1000,
+		"cluster_ms", windows.clusterUS/1000,
 	)
 }
 
@@ -685,7 +707,7 @@ func (l *liveLoop) expireWindows() int {
 		if l.clusterStats != nil {
 			// Replaces one element of the loop-owned outer slice; published
 			// snapshots only hold the inner slices, which stay untouched.
-			l.clusterStats[i] = clusterStatsForWindow(w)
+			l.clusterStats[i] = clusterStatsOf(l.clusterWindow(w))
 		}
 		if l.statsState != nil {
 			l.statsState.refreshTopTalkers(l.cfg, l.windows, i)
@@ -704,16 +726,16 @@ func (l *liveLoop) heartbeat() {
 
 	windowExpired := l.expireWindows()
 
-	round := l.publishBans(nil, nil, true)
+	bans := l.publishBans(nil, nil, true)
 
 	// Publish before logging so anyone reacting to the heartbeat line
 	// already sees the matching /stats state (same order as iterations).
 	l.publishSnapshot(time.Since(hbStart), true)
 
 	l.logger.Debug("heartbeat",
-		"expired", round.Expired,
-		"active_bans", len(round.Bans),
-		"ban_file_written", round.banFileWritten,
+		"expired", bans.Expired,
+		"active_bans", len(bans.Bans),
+		"ban_file_written", bans.banFileWritten,
 		"window_expired", windowExpired,
 	)
 }
