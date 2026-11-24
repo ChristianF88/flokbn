@@ -217,8 +217,9 @@ func (s IntervalSet) intersects(start, end uint32) bool {
 // in IP (what the trie emits and Parse returns). cidrs is sorted and compacted
 // IN PLACE and the result aliases it.
 //
-// It is the numeric successor of the *net.IPNet based MergeIPNets and returns
-// the same ranges in the same order (TestMergeCIDRs_MatchesMergeIPNets).
+// It replaced the *net.IPNet based MergeIPNets and returns the same ranges in
+// the same order; that implementation lives on in merge_ref_test.go as the
+// oracle of the merge tests (TestMergeCIDRs_MatchesMergeIPNets, FuzzMergeCIDRs).
 func MergeCIDRs(cidrs []NumericCIDR) []NumericCIDR {
 	if len(cidrs) <= 1 {
 		return cidrs

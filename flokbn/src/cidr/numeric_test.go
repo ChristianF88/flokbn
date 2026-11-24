@@ -403,16 +403,12 @@ func randMergeInput(rng *rand.Rand) []string {
 }
 
 // TestMergeCIDRs_MatchesMergeIPNets is the differential test for the numeric
-// merge: same ranges, same order as the *net.IPNet implementation it replaces,
-// for curated and random inputs.
+// merge: same ranges, same order as the *net.IPNet implementation it replaced
+// (the oracle in merge_ref_test.go), for curated and random inputs.
 func TestMergeCIDRs_MatchesMergeIPNets(t *testing.T) {
 	check := func(in []string) {
 		t.Helper()
-		want := ipNetsToStrings(MergeIPNets(mustParseCIDRs(t, in)))
-		got := mergeCIDRStrings(t, in)
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("MergeCIDRs(%v)\n got  %v\n want %v (MergeIPNets)", in, got, want)
-		}
+		mergeBoth(t, in)
 	}
 
 	for _, in := range [][]string{
@@ -500,33 +496,4 @@ func BenchmarkParse(b *testing.B) {
 			_, _, _ = net.ParseCIDR(inputs[i&1023])
 		}
 	})
-}
-
-// BenchmarkMergeCIDRs runs the numeric merge on the inputs of
-// BenchmarkCIDRMerging (overlapping and adjacent ranges) and
-// BenchmarkMergeIPNets (nested ranges). The copy that restores the input each
-// round is part of the measurement.
-func BenchmarkMergeCIDRs(b *testing.B) {
-	for _, size := range []int{100, 500, 1000, 2000, 5000} {
-		overlapping := numericCIDRs(b, generateOverlappingCIDRs(size))
-		nested := make([]NumericCIDR, 0, size)
-		for _, n := range generateNestedCIDRs(size) {
-			ones, _ := n.Mask.Size()
-			nested = append(nested, NumericCIDR{IP: iputils.IPToUint32(n.IP), PrefixLen: uint8(ones)})
-		}
-		for _, bc := range []struct {
-			name  string
-			input []NumericCIDR
-		}{{"Overlapping", overlapping}, {"Nested", nested}} {
-			b.Run(fmt.Sprintf("%s_%d", bc.name, size), func(b *testing.B) {
-				work := make([]NumericCIDR, len(bc.input))
-				b.ReportAllocs()
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					copy(work, bc.input)
-					_ = MergeCIDRs(work)
-				}
-			})
-		}
-	}
 }

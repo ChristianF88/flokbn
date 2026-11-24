@@ -630,7 +630,7 @@ func TestMergeCidrs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ipNetsToStrings(MergeIPNets(mustParseCIDRs(t, tt.input)))
+			got := mergeBoth(t, tt.input)
 			gotMap := normalize(got)
 			expMap := normalize(tt.expected)
 			if len(gotMap) != len(expMap) {
@@ -645,8 +645,8 @@ func TestMergeCidrs(t *testing.T) {
 	}
 }
 
-// TestMergeIPNets tests the IPNet-native merge function
-func TestMergeIPNets(t *testing.T) {
+// TestMergeCIDRs_Table tests the merge against a small expected table
+func TestMergeCIDRs_Table(t *testing.T) {
 	tests := []struct {
 		name     string
 		cidrs    []string
@@ -671,8 +671,7 @@ func TestMergeIPNets(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Test IPNet version against the expected table
-			gotStrings := ipNetsToStrings(MergeIPNets(mustParseCIDRs(t, tt.cidrs)))
+			gotStrings := mergeBoth(t, tt.cidrs)
 
 			normalize := func(cidrs []string) map[string]struct{} {
 				m := make(map[string]struct{})
@@ -685,11 +684,11 @@ func TestMergeIPNets(t *testing.T) {
 			expMap := normalize(tt.expected)
 
 			if len(gotMap) != len(expMap) {
-				t.Errorf("MergeIPNets result differs from expected: got %v, expected %v", gotStrings, tt.expected)
+				t.Errorf("MergeCIDRs result differs from expected: got %v, expected %v", gotStrings, tt.expected)
 			}
 			for cidr := range expMap {
 				if _, ok := gotMap[cidr]; !ok {
-					t.Errorf("Expected CIDR %s in MergeIPNets result, got %v", cidr, gotStrings)
+					t.Errorf("Expected CIDR %s in MergeCIDRs result, got %v", cidr, gotStrings)
 				}
 			}
 		})
