@@ -91,33 +91,3 @@ func (a *SeqNodeAllocator) GetNode() *TrieNode {
 	a.idx++
 	return n
 }
-
-// GlobalPools provides centralized memory pooling for performance optimization
-type GlobalPools struct {
-	StringSlices sync.Pool
-}
-
-// Pools is the global instance of memory pools
-var Pools = &GlobalPools{
-	StringSlices: sync.Pool{
-		New: func() interface{} {
-			slice := make([]string, 0, 256)
-			return &slice
-		},
-	},
-}
-
-// GetStringSlice gets a string slice from the pool and resets it
-func (gp *GlobalPools) GetStringSlice() []string {
-	slicePtr := gp.StringSlices.Get().(*[]string)
-	*slicePtr = (*slicePtr)[:0]
-	return *slicePtr
-}
-
-// ReturnStringSlice returns a string slice to the pool
-func (gp *GlobalPools) ReturnStringSlice(slice []string) {
-	if cap(slice) < 2048 {
-		emptySlice := slice[:0]
-		gp.StringSlices.Put(&emptySlice)
-	}
-}
