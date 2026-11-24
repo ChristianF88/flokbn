@@ -104,11 +104,11 @@ func UpdateBans(j *jail.Jail, in BanInput) BanUpdate {
 // The barrier (Config.Validate) catches an unloadable jail before this; the
 // propagation is defense-in-depth for the remaining causes (jail save /
 // ban-file write).
-func publishJailAndBans(cfg *config.Config, jsonOutput *output.JSONOutput) error {
+func publishJailAndBans(cfg *config.Config, lists *globalLists, jsonOutput *output.JSONOutput) error {
 	if cfg.Global == nil || cfg.Global.JailFile == "" || cfg.Global.BanFile == "" {
 		return nil
 	}
-	if err := publishStatic(cfg, jsonOutput); err != nil {
+	if err := publishStatic(cfg, lists, jsonOutput); err != nil {
 		jsonOutput.AddError("jail_processing", fmt.Sprintf("Failed to process jail with whitelist/blacklist: %v", err), 1)
 		return err
 	}
@@ -119,9 +119,11 @@ func publishJailAndBans(cfg *config.Config, jsonOutput *output.JSONOutput) error
 // BanInput from the list files and the analysis results, runs UpdateBans on
 // the jail loaded from disk, saves the jail when it changed and rewrites the
 // ban file. Each failing stage is recorded in jsonOutput under its own type.
-func publishStatic(cfg *config.Config, jsonOutput *output.JSONOutput) error {
-	whitelistCIDRs, err := cfg.LoadWhitelistCIDRs()
-	if err != nil {
+//
+// The IP whitelist comes from lists (read once per run); an unreadable one
+// fails the publish here, where it matters.
+func publishStatic(cfg *config.Config, lists *globalLists, jsonOutput *output.JSONOutput) error {
+	if err := lists.whitelistErr; err != nil {
 		jsonOutput.AddError("whitelist_load", fmt.Sprintf("Failed to load whitelist: %v", err), 1)
 		return err
 	}
@@ -136,7 +138,7 @@ func publishStatic(cfg *config.Config, jsonOutput *output.JSONOutput) error {
 		ForceBan: hostCIDRs(nil, jsonOutput.UserAgentBlacklistIPs),
 		// Every whitelist source must win everywhere: before the jail and at
 		// the final publish pass.
-		Whitelist: hostCIDRs(whitelistCIDRs, jsonOutput.UserAgentWhitelistIPs),
+		Whitelist: hostCIDRs(lists.whitelist, jsonOutput.UserAgentWhitelistIPs),
 		Blacklist: blacklistCIDRs,
 	}
 

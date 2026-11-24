@@ -38,7 +38,7 @@ func TestStaticUnreadableUAWhitelistFailsLoud(t *testing.T) {
 	logFile := writeBasicAccessLog(t, tempDir)
 
 	// A UA whitelist file made unreadable forces os.Open to fail inside
-	// CreateUserAgentMatcher -> (nil, err).
+	// loadGlobalLists -> (nil, err).
 	uaWhitelistFile := filepath.Join(tempDir, "ua_whitelist.txt")
 	if err := os.WriteFile(uaWhitelistFile, []byte("Mozilla/5.0\n"), 0644); err != nil {
 		t.Fatalf("failed to write UA whitelist file: %v", err)
@@ -291,8 +291,8 @@ func TestStaticWithRequestsUnreadableUABlacklistFailsLoud(t *testing.T) {
 }
 
 // TestStaticOmittedUAListFastPathIntact is the companion acceptance check:
-// with NO UA list configured (and no per-trie filters), CreateUserAgentMatcher
-// returns (nil, nil), so Static() must NOT error and must still run the IP-only
+// with NO UA list configured (and no per-trie filters), loadGlobalLists
+// yields an empty matcher, so Static() must NOT error and must still run the IP-only
 // fast path to completion, producing trie results.
 func TestStaticOmittedUAListFastPathIntact(t *testing.T) {
 	tempDir := t.TempDir()

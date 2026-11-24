@@ -43,7 +43,7 @@ type JSONOutput struct {
 //
 // Only the UA whitelist actually drops requests from every trie, so it is the
 // only global list the renderers surface as an active filter. The IP whitelist
-// acts solely in the jail/ban publish pipeline (ProcessJailWithWhitelist /
+// acts solely in the jail/ban publish pipeline (analysis.UpdateBans /
 // ComposeBanLists): whitelisted traffic still enters every trie and is fully
 // counted in the statistics and threat percentages, so listing it as a filter
 // would be misleading. Its count is recorded for the JSON output only.
