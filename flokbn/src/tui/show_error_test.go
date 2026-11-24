@@ -57,7 +57,7 @@ func (a *App) statusText() string {
 // success only) and overwrote the error text with the next animation frame
 // within one tick. The error must stay on screen for as long as the TUI runs.
 func TestShowErrorSurvivesProgressAnimation(t *testing.T) {
-	a := NewAppFromConfig(&config.Config{Static: &config.StaticConfig{LogFile: "access.log"}}, "")
+	a := NewAppFromConfig(&config.Config{Static: &config.StaticConfig{LogFile: "access.log"}})
 	stop := startSimApp(t, a)
 	defer stop()
 

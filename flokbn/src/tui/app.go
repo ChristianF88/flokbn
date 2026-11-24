@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,9 +41,7 @@ type App struct {
 	focusableItems []tview.Primitive
 	currentFocus   int
 
-	logFile        string
-	clusterArgSets []string
-	rangesCidr     []string
+	logFile string
 
 	// jsonResult and currentTrie are owned exclusively by the tview UI goroutine
 	// (read/written only inside QueueUpdateDraw closures). Background precache
@@ -65,27 +64,25 @@ type App struct {
 	// shuttingDown is set true when Run() returns (the tview application has
 	// stopped). The analysis setters check it first so a late-finishing
 	// background analysis cannot QueueUpdateDraw on a stopped application.
-	shuttingDown  atomic.Bool
-	requestsReady chan struct{} // closed when requests are available
+	shuttingDown atomic.Bool
 
-	// Multi-trie support (immutable after construction)
-	cfg        *config.Config
-	configPath string
+	// cfg is the static config the analysis runs with. NewAppFromConfig is the
+	// only constructor, so it is never nil; immutable after construction.
+	cfg *config.Config
 
-	// Performance optimization components
-	trieCache *TrieCache // pre-rendered per-trie texts and visualization data
+	// trieCache is the single cache of everything derived from the analysis:
+	// pre-rendered per-trie texts and the visualization grids. Never nil.
+	trieCache *TrieCache
 }
 
 // NewAppFromConfig creates a new TUI application from config file
-func NewAppFromConfig(cfg *config.Config, configPath string) *App {
+func NewAppFromConfig(cfg *config.Config) *App {
 	app := &App{
-		app:           tview.NewApplication(),
-		pages:         tview.NewPages(),
-		cfg:           cfg,
-		configPath:    configPath,
-		logFile:       cfg.Static.LogFile,
-		currentTrie:   0,
-		requestsReady: make(chan struct{}),
+		app:         tview.NewApplication(),
+		pages:       tview.NewPages(),
+		cfg:         cfg,
+		logFile:     cfg.Static.LogFile,
+		currentTrie: 0,
 	}
 
 	// Initialize performance optimization components
@@ -126,15 +123,14 @@ func (a *App) SetAnalysisResults(multiResult *output.JSONOutput) {
 	// Mark analysis as complete (atomic, no lock needed)
 	a.analysisComplete.Store(true)
 
-	// Update UI to show results immediately
+	// Update UI to show results immediately. The visualization shows its
+	// loading placeholder until SetRequestData has precached the traffic grids.
 	a.app.QueueUpdateDraw(func() {
 		a.displayResults()
+		a.visualizationView.updateForCurrentTrie()
 		a.updateStatusBar()
 		a.pages.SwitchToPage("results")
 	})
-
-	// The visualization view is built and precached off the UI goroutine in
-	// SetRequestData (which has the request data needed to populate it).
 }
 
 // statusAnalysisFailed is the status-bar text of a failed run.
@@ -183,12 +179,11 @@ func errorText(message string) string {
 // SetRequestData sets the real request data for visualization and pre-caches all
 // tries.
 //
-// Concurrency model (AUDIT-02): the visualization build/precache runs on a single
-// background goroutine (buildAndPrecacheVisualization). It builds and precaches
-// the view privately, OFF the UI goroutine, then publishes the finished pointer to
-// a.visualizationView exclusively on the UI goroutine - which from that point is
-// its sole owner. This keeps the heavy precache off the event loop while ensuring
-// the view's fields/maps are never written by two goroutines at once.
+// Concurrency model: the request scans run on a background goroutine that
+// writes nothing but the TrieCache, which guards itself with its own lock and
+// publishes one finished trie at a time. The visualization view never leaves
+// the UI goroutine; it reads the published grids from the cache when it
+// renders, and is told to render again once the precache is done.
 func (a *App) SetRequestData(requests []accesslog.Request) {
 	if a.shuttingDown.Load() {
 		return
@@ -198,66 +193,48 @@ func (a *App) SetRequestData(requests []accesslog.Request) {
 	multiResult := a.multiTrieResult
 	a.mu.Unlock()
 
-	// Signal that requests are available (kept for any external waiters).
-	close(a.requestsReady)
-
-	if a.trieCache != nil && multiResult != nil {
-		go func() {
-			a.trieCache.PreCacheAllTries(a, multiResult, requests)
-		}()
+	if multiResult != nil {
+		go a.precacheRequests(multiResult, requests)
 	}
-
-	go a.buildAndPrecacheVisualization(requests)
 }
 
-// buildAndPrecacheVisualization builds a visualization view OFF the UI goroutine
-// (the sole writer of that view's fields/caches while it owns it), runs the heavy
-// precache there, and only then publishes the fully built view to the UI thread
-// - which from that point is its sole owner. This closes all three AUDIT-02
-// findings:
-//   - The pointer is published exactly once, on the UI goroutine (finding #2).
-//   - The view's fields/maps are written by exactly one goroutine at a time: this
-//     goroutine before publication (nothing else references it), the UI goroutine
-//     after (finding #1). The publish enqueue establishes happens-before.
-//   - The expensive PreCacheAllTries runs off the event loop (finding #3).
-//
-// The view is built from a locally derived single-trie output (trie 0, always
-// current right after analysis), so no UI-owned a.jsonResult/currentTrie is read
-// off-thread. If showVisualization already created the view on demand (on the UI
-// thread) before this goroutine publishes, the locally built view is discarded so
-// there is never more than one live view.
-func (a *App) buildAndPrecacheVisualization(requests []accesslog.Request) {
-	// Build the view locally; nothing else can reference it yet. Seed the
-	// cluster-set count from a locally derived output so we never read the
-	// UI-owned a.jsonResult off-thread.
-	initial := a.singleTrieOutput(0)
-	if initial == nil {
+// precacheRequests fills the trie cache from the handed-over requests and then
+// lets the visualization catch up. The visualization is rendered with the
+// results, i.e. before the requests arrive, and the user may already be
+// looking at its loading placeholder ('v' pressed right after the results
+// appeared): without the refresh it would stay there until the next trie
+// switch.
+func (a *App) precacheRequests(multiResult *output.JSONOutput, requests []accesslog.Request) {
+	a.trieCache.PreCacheAllTries(a, multiResult, requests)
+
+	// Every trie has its grids cached now, so the TUI never reads the parsed
+	// requests again (a trie switch can no longer miss the cache). Drop the
+	// reference: nothing else holds the requests once the analysis goroutine
+	// has handed them over, and they pin the whole parsed log in memory.
+	a.mu.Lock()
+	a.requests = nil
+	a.mu.Unlock()
+
+	if a.shuttingDown.Load() {
 		return
 	}
-	v := a.newVisualizationViewWith(len(initial.Clustering.Data))
+	a.app.QueueUpdateDraw(a.refreshVisualization)
 
-	// Heavy precache OFF the UI goroutine, on the not-yet-published view. Restore
-	// to the initial trie (0) without reading UI-owned state.
-	v.PreCacheAllTriesFor(requests, 0)
+	// From here on the process only waits for key presses. It allocates next to
+	// nothing, so no garbage collection would be triggered, and the requests
+	// just released plus everything the analysis left behind (several times
+	// the size of the log) would stay resident for the whole session. Collect
+	// once and hand the memory back to the OS.
+	debug.FreeOSMemory()
+}
 
-	// Publish on the UI goroutine: assign the pointer, add the page, and render
-	// the precached output. After this closure runs, the UI goroutine is the
-	// view's sole owner. Discard the built view if one already exists (created
-	// on demand by showVisualization, also on the UI thread).
-	a.app.QueueUpdateDraw(func() {
-		if a.visualizationView != nil {
-			return
-		}
-		a.visualizationView = v
-
-		visualizationLayout := tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(v.GetView(), 0, 1, true).
-			AddItem(a.statusBar, minStatusBarHeight, 0, false)
-		a.visualizationLayout = visualizationLayout
-		a.pages.AddPage("visualization", visualizationLayout, true, false)
-
-		v.RenderCached()
-	})
+// refreshVisualization re-renders the visualization if it is showing the
+// loading placeholder: the grids it was waiting for may have been published
+// since. Must run on the UI goroutine.
+func (a *App) refreshVisualization() {
+	if a.visualizationView.loading {
+		a.visualizationView.RenderCached()
+	}
 }
 
 // setupUI initializes the user interface
@@ -294,9 +271,17 @@ func (a *App) setupUI() {
 		AddItem(a.statusBar, minStatusBarHeight, 0, false)
 	a.resultsLayout = results
 
+	// Create the visualization page. The view only renders what the trie cache
+	// holds, so it exists from the start and stays on the UI goroutine.
+	a.visualizationView = a.NewVisualizationView()
+	a.visualizationLayout = tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(a.visualizationView.GetView(), 0, 1, true).
+		AddItem(a.statusBar, minStatusBarHeight, 0, false)
+
 	// Add pages
 	a.pages.AddPage("progress", main, true, true)
 	a.pages.AddPage("results", results, true, false)
+	a.pages.AddPage("visualization", a.visualizationLayout, true, false)
 
 	// Set up key bindings
 	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -319,7 +304,7 @@ func (a *App) setupUI() {
 			}
 			return nil
 		case 't', 'T':
-			if a.analysisComplete.Load() && a.cfg != nil && a.multiTrieResult != nil {
+			if a.analysisComplete.Load() && a.multiTrieResult != nil {
 				// Check if we have multiple tries stored
 				if len(a.multiTrieResult.Tries) > 1 {
 					a.nextTrie()
@@ -383,37 +368,27 @@ func (a *App) setupUI() {
 		if a.analysisComplete.Load() && frontPageName == "visualization" {
 			switch event.Rune() {
 			case 'l', 'L':
-				if a.visualizationView != nil {
-					a.visualizationView.ToggleIntensityScale()
-				}
+				a.visualizationView.ToggleIntensityScale()
 				return nil
 			}
 			switch event.Key() {
 			case tcell.KeyLeft:
-				if a.visualizationView != nil {
-					a.visualizationView.PrevClusterSet()
-				}
+				a.visualizationView.PrevClusterSet()
 				return nil
 			case tcell.KeyRight:
-				if a.visualizationView != nil {
-					a.visualizationView.NextClusterSet()
-				}
+				a.visualizationView.NextClusterSet()
 				return nil
 			case tcell.KeyUp:
-				if a.visualizationView != nil {
-					view := a.visualizationView.GetView()
-					row, col := view.GetScrollOffset()
-					if row > 0 {
-						view.ScrollTo(row-1, col)
-					}
+				view := a.visualizationView.GetView()
+				row, col := view.GetScrollOffset()
+				if row > 0 {
+					view.ScrollTo(row-1, col)
 				}
 				return nil
 			case tcell.KeyDown:
-				if a.visualizationView != nil {
-					view := a.visualizationView.GetView()
-					row, col := view.GetScrollOffset()
-					view.ScrollTo(row+1, col)
-				}
+				view := a.visualizationView.GetView()
+				row, col := view.GetScrollOffset()
+				view.ScrollTo(row+1, col)
 				return nil
 			}
 		}
@@ -666,17 +641,11 @@ func (a *App) animateProgress() {
 // progressFrameText renders one frame of the progress animation: the current
 // stage line (which carries its own style tags) plus the run's static facts.
 func (a *App) progressFrameText(stage, dotStr string) string {
+	// Count cluster sets and CIDR ranges from config
 	var clusterSets, cidrRanges int
-	if a.cfg != nil {
-		// Count cluster sets and CIDR ranges from config
-		for _, trieConfig := range a.cfg.StaticTries {
-			clusterSets += len(trieConfig.ClusterArgSets)
-			cidrRanges += len(trieConfig.CIDRRanges)
-		}
-	} else {
-		// No-config mode
-		clusterSets = len(a.clusterArgSets) / 4
-		cidrRanges = len(a.rangesCidr)
+	for _, trieConfig := range a.cfg.StaticTries {
+		clusterSets += len(trieConfig.ClusterArgSets)
+		cidrRanges += len(trieConfig.CIDRRanges)
 	}
 
 	return fmt.Sprintf(`
@@ -692,10 +661,10 @@ func (a *App) progressFrameText(stage, dotStr string) string {
 `, stage, dotStr, tview.Escape(a.logFile), clusterSets, cidrRanges)
 }
 
-// nextTrie cycles to the next trie in config mode (async optimized)
+// nextTrie cycles to the next trie (async optimized)
 func (a *App) nextTrie() {
 	a.mu.Lock()
-	canSwitch := a.cfg != nil && a.multiTrieResult != nil && len(a.multiTrieResult.Tries) > 1
+	canSwitch := a.multiTrieResult != nil && len(a.multiTrieResult.Tries) > 1
 	var newTrieIndex int
 	if canSwitch {
 		newTrieIndex = (a.currentTrie + 1) % len(a.multiTrieResult.Tries)
@@ -716,53 +685,47 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 	defer a.switchingTrie.Store(false)
 
 	// Try fast cache first for instant switching
-	if a.trieCache != nil {
-		trieOutput, cacheHit := a.trieCache.GetTrieOutput(newTrieIndex)
-		if cacheHit && trieOutput != nil {
-			// INSTANT switching using cached data
-			a.app.QueueUpdateDraw(func() {
-				a.currentTrie = newTrieIndex
-				a.jsonResult = trieOutput
+	trieOutput, cacheHit := a.trieCache.GetTrieOutput(newTrieIndex)
+	if cacheHit && trieOutput != nil {
+		// INSTANT switching using cached data
+		a.app.QueueUpdateDraw(func() {
+			a.currentTrie = newTrieIndex
+			a.jsonResult = trieOutput
 
-				// Use pre-rendered texts for instant display
-				a.displayResultsFromTrieCache(newTrieIndex)
-				a.updateStatusBar()
+			// Use pre-rendered texts for instant display
+			a.displayResultsFromTrieCache(newTrieIndex)
+			a.updateStatusBar()
 
-				// Update visualization with cached data
-				if a.visualizationView != nil {
-					a.updateVisualizationFromCache(newTrieIndex)
-				}
-			})
-			return
-		} else {
-			// Try to quickly cache this specific trie if not already cached.
-			// PreCacheSingleTrie locks ftc.mu internally; all reads/writes of the
-			// UI-owned currentTrie/jsonResult happen inside QueueUpdateDraw so the
-			// tview UI goroutine remains their sole owner.
-			if a.multiTrieResult != nil && newTrieIndex < len(a.multiTrieResult.Tries) {
-				go func() {
-					if a.trieCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requestData()) {
-						a.app.QueueUpdateDraw(func() {
-							// Re-render only if the user is still on this trie.
-							if a.currentTrie != newTrieIndex {
-								return
-							}
-							// Re-try with newly cached data
-							if cachedData, hit := a.trieCache.GetTrieOutput(newTrieIndex); hit && cachedData != nil {
-								a.jsonResult = cachedData
-								a.displayResultsFromTrieCache(newTrieIndex)
-								if a.visualizationView != nil {
-									a.updateVisualizationFromCache(newTrieIndex)
-								}
-							}
-						})
-					}
-				}()
-			}
-		}
+			// Update visualization with cached data
+			a.visualizationView.updateForCurrentTrie()
+		})
+		return
 	}
 
-	// Last resort: Expensive synchronous processing (should rarely happen)
+	// Not cached yet: precache this specific trie ahead of the background
+	// precache. PreCacheSingleTrie locks ftc.mu internally; all reads/writes of
+	// the UI-owned currentTrie/jsonResult happen inside QueueUpdateDraw so the
+	// tview UI goroutine remains their sole owner.
+	go func() {
+		if a.trieCache.PreCacheSingleTrie(a, newTrieIndex, a.multiTrieResult, a.requestData()) {
+			a.app.QueueUpdateDraw(func() {
+				// Re-render only if the user is still on this trie.
+				if a.currentTrie != newTrieIndex {
+					return
+				}
+				// Re-try with newly cached data
+				if cachedData, hit := a.trieCache.GetTrieOutput(newTrieIndex); hit && cachedData != nil {
+					a.jsonResult = cachedData
+					a.displayResultsFromTrieCache(newTrieIndex)
+					a.visualizationView.updateForCurrentTrie()
+				}
+			})
+		}
+	}()
+
+	// Meanwhile show the trie right away: the panel texts are cheap to build on
+	// the UI goroutine, and the visualization shows its loading placeholder
+	// until the precache above has published the trie's grids.
 	a.app.QueueUpdateDraw(func() {
 		a.currentTrie = newTrieIndex
 		newTrieData := a.singleTrieOutput(newTrieIndex)
@@ -770,34 +733,23 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 			a.jsonResult = newTrieData
 			a.displayResults()
 			a.updateStatusBar()
-
-			if a.visualizationView != nil {
-				frontPageName, _ := a.pages.GetFrontPage()
-				if frontPageName == "visualization" {
-					a.visualizationView.updateForCurrentTrie()
-				} else {
-					a.visualizationView.updateMetadataOnly()
-				}
-			}
+			a.visualizationView.updateForCurrentTrie()
 		}
 	})
 }
 
-// displayResults populates the results view with analysis data
+// displayResults populates the results view with analysis data. jsonResult is
+// only ever derived from multiTrieResult (singleTrieOutput), so a non-nil
+// jsonResult implies the multi-trie result the panel builders read.
 func (a *App) displayResults() {
 	if a.jsonResult == nil {
 		return
 	}
-
-	if a.cfg != nil && a.multiTrieResult != nil {
-		a.displayCachedResults()
-	} else {
-		a.displayResultsUncached()
-	}
+	a.displayCachedResults()
 }
 
-// displayCachedResults shows pre-rendered results for multi-trie analysis,
-// building and caching all four panels on first display.
+// displayCachedResults shows the current trie's pre-rendered panels, building
+// and caching all four on first display.
 func (a *App) displayCachedResults() {
 	summary, clustering, cidr, diagnostics, ok := a.trieCache.GetPreRenderedTexts(a.currentTrie)
 	if !ok {
@@ -811,95 +763,6 @@ func (a *App) displayCachedResults() {
 	a.clustering.SetText(clustering)
 	a.cidrAnalysis.SetText(cidr)
 	a.diagnostics.SetText(diagnostics)
-}
-
-// displayResultsUncached shows results without caching (no-config mode)
-func (a *App) displayResultsUncached() {
-	// Populate summary with fixed stats and trie-specific stats
-	summaryText := a.buildSummaryText()
-	a.setSummaryText(summaryText)
-
-	// Populate clustering results
-	var clusteringText strings.Builder
-	clusteringText.WriteString("[white::b]Detected Threats[white::-]\n\n")
-
-	for i, cluster := range a.jsonResult.Clustering.Data {
-		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (%s)\n",
-			i+1, output.FormatClusterParameters(cluster.Parameters)))
-
-		if len(cluster.MergedRanges) > 0 {
-			clusteringText.WriteString("[red]Merged Ranges:[white]\n")
-
-			// Calculate total for this cluster set; sum the per-range
-			// percentages so the total shares their denominator
-			// (requests after filtering, not unique IPs)
-			var totalRequests uint32
-			var totalPercentage float64
-			for _, cidr := range cluster.MergedRanges {
-				totalRequests += cidr.Requests
-				totalPercentage += cidr.Percentage
-			}
-
-			for _, cidr := range cluster.MergedRanges {
-				clusteringText.WriteString(fmt.Sprintf("  • %s: [red]%s[white] requests (%.2f%%)\n",
-					cidr.CIDR, output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
-			}
-			clusteringText.WriteString(fmt.Sprintf("[yellow]Total for Set %d: %s requests (%.2f%%)[white]\n",
-				i+1, output.FormatNumber(int(totalRequests)), totalPercentage))
-		} else {
-			clusteringText.WriteString("[dim]No significant ranges detected[white]\n")
-		}
-		clusteringText.WriteString("\n")
-	}
-
-	a.clustering.SetText(clusteringText.String())
-
-	// Populate CIDR analysis
-	var cidrText strings.Builder
-	cidrText.WriteString("[white::b]Range Analysis[white::-]\n\n")
-
-	if len(a.jsonResult.CIDRAnalysis.Data) > 0 {
-		for _, cidr := range a.jsonResult.CIDRAnalysis.Data {
-			cidrText.WriteString(fmt.Sprintf("[cyan]%s[white]\n", cidr.CIDR))
-			cidrText.WriteString(fmt.Sprintf("  Requests: [yellow]%s[white] (%.2f%%)\n\n",
-				output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
-		}
-	} else {
-		cidrText.WriteString("[dim]No specific ranges analyzed[white]")
-	}
-
-	a.cidrAnalysis.SetText(cidrText.String())
-
-	// Populate diagnostics - filter out info messages in multi-trie mode
-	var diagText strings.Builder
-	diagText.WriteString("[white::b]Diagnostics[white::-]\n\n")
-
-	// Filter out info messages
-	var realWarnings []output.Warning
-	for _, warning := range a.jsonResult.Warnings {
-		if warning.Type != "info" {
-			realWarnings = append(realWarnings, warning)
-		}
-	}
-
-	if len(realWarnings) > 0 {
-		diagText.WriteString("[yellow]Warnings:[white]\n")
-		for _, warning := range realWarnings {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(warning.Message)))
-		}
-		diagText.WriteString("\n")
-	}
-
-	if len(a.jsonResult.Errors) > 0 {
-		diagText.WriteString("[red]Errors:[white]\n")
-		for _, err := range a.jsonResult.Errors {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(err.Message)))
-		}
-	} else if len(realWarnings) == 0 {
-		diagText.WriteString("[green]✓ No issues detected[white]")
-	}
-
-	a.diagnostics.SetText(diagText.String())
 }
 
 // buildClusteringText creates the clustering results text for the current trie.
@@ -1012,103 +875,77 @@ func (a *App) buildDiagnosticsTextFor(result *output.JSONOutput) string {
 // buildSummaryText creates the summary text with fixed and trie-specific stats
 // for the current trie.
 func (a *App) buildSummaryText() string {
-	return a.buildSummaryTextFor(a.jsonResult, a.currentTrie)
+	return a.buildSummaryTextFor(a.currentTrie)
 }
 
-// buildSummaryTextFor creates the summary text from an explicit single-trie
-// output and trie index, so the background precache can render a non-current
-// trie without mutating shared App state.
-func (a *App) buildSummaryTextFor(result *output.JSONOutput, trieIndex int) string {
+// buildSummaryTextFor creates the summary text for an explicit trie index, so
+// the background precache can render a non-current trie without mutating
+// shared App state. trieIndex must be a valid index into multiTrieResult.Tries
+// (every caller derives it together with that trie's single-trie output).
+func (a *App) buildSummaryTextFor(trieIndex int) string {
 	var summaryText strings.Builder
 	summaryText.WriteString("[white::b]Analysis Summary[white::-]\n")
 
 	// Fixed stats (global, not trie-specific) - always show these first
-	// Use original multiTrieResult data for truly fixed stats
-	var parseRate int64
-	var totalIPsRead int
-	var parsingTime int64
+	general := a.multiTrieResult.General
+	summaryText.WriteString(fmt.Sprintf("[dim]Parse Rate:[white] %s req/sec\n",
+		output.FormatNumber(int(general.Parsing.RatePerSecond))))
+	summaryText.WriteString(fmt.Sprintf("[dim]Amount of IPs Read:[white] %s\n",
+		output.FormatNumber(general.TotalRequests)))
+	summaryText.WriteString(fmt.Sprintf("[dim]Parsing Time:[white] %dms\n\n",
+		general.Parsing.DurationMS))
 
-	if a.cfg != nil && a.multiTrieResult != nil {
-		// Multi-trie mode - use original data
-		parseRate = a.multiTrieResult.General.Parsing.RatePerSecond
-		totalIPsRead = a.multiTrieResult.General.TotalRequests
-		parsingTime = a.multiTrieResult.General.Parsing.DurationMS
+	// Trie-specific stats (show below the fixed stats). Read multiTrieResult
+	// directly: it has the Parameters and Stats that the single-trie output
+	// conversion does not carry.
+	trieData := a.multiTrieResult.Tries[trieIndex]
+
+	// Trie names, regex filters, paths and messages are user data and are
+	// escaped wherever they are rendered: tview consumes anything that
+	// looks like "[word]" as a style tag (useragentRegex = "[Bb]ot" was
+	// displayed as "ot").
+	summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", tview.Escape(trieData.Name)))
+
+	// Active filters
+	summaryText.WriteString("[dim]Active Filters:[white] ")
+	filters := output.ActiveFilters(trieData.Parameters, a.multiTrieResult.GlobalFilters)
+	if len(filters) > 0 {
+		summaryText.WriteString(tview.Escape(strings.Join(filters, ", ")))
 	} else {
-		// No-config mode - use jsonResult data
-		parseRate = result.General.Parsing.RatePerSecond
-		totalIPsRead = result.General.TotalRequests
-		parsingTime = result.General.Parsing.DurationMS
+		summaryText.WriteString("None")
+	}
+	summaryText.WriteString("\n")
+
+	// Trie build time (filtering + inserts)
+	summaryText.WriteString(fmt.Sprintf("[dim]Trie Build Time:[white] %dms\n", trieData.Stats.InsertTimeMS))
+
+	// Requests after filtering
+	summaryText.WriteString(fmt.Sprintf("[dim]Requests After Filtering:[white] %s\n",
+		output.FormatNumber(trieData.Stats.TotalRequestsAfterFiltering)))
+
+	// Requests dropped by the global UA whitelist (shown so the count drop
+	// is explained even when no per-trie filters are active).
+	if trieData.Stats.UAWhitelistExcluded > 0 {
+		summaryText.WriteString(fmt.Sprintf("[dim]Excluded (UA whitelist):[white] %s\n",
+			output.FormatNumber(trieData.Stats.UAWhitelistExcluded)))
 	}
 
-	summaryText.WriteString(fmt.Sprintf("[dim]Parse Rate:[white] %s req/sec\n",
-		output.FormatNumber(int(parseRate))))
-	summaryText.WriteString(fmt.Sprintf("[dim]Amount of IPs Read:[white] %s\n",
-		output.FormatNumber(totalIPsRead)))
-	summaryText.WriteString(fmt.Sprintf("[dim]Parsing Time:[white] %dms\n\n",
-		parsingTime))
-
-	// Trie-specific stats (show below the fixed stats)
-	// Always use multiTrieResult directly for accurate Parameters and Stats
-	if a.cfg != nil && a.multiTrieResult != nil && trieIndex < len(a.multiTrieResult.Tries) {
-		// Always use multiTrieResult directly - it has the accurate Parameters and Stats
-		// The single-trie output conversion loses this information, so we bypass it here
-		trieData := a.multiTrieResult.Tries[trieIndex]
-
-		// Trie names, regex filters, paths and messages are user data and are
-		// escaped wherever they are rendered: tview consumes anything that
-		// looks like "[word]" as a style tag (useragentRegex = "[Bb]ot" was
-		// displayed as "ot").
-		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", tview.Escape(trieData.Name)))
-
-		// Active filters
-		summaryText.WriteString("[dim]Active Filters:[white] ")
-		filters := output.ActiveFilters(trieData.Parameters, a.multiTrieResult.GlobalFilters)
-		if len(filters) > 0 {
-			summaryText.WriteString(tview.Escape(strings.Join(filters, ", ")))
+	// Analysis time (sum of all clustering runs)
+	totalAnalysisTime := a.calculateTotalAnalysisTime(trieData.Data)
+	clusterCount := len(trieData.Data)
+	if totalAnalysisTime == 0 && clusterCount > 0 {
+		// If 0μs but we have cluster results, show "<1μs" for very fast operations
+		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] <1μs (%d clusters)", clusterCount))
+	} else if totalAnalysisTime > 0 {
+		if totalAnalysisTime >= 1000 {
+			// Show in milliseconds if >= 1000μs
+			summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %.1fms (%d clusters)", float64(totalAnalysisTime)/1000.0, clusterCount))
 		} else {
-			summaryText.WriteString("None")
+			summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dμs (%d clusters)", totalAnalysisTime, clusterCount))
 		}
-		summaryText.WriteString("\n")
-
-		// Trie build time (filtering + inserts)
-		summaryText.WriteString(fmt.Sprintf("[dim]Trie Build Time:[white] %dms\n", trieData.Stats.InsertTimeMS))
-
-		// Requests after filtering
-		summaryText.WriteString(fmt.Sprintf("[dim]Requests After Filtering:[white] %s\n",
-			output.FormatNumber(trieData.Stats.TotalRequestsAfterFiltering)))
-
-		// Requests dropped by the global UA whitelist (shown so the count drop
-		// is explained even when no per-trie filters are active).
-		if trieData.Stats.UAWhitelistExcluded > 0 {
-			summaryText.WriteString(fmt.Sprintf("[dim]Excluded (UA whitelist):[white] %s\n",
-				output.FormatNumber(trieData.Stats.UAWhitelistExcluded)))
-		}
-
-		// Analysis time (sum of all clustering runs)
-		totalAnalysisTime := a.calculateTotalAnalysisTime(trieData.Data)
-		clusterCount := len(trieData.Data)
-		if totalAnalysisTime == 0 && clusterCount > 0 {
-			// If 0μs but we have cluster results, show "<1μs" for very fast operations
-			summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] <1μs (%d clusters)", clusterCount))
-		} else if totalAnalysisTime > 0 {
-			if totalAnalysisTime >= 1000 {
-				// Show in milliseconds if >= 1000μs
-				summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %.1fms (%d clusters)", float64(totalAnalysisTime)/1000.0, clusterCount))
-			} else {
-				summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dμs (%d clusters)", totalAnalysisTime, clusterCount))
-			}
-		} else {
-			// No clustering results
-			summaryText.WriteString("[dim]Analysis Time:[white] N/A (no clustering)")
-		}
-
 	} else {
-		// No-config CLI mode
-		summaryText.WriteString("[white::b]Legacy Analysis[white::-]\n")
-		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", tview.Escape(result.General.LogFile)))
-		summaryText.WriteString(fmt.Sprintf("[dim]Unique IPs:[white] %s\n",
-			output.FormatNumber(result.General.UniqueIPs)))
-		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dms", result.Metadata.DurationMS))
+		// No clustering results
+		summaryText.WriteString("[dim]Analysis Time:[white] N/A (no clustering)")
 	}
 
 	return summaryText.String()
@@ -1176,7 +1013,7 @@ func (a *App) updateStatusBar() {
 
 	switch frontPageName {
 	case "visualization":
-		if a.visualizationView != nil && a.visualizationView.totalClusterSets > 0 {
+		if a.visualizationView.totalClusterSets > 0 {
 			a.setStatusBarText(fmt.Sprintf("[green]Visualization mode[white] | Set %d/%d | ←→: change cluster set, ↑↓: scroll, 'r': results, 'v': visualization, 'q': quit",
 				a.visualizationView.currentClusterSet+1, a.visualizationView.totalClusterSets))
 		} else {
@@ -1186,50 +1023,30 @@ func (a *App) updateStatusBar() {
 		panelNames := []string{"Clustering Results", "CIDR Analysis", "Diagnostics"}
 		currentPanel := panelNames[a.currentFocus]
 
-		if a.cfg != nil && a.multiTrieResult != nil {
-			// Config mode - check if we have multiple tries stored
-			if len(a.multiTrieResult.Tries) > 1 {
-				// Multi-trie mode
-				if a.currentTrie >= len(a.multiTrieResult.Tries) {
-					a.currentTrie = 0
-				}
-				trieName := a.multiTrieResult.Tries[a.currentTrie].Name
-				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | [cyan]%s (%d/%d)[white] | Tab/Shift+Tab: panels, 't': next trie, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit",
-					currentPanel, tview.Escape(trieName), a.currentTrie+1, len(a.multiTrieResult.Tries)))
-			} else {
-				// Single trie config mode
-				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
+		// analysisComplete (checked above) is only set once multiTrieResult
+		// is stored, so it is non-nil here.
+		if len(a.multiTrieResult.Tries) > 1 {
+			// Multi-trie mode
+			if a.currentTrie >= len(a.multiTrieResult.Tries) {
+				a.currentTrie = 0
 			}
+			trieName := a.multiTrieResult.Tries[a.currentTrie].Name
+			a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | [cyan]%s (%d/%d)[white] | Tab/Shift+Tab: panels, 't': next trie, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit",
+				currentPanel, tview.Escape(trieName), a.currentTrie+1, len(a.multiTrieResult.Tries)))
 		} else {
-			// No-config CLI mode
-			a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: switch panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
+			// Single trie
+			a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
 		}
 	}
 }
 
 // showVisualization switches to the visualization view
 func (a *App) showVisualization() {
-	// Check if visualization is ready (pre-initialized in background)
-	if a.visualizationView == nil {
-		// Fallback: create on-demand if background initialization hasn't finished
-		a.visualizationView = a.NewVisualizationView()
+	// The heatmap is rendered whenever a trie is displayed. If that was before
+	// the request precache had published the trie's grids, render again: they
+	// may be there by now (the precache refreshes only once every trie is done).
+	a.refreshVisualization()
 
-		// Create visualization page layout
-		visualizationLayout := tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(a.visualizationView.GetView(), 0, 1, true).
-			AddItem(a.statusBar, minStatusBarHeight, 0, false)
-		a.visualizationLayout = visualizationLayout
-
-		a.pages.AddPage("visualization", visualizationLayout, true, false)
-
-		// Process data if we have requests (fallback for immediate use)
-		if requests := a.requestData(); len(requests) > 0 {
-			a.visualizationView.ProcessTrafficData(requests)
-			a.visualizationView.Render()
-		}
-	}
-
-	// Switch to visualization page (should be instant if pre-initialized)
 	a.pages.SwitchToPage("visualization")
 	a.updateStatusBar()
 }
@@ -1272,12 +1089,6 @@ func (a *App) singleTrieOutput(trieIndex int) *output.JSONOutput {
 
 // displayResultsFromTrieCache uses pre-rendered texts from TrieCache for instant display
 func (a *App) displayResultsFromTrieCache(trieIndex int) {
-	if a.trieCache == nil {
-		// Fallback to normal display
-		a.displayResults()
-		return
-	}
-
 	// Get pre-rendered texts from cache
 	summaryText, clusteringText, cidrText, diagnosticsText, exists := a.trieCache.GetPreRenderedTexts(trieIndex)
 	if !exists {
@@ -1291,45 +1102,4 @@ func (a *App) displayResultsFromTrieCache(trieIndex int) {
 	a.clustering.SetText(clusteringText)
 	a.cidrAnalysis.SetText(cidrText)
 	a.diagnostics.SetText(diagnosticsText)
-}
-
-// updateVisualizationFromCache uses cached traffic data for instant visualization updates
-func (a *App) updateVisualizationFromCache(trieIndex int) {
-	if a.trieCache == nil || a.visualizationView == nil {
-		// Fallback to uncached visualization update
-		a.visualizationView.updateForCurrentTrie()
-		return
-	}
-
-	// Reset the displayed cluster set on a trie switch and refresh the count,
-	// matching the slow fallback path (updateForCurrentTrie). Without this the
-	// cache-hit fast path would keep the previous trie's currentClusterSet.
-	a.visualizationView.currentClusterSet = 0
-	if a.jsonResult != nil {
-		a.visualizationView.totalClusterSets = len(a.jsonResult.Clustering.Data)
-	}
-
-	// Get cached traffic data
-	trafficMatrix, maxTraffic, exists := a.trieCache.GetTrafficData(trieIndex)
-	if !exists {
-		// Cache not ready yet, fall back to the uncached path
-		a.visualizationView.updateForCurrentTrie()
-		return
-	}
-
-	// Update visualization with cached data instantly
-	a.visualizationView.trafficData = trafficMatrix
-	a.visualizationView.maxTraffic = maxTraffic
-
-	// Seed the clustered-overlay grid from the fast cache so the heatmap render
-	// does not have to re-scan requests. Keyed by (trie, current cluster set).
-	if grid, ok := a.trieCache.GetClusteredData(trieIndex, a.visualizationView.currentClusterSet); ok {
-		a.visualizationView.clusteredData = grid
-		if a.visualizationView.cachedClusteredData != nil {
-			a.visualizationView.cachedClusteredData[clusterKey{trie: trieIndex, set: a.visualizationView.currentClusterSet}] = grid
-		}
-	}
-
-	// Render on-demand (fast, since the traffic and clustered grids are cached).
-	a.visualizationView.Render()
 }

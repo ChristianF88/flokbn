@@ -108,7 +108,7 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 
 // executeTUI runs TUI mode - works for both CLI and config file inputs
 func executeTUI(cfg *config.Config) error {
-	app := tui.NewAppFromConfig(cfg, "")
+	app := tui.NewAppFromConfig(cfg)
 
 	// Tie the analysis goroutine's lifetime to the TUI: cancelling when app.Run
 	// returns stops the analysis short-circuiting before its jail/ban-file side
