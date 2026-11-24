@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ChristianF88/flokbn/accesslog"
+	"github.com/ChristianF88/flokbn/analysis"
 	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/ingestor"
@@ -505,40 +506,7 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 		mergedCIDRs = append(mergedCIDRs, ipNet.String())
 	}
 
-	// Whitelists from every source: CIDR list + UA-whitelisted IPs.
-	allWhitelists := composeAllWhitelists(l.whitelist, l.uaWhitelistIPs)
-
-	// Drop fully-whitelisted CIDRs before the jail update without
-	// fragmenting partial overlaps (static parity). The whitelist is
-	// reapplied exactly at the publish choke point; fragmenting here around
-	// UA-whitelisted /32s would explode the jail update super-linearly.
-	filteredJailCIDRs, removed := cidr.DropFullyWhitelisted(mergedCIDRs, allWhitelists)
-	if len(allWhitelists) > 0 && removed > 0 {
-		l.logger.Warn("whitelist filtering prevented CIDRs from being added to jail", "count", removed)
-	}
-
-	// Force-jail IPs seen with blacklisted User-Agents as /32 (static
-	// parity). Jail dedups; ban decay handles IPs that stop appearing.
-	for ip := range l.uaBlacklistIPs {
-		filteredJailCIDRs = append(filteredJailCIDRs, iputils.Uint32ToIP(ip).String()+"/32")
-	}
-
-	if err := l.jail.Update(filteredJailCIDRs); err != nil {
-		l.logger.Warn("some CIDRs failed during jail update", "err", err)
-	}
-	// Evict prisoners stale beyond the escalation-memory window before
-	// persisting, so jail.json (written in full whenever it changes) tracks
-	// active+recent bans, not lifetime-distinct CIDRs (AUDIT-04).
-	prunedJail := l.jail.Prune(l.jail.RetentionHorizon())
-	// Persist only when the serialized jail changed (or the file is gone):
-	// most iterations re-detect ranges that are already banned.
-	jailFileWritten := l.saveJail()
-
-	// ComposeBanLists is the publish choke point (static parity):
-	// whitelists win over active bans AND the manual blacklist.
-	activeBans := l.jail.ListActiveBans()
-	publishBans, publishBlacklist := cidr.ComposeBanLists(activeBans, l.blacklist, allWhitelists)
-	banFileWritten := l.writeBanFile(publishBans, publishBlacklist)
+	round := l.publishBans(mergedCIDRs, l.forcedBans(), false)
 
 	loopEnd := time.Since(loopStart)
 
@@ -555,11 +523,11 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 		"batch", len(batch),
 		"detected", len(allDetectedCIDRs),
 		"merged", len(mergedCIDRs),
-		"jailed", len(filteredJailCIDRs),
-		"pruned", prunedJail,
-		"active_bans", len(publishBans),
-		"ban_file_written", banFileWritten,
-		"jail_file_written", jailFileWritten,
+		"jailed", round.Jailed,
+		"pruned", round.pruned,
+		"active_bans", len(round.Bans),
+		"ban_file_written", round.banFileWritten,
+		"jail_file_written", round.jailFileWritten,
 		"loop_ms", loopEnd.Milliseconds(),
 		"cluster_ms", totalClusterDuration/1000,
 	)
@@ -578,6 +546,75 @@ func composeAllWhitelists(whitelistCIDRs []string, uaWhitelistIPs map[uint32]tim
 		combined = append(combined, iputils.Uint32ToIP(ip).String()+"/32")
 	}
 	return combined
+}
+
+// forcedBans lists the IPs seen with a blacklisted User-Agent as /32 ranges.
+// An iteration hands them to the jail whatever the batch held (static
+// parity). The jail dedups; ban decay handles IPs that stop appearing.
+func (l *liveLoop) forcedBans() []string {
+	if len(l.uaBlacklistIPs) == 0 {
+		return nil
+	}
+	forced := make([]string, 0, len(l.uaBlacklistIPs))
+	for ip := range l.uaBlacklistIPs {
+		forced = append(forced, iputils.Uint32ToIP(ip).String()+"/32")
+	}
+	return forced
+}
+
+// banRound is the outcome of one round of the ban pipeline in live mode.
+type banRound struct {
+	analysis.BanUpdate
+	pruned          int // prisoners evicted from the jail
+	jailFileWritten bool
+	banFileWritten  bool
+}
+
+// publishBans runs one round of the ban pipeline and writes what changed. It
+// is the only place live mode touches the jail and the ban file:
+//
+//   - analysis.UpdateBans, shared with static mode, drops the detected ranges
+//     that are fully whitelisted (without fragmenting partial overlaps),
+//     expires the bans that ran out, starts or escalates a ban for every
+//     range handed in, and composes the lists to publish, where the
+//     whitelist wins over the active bans AND the manual blacklist;
+//   - prisoners stale beyond the escalation-memory window are evicted, so
+//     jail.json tracks active+recent bans, not lifetime-distinct CIDRs
+//     (AUDIT-04);
+//   - jail.json and the ban file are written when their content changed.
+//
+// An iteration hands in the merged ranges it detected and the forced bans. A
+// heartbeat hands in nothing, so it only expires: without traffic no ban is
+// ever started or escalated, and the IPs of blacklisted User-Agents are not
+// re-jailed, so their bans decay normally.
+func (l *liveLoop) publishBans(detected, forceBan []string, heartbeat bool) banRound {
+	round := banRound{BanUpdate: analysis.UpdateBans(&l.jail, analysis.BanInput{
+		Detected: detected,
+		ForceBan: forceBan,
+		// Whitelists from every source: CIDR list + UA-whitelisted IPs.
+		Whitelist: composeAllWhitelists(l.whitelist, l.uaWhitelistIPs),
+		Blacklist: l.blacklist,
+	})}
+	if round.WhitelistDropped > 0 {
+		l.logger.Warn("whitelist filtering prevented CIDRs from being added to jail", "count", round.WhitelistDropped)
+	}
+	if round.UpdateErr != nil {
+		l.logger.Warn("some CIDRs failed during jail update", "err", round.UpdateErr)
+	}
+
+	// Pure evictions remove already-inactive prisoners, so they change
+	// neither the active bans nor the lists composed above.
+	round.pruned = l.jail.Prune(l.jail.RetentionHorizon())
+
+	// An iteration compares the serialized jail with the last write every
+	// time: most iterations re-detect ranges that are already banned, and a
+	// jail file that went missing comes back. A heartbeat skips even the
+	// comparison unless a ban ran out or a prisoner was evicted.
+	if !heartbeat || round.JailChanged || round.pruned > 0 {
+		round.jailFileWritten = l.saveJail()
+	}
+	round.banFileWritten = l.writeBanFile(round.Bans, round.Blacklist)
+	return round
 }
 
 // saveJail persists the jail when its serialized form differs from the last
@@ -667,35 +704,16 @@ func (l *liveLoop) heartbeat() {
 
 	windowExpired := l.expireWindows()
 
-	// Expiry only flips bans active -> inactive, so a count delta is an
-	// exact change signal.
-	before := len(l.jail.ListActiveBans())
-	l.jail.UpdateBanActiveStatus()
-	after := len(l.jail.ListActiveBans())
-	// Evict prisoners stale beyond the escalation-memory window so jail.json
-	// keeps shrinking even during traffic-free periods (AUDIT-04). Pure
-	// evictions remove already-inactive prisoners, so they do NOT change the
-	// active-ban count; force the save when anything was pruned as well.
-	pruned := l.jail.Prune(l.jail.RetentionHorizon())
-	if after != before || pruned > 0 {
-		l.saveJail()
-	}
-
-	// Compose the publish lists exactly like the iteration path. UA-
-	// blacklisted IPs are deliberately NOT re-appended as /32 fills: with no
-	// traffic those IPs are not recurring, so their bans decay normally.
-	allWhitelists := composeAllWhitelists(l.whitelist, l.uaWhitelistIPs)
-	publishBans, publishBlacklist := cidr.ComposeBanLists(l.jail.ListActiveBans(), l.blacklist, allWhitelists)
-	wrote := l.writeBanFile(publishBans, publishBlacklist)
+	round := l.publishBans(nil, nil, true)
 
 	// Publish before logging so anyone reacting to the heartbeat line
 	// already sees the matching /stats state (same order as iterations).
 	l.publishSnapshot(time.Since(hbStart), true)
 
 	l.logger.Debug("heartbeat",
-		"expired", before-after,
-		"active_bans", len(publishBans),
-		"ban_file_written", wrote,
+		"expired", round.Expired,
+		"active_bans", len(round.Bans),
+		"ban_file_written", round.banFileWritten,
 		"window_expired", windowExpired,
 	)
 }

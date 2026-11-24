@@ -56,6 +56,9 @@ func TestUpdateBansRound(t *testing.T) {
 	if got.UpdateErr != nil {
 		t.Errorf("UpdateErr = %v", got.UpdateErr)
 	}
+	if got.Expired != 1 {
+		t.Errorf("Expired = %d, want 1 (%s ran out)", got.Expired, publishExpiredCIDR)
+	}
 
 	// The jail holds what was handed to it. The forced /32 inside the
 	// whitelisted /8 is jailed too (no pre-jail check); the forced
@@ -120,16 +123,16 @@ func TestUpdateBansQuietRound(t *testing.T) {
 	j.AllCIDRs = []string{publishExpiredCIDR, publishActiveCIDR}
 
 	first := UpdateBans(&j, BanInput{})
-	if !first.JailChanged || first.Jailed != 0 {
-		t.Errorf("first quiet round: JailChanged=%v Jailed=%d, want true/0", first.JailChanged, first.Jailed)
+	if !first.JailChanged || first.Jailed != 0 || first.Expired != 1 {
+		t.Errorf("first quiet round: JailChanged=%v Jailed=%d Expired=%d, want true/0/1", first.JailChanged, first.Jailed, first.Expired)
 	}
 	if !reflect.DeepEqual(first.Bans, []string{publishActiveCIDR}) {
 		t.Errorf("first quiet round bans = %v, want only %s", first.Bans, publishActiveCIDR)
 	}
 
 	second := UpdateBans(&j, BanInput{})
-	if second.JailChanged {
-		t.Error("second quiet round reports a change")
+	if second.JailChanged || second.Expired != 0 {
+		t.Errorf("second quiet round reports a change: JailChanged=%v Expired=%d", second.JailChanged, second.Expired)
 	}
 	if !reflect.DeepEqual(second.Bans, []string{publishActiveCIDR}) {
 		t.Errorf("second quiet round bans = %v, want only %s", second.Bans, publishActiveCIDR)
