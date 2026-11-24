@@ -3,9 +3,9 @@ package analysis
 import (
 	"testing"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 )
 
 // filterCounts holds the out-parameters that both filter paths populate, so the
@@ -30,7 +30,7 @@ func ipSetStrings(ips []uint32) []string {
 			continue
 		}
 		seen[ip] = struct{}{}
-		out = append(out, ingestor.Uint32ToIPString(ip))
+		out = append(out, accesslog.Uint32ToIPString(ip))
 	}
 	return out
 }
@@ -48,13 +48,13 @@ func toFilterCounts(res filterResult) filterCounts {
 }
 
 // runSequential drives filterSequential over reqs and returns the resulting counts.
-func runSequential(reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
+func runSequential(reqs []accesslog.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
 	var noBounds timeBounds // no time filters in this test
 	return toFilterCounts(filterSequential(reqs, tc, noBounds, m))
 }
 
 // runConcurrent drives filterConcurrent over reqs and returns the counts.
-func runConcurrent(t *testing.T, reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
+func runConcurrent(t *testing.T, reqs []accesslog.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
 	t.Helper()
 	var noBounds timeBounds // no time filters in this test
 	return toFilterCounts(filterConcurrent(reqs, tc, noBounds, m))
@@ -76,12 +76,12 @@ func TestConcurrentSequentialParity_ZeroIPWhitelistedUA(t *testing.T) {
 	// collected as a /32.
 	matcher := cidr.NewUserAgentMatcher([]string{"Googlebot"}, []string{"evilbot"})
 
-	// IPv4 helper: a.b.c.d -> uint32 (big-endian, matching ingestor.Uint32ToIPString).
+	// IPv4 helper: a.b.c.d -> uint32 (big-endian, matching accesslog.Uint32ToIPString).
 	ipv4 := func(a, b, c, d uint32) uint32 {
 		return a<<24 | b<<16 | c<<8 | d
 	}
 
-	reqs := []ingestor.Request{
+	reqs := []accesslog.Request{
 		// (a) normal IPs, non-whitelisted UA -> included.
 		{IPUint32: ipv4(192, 168, 1, 1), UserAgent: "Mozilla/5.0"},
 		{IPUint32: ipv4(192, 168, 1, 2), UserAgent: "Mozilla/5.0"},
@@ -135,7 +135,7 @@ func TestConcurrentSequentialParity_ZeroIPWhitelistedUA(t *testing.T) {
 
 	// A 0.0.0.0 entry must never be collected as a UA whitelist/blacklist /32 on
 	// either path (it is converted to a /32 for jail/ban processing).
-	zeroIP := ingestor.Uint32ToIPString(0)
+	zeroIP := accesslog.Uint32ToIPString(0)
 	for _, ip := range append(append([]string{}, seq.whitelistIPs...), con.whitelistIPs...) {
 		if ip == zeroIP {
 			t.Errorf("0.0.0.0 must not be collected as a UA whitelist IP")

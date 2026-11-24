@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/output"
 )
 
@@ -35,7 +35,7 @@ type tuiHeatmap struct {
 // quit). The outcome is recorded on result exactly as in the non-TUI path: an
 // "info" warning on success, a "heatmap" error on failure - the latter shows up
 // in the TUI's Diagnostics panel.
-func (h *tuiHeatmap) write(ctx context.Context, plotPath string, requests []ingestor.Request, result *output.JSONOutput) {
+func (h *tuiHeatmap) write(ctx context.Context, plotPath string, requests []accesslog.Request, result *output.JSONOutput) {
 	if plotPath == "" || requests == nil {
 		return
 	}

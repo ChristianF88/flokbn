@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config/regexprefilter"
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/logging"
@@ -1445,7 +1445,7 @@ func regexGate(compiled *regexp.Regexp, pf *regexprefilter.Prefilter, value stri
 }
 
 // ShouldIncludeRequest checks if a request should be included based on regex filters
-func (tc *TrieConfig) ShouldIncludeRequest(req ingestor.Request) bool {
+func (tc *TrieConfig) ShouldIncludeRequest(req accesslog.Request) bool {
 	// Apply useragent regex filter (short-circuit on empty UserAgent)
 	if !regexGate(tc.userAgentRegexCompiled, tc.userAgentPrefilter, req.UserAgent) {
 		return false
@@ -1460,7 +1460,7 @@ func (tc *TrieConfig) ShouldIncludeRequest(req ingestor.Request) bool {
 }
 
 // ShouldIncludeRequest checks if a request should be included based on regex filters
-func (stc *SlidingTrieConfig) ShouldIncludeRequest(req ingestor.Request) bool {
+func (stc *SlidingTrieConfig) ShouldIncludeRequest(req accesslog.Request) bool {
 	// Apply useragent regex filter (short-circuit on empty UserAgent)
 	if !regexGate(stc.userAgentRegexCompiled, stc.userAgentPrefilter, req.UserAgent) {
 		return false

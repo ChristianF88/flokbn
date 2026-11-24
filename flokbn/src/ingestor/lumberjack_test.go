@@ -17,6 +17,8 @@ import (
 	"time"
 
 	v2 "github.com/elastic/go-lumber/client/v2"
+
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // --- wire helpers ---------------------------------------------------------
@@ -171,9 +173,9 @@ func allocatedDuring(f func()) uint64 {
 	return after.TotalAlloc - before.TotalAlloc
 }
 
-func readAll(t *testing.T, ing *TCPIngestor, want int) []Request {
+func readAll(t *testing.T, ing *TCPIngestor, want int) []accesslog.Request {
 	t.Helper()
-	var got []Request
+	var got []accesslog.Request
 	waitFor(t, 5*time.Second, fmt.Sprintf("%d requests", want), func() bool {
 		batch, err := ing.ReadBatch()
 		if err != nil {

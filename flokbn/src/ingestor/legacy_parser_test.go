@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // The hardcoded live parser that TCPIngestor used before it switched to the
@@ -19,7 +21,7 @@ import (
 // legacyParseLine parses one access-log line (the "message" field of a lumberjack
 // event) into out. malformed counts non-fatal field corruption (status/bytes
 // kept as zero), mirroring the log-parser's malformed-field accounting.
-func legacyParseLine(msg string, out *Request) (malformed int, err error) {
+func legacyParseLine(msg string, out *accesslog.Request) (malformed int, err error) {
 	// 1. Extract IP
 	spaceIdx := strings.IndexByte(msg, ' ')
 	if spaceIdx == -1 {
@@ -72,7 +74,7 @@ func legacyParseLine(msg string, out *Request) (malformed int, err error) {
 	requestLine := msg[start:end]
 	parts := strings.Fields(requestLine)
 	if len(parts) >= 2 {
-		out.Method = ParseMethod(parts[0])
+		out.Method = accesslog.ParseMethod(parts[0])
 		out.URI = parts[1]
 	}
 

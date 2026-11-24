@@ -76,7 +76,7 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 	}
 
 	// No heatmap requested: take the IP-only fast path that never materialises
-	// the []ingestor.Request slice (the requests would otherwise be discarded).
+	// the []accesslog.Request slice (the requests would otherwise be discarded).
 	if cfg.Static == nil || cfg.Static.PlotPath == "" {
 		result, err := analysis.Static(cfg)
 		if err != nil {

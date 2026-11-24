@@ -14,30 +14,6 @@ import (
 	"github.com/ChristianF88/flokbn/logparser"
 )
 
-// The request record and its helpers live in the leaf package accesslog. The
-// names below are aliases kept so that existing users of ingestor.Request and
-// friends compile unchanged.
-type (
-	HTTPMethod = accesslog.HTTPMethod
-	Request    = accesslog.Request
-)
-
-const (
-	GET     = accesslog.GET
-	POST    = accesslog.POST
-	PUT     = accesslog.PUT
-	DELETE  = accesslog.DELETE
-	HEAD    = accesslog.HEAD
-	OPTIONS = accesslog.OPTIONS
-	PATCH   = accesslog.PATCH
-	UNKNOWN = accesslog.UNKNOWN
-)
-
-func ParseMethod(m string) HTTPMethod { return accesslog.ParseMethod(m) }
-
-// Uint32ToIPString converts uint32 back to IP string for output
-func Uint32ToIPString(ip uint32) string { return accesslog.Uint32ToIPString(ip) }
-
 // --- TCP Ingestor (Lumberjack v2, see lumberjack.go) ---
 
 // Ingestor is the contract the live loop consumes. TCPIngestor is the
@@ -47,7 +23,7 @@ func Uint32ToIPString(ip uint32) string { return accesslog.Uint32ToIPString(ip) 
 // consumer must call ReadBatch until it returns nothing before giving up.
 type Ingestor interface {
 	Accept() error
-	ReadBatch() ([]Request, error)
+	ReadBatch() ([]accesslog.Request, error)
 	IsClosed() bool
 	Close() error
 	Stats() IngestStats
@@ -213,7 +189,7 @@ func (ing *TCPIngestor) Accept() error {
 // network, so a panic in the parser is turned into an error: one event can
 // then never take down the live loop, it is counted as a parse error and
 // skipped like any other line that does not parse.
-func (ing *TCPIngestor) parseLine(msg string, out *Request) (err error) {
+func (ing *TCPIngestor) parseLine(msg string, out *accesslog.Request) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("log parser panic: %v", r)
@@ -224,8 +200,8 @@ func (ing *TCPIngestor) parseLine(msg string, out *Request) (err error) {
 
 // ReadBatch drains every queued batch without blocking and returns the
 // requests parsed from them.
-func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
-	var out []Request
+func (ing *TCPIngestor) ReadBatch() ([]accesslog.Request, error) {
+	var out []accesslog.Request
 
 	for {
 		select {
@@ -240,10 +216,10 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 				ing.parseErrors.Add(uint64(batch.dropped))
 			}
 			if out == nil {
-				out = make([]Request, 0, len(batch.msgs))
+				out = make([]accesslog.Request, 0, len(batch.msgs))
 			}
 			for _, msg := range batch.msgs {
-				var entry Request
+				var entry accesslog.Request
 				if err := ing.parseLine(msg, &entry); err == nil {
 					ing.requestsTotal.Add(1)
 					out = append(out, entry)

@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/logparser"
 )
 
 func TestParseEvent_MissingMessageField(t *testing.T) {
 	evt := map[string]interface{}{}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err == nil || err.Error() != "missing message field" {
 		t.Errorf("expected missing message field error, got %v", err)
@@ -21,7 +22,7 @@ func TestParseEvent_MissingMessageField(t *testing.T) {
 func TestParseEvent_InvalidIP(t *testing.T) {
 	log := `notanip - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err == nil || err.Error() != "invalid IP" {
 		t.Errorf("expected invalid IP error, got %v", err)
@@ -51,7 +52,7 @@ func TestParseEvent_RejectsIPv6(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			log := tc.ip + ` - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
 			evt := map[string]interface{}{"message": log}
-			var req Request
+			var req accesslog.Request
 			_, err := parseEvent(evt, &req)
 			if err == nil {
 				t.Fatalf("expected error for IPv6 %q, got nil", tc.ip)
@@ -104,7 +105,7 @@ func TestReadBatch_RejectsIPv6(t *testing.T) {
 func TestParseEvent_InvalidTimestamp(t *testing.T) {
 	log := `192.168.1.1 - - [badtime] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err == nil {
 		t.Errorf("expected error for invalid timestamp, got nil")
@@ -130,7 +131,7 @@ func TestParseEvent_RetainsTimezoneOffset(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			if _, err := parseEvent(map[string]interface{}{"message": tc.log}, &req); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -160,7 +161,7 @@ func TestParseEvent_RetainsTimezoneOffset(t *testing.T) {
 // both layouts (see TestParseEvent_InvalidTimestamp).
 func TestParseEvent_AcceptsOffsetlessTimestampAsUTC(t *testing.T) {
 	log := `1.2.3.4 - - [06/Jul/2025:19:57:26] "GET / HTTP/1.1" 200 1 "-" "UA"`
-	var req Request
+	var req accesslog.Request
 	if _, err := parseEvent(map[string]interface{}{"message": log}, &req); err != nil {
 		t.Fatalf("offset-less timestamp must be accepted, got error: %v", err)
 	}
@@ -221,7 +222,7 @@ func TestParseEvent_DashStatusBytesAreZeroNotMalformed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			evt := map[string]interface{}{"message": tc.log}
-			var req Request
+			var req accesslog.Request
 			malformed, err := parseEvent(evt, &req)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -242,7 +243,7 @@ func TestParseEvent_DashStatusBytesAreZeroNotMalformed(t *testing.T) {
 func TestParseEvent_SetsIPUint32(t *testing.T) {
 	log := `192.168.1.100 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -261,12 +262,12 @@ func TestParseEvent_SetsIPUint32(t *testing.T) {
 func TestParseEvent_UnknownMethod(t *testing.T) {
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "FOO /foo HTTP/1.1" 404 0 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if req.Method != UNKNOWN {
+	if req.Method != accesslog.UNKNOWN {
 		t.Errorf("expected UNKNOWN method, got %v", req.Method)
 	}
 	if req.Status != 404 {
@@ -281,7 +282,7 @@ func TestParseEvent_MissingUserAgent(t *testing.T) {
 	// Only 5 quotes, so user agent will be empty
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" `
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -298,7 +299,7 @@ func TestParseEvent_MissingUserAgent(t *testing.T) {
 func TestParseEvent_TruncatedAtRequestEndQuote(t *testing.T) {
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	malformed, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -312,7 +313,7 @@ func TestParseEvent_TruncatedAtRequestEndQuote(t *testing.T) {
 	if req.Bytes != 0 {
 		t.Errorf("expected Bytes 0, got %d", req.Bytes)
 	}
-	if req.Method != GET {
+	if req.Method != accesslog.GET {
 		t.Errorf("expected GET method, got %v", req.Method)
 	}
 	if req.URI != "/" {
@@ -369,7 +370,7 @@ func TestReadBatch_SurvivesTruncatedEvent(t *testing.T) {
 // recover() guard adds no behavior change on the non-panicking path.
 func TestParseEventSafe_Transparent(t *testing.T) {
 	valid := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
-	var a, b Request
+	var a, b accesslog.Request
 	mA, eA := parseEvent(map[string]interface{}{"message": valid}, &a)
 	mB, eB := parseEventSafe(map[string]interface{}{"message": valid}, &b)
 	if mA != mB || (eA == nil) != (eB == nil) {
@@ -384,7 +385,7 @@ func TestParseEventSafe_Transparent(t *testing.T) {
 
 	// Erroring input: missing message field must still surface as an error
 	// (not a recovered panic) with malformed == 0.
-	m, err := parseEventSafe(map[string]interface{}{}, &Request{})
+	m, err := parseEventSafe(map[string]interface{}{}, &accesslog.Request{})
 	if err == nil {
 		t.Errorf("expected error for missing message field, got nil")
 	}
@@ -457,7 +458,7 @@ func TestParseEvent_EscapedQuotesUserAgent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			if _, err := parseEvent(map[string]interface{}{"message": tc.log}, &req); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -490,7 +491,7 @@ func BenchmarkParseEvent(b *testing.B) {
 		evt := map[string]interface{}{"message": tc.log}
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
-			var req Request
+			var req accesslog.Request
 			for i := 0; i < b.N; i++ {
 				if _, err := parseEvent(evt, &req); err != nil {
 					b.Fatalf("unexpected error: %v", err)
@@ -540,7 +541,7 @@ func TestReadBatch_ValidEvents(t *testing.T) {
 	if !got[0].GetIPNet().Equal(wantIP) {
 		t.Errorf("expected IP %v, got %v", wantIP, got[0].GetIPNet())
 	}
-	if got[0].Method != GET {
+	if got[0].Method != accesslog.GET {
 		t.Errorf("expected GET method, got %v", got[0].Method)
 	}
 	if got[0].URI != "/foo" {
@@ -575,7 +576,7 @@ func TestReadBatch_MultipleEventsAndBatches(t *testing.T) {
 	if got[0].GetIPNet().String() != "10.0.0.1" || got[1].GetIPNet().String() != "10.0.0.2" {
 		t.Errorf("unexpected IPs: %v, %v", got[0].GetIPNet(), got[1].GetIPNet())
 	}
-	if got[0].Method != POST || got[1].Method != GET {
+	if got[0].Method != accesslog.POST || got[1].Method != accesslog.GET {
 		t.Errorf("unexpected methods: %v, %v", got[0].Method, got[1].Method)
 	}
 }

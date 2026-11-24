@@ -60,7 +60,7 @@ type outcome struct {
 	ip        uint32
 	unix      int64 // the instant
 	zone      int   // seconds east of UTC
-	method    HTTPMethod
+	method    accesslog.HTTPMethod
 	uri       string
 	status    uint16
 	bytes     uint32
@@ -68,9 +68,9 @@ type outcome struct {
 	malformed int
 }
 
-var methodNames = map[HTTPMethod]string{
-	GET: "GET", POST: "POST", PUT: "PUT", DELETE: "DELETE",
-	HEAD: "HEAD", OPTIONS: "OPTIONS", PATCH: "PATCH", UNKNOWN: "UNKNOWN",
+var methodNames = map[accesslog.HTTPMethod]string{
+	accesslog.GET: "GET", accesslog.POST: "POST", accesslog.PUT: "PUT", accesslog.DELETE: "DELETE",
+	accesslog.HEAD: "HEAD", accesslog.OPTIONS: "OPTIONS", accesslog.PATCH: "PATCH", accesslog.UNKNOWN: "UNKNOWN",
 }
 
 // String renders an outcome the way liveParserDivergences spells it:
@@ -85,7 +85,7 @@ func (o outcome) String() string {
 		accesslog.Uint32ToIPString(o.ip), ts, methodNames[o.method], o.uri, o.status, o.bytes, o.userAgent, o.malformed)
 }
 
-func outcomeOf(req *Request, malformed int, err error) outcome {
+func outcomeOf(req *accesslog.Request, malformed int, err error) outcome {
 	if err != nil {
 		return outcome{rejected: true}
 	}
@@ -105,7 +105,7 @@ func legacyOutcome(line string) (o outcome) {
 			o = outcome{rejected: true}
 		}
 	}()
-	var req Request
+	var req accesslog.Request
 	malformed, err := legacyParseLine(line, &req)
 	return outcomeOf(&req, malformed, err)
 }
@@ -113,7 +113,7 @@ func legacyOutcome(line string) (o outcome) {
 // compiledOutcome parses line with lp. The malformed count is the growth of
 // the parser's counters, so lp must not be shared between goroutines here.
 func compiledOutcome(lp *logparser.LineParser, line string) (outcome, error) {
-	var req Request
+	var req accesslog.Request
 	before := lp.Stats()
 	err := lp.ParseLine(line, &req)
 	after := lp.Stats()
@@ -660,7 +660,7 @@ func checkLiveParserProperties(t *testing.T, lp *logparser.LineParser, line stri
 	t.Helper()
 	old := legacyOutcome(line)
 
-	var req Request
+	var req accesslog.Request
 	err := lp.ParseLine(line, &req) // must not panic
 	switch {
 	case err == nil:

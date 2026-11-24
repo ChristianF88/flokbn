@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/logparser"
 )
 
@@ -111,7 +112,7 @@ func TestReadBatch_MalformedFieldsOnDroppedLine(t *testing.T) {
 // parse error, not take the live loop down.
 func TestParseLine_RecoversFromPanic(t *testing.T) {
 	ing := &TCPIngestor{} // no parser: ParseLine dereferences nil
-	var req Request
+	var req accesslog.Request
 	if err := ing.parseLine(`10.0.0.1 - - [12/Mar/2024:15:04:05 +0000] "GET / HTTP/1.1" 200 5 "-" "UA"`, &req); err == nil {
 		t.Fatal("parseLine returned nil after a panic in the parser")
 	}

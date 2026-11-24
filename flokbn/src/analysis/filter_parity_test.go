@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 )
 
 // runFilter drives one of the two filter paths with the trie's own time bounds
 // and returns everything it produced.
-func runFilter(t *testing.T, concurrent bool, reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
+func runFilter(t *testing.T, concurrent bool, reqs []accesslog.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
 	t.Helper()
 	bounds := makeTimeBounds(tc)
 	if concurrent {
@@ -27,14 +27,14 @@ func runFilter(t *testing.T, concurrent bool, reqs []ingestor.Request, tc *confi
 // parityCorpus builds n pseudo-random requests (fixed seed): repeated and
 // zero IPs, listed and unlisted User-Agents, several endpoints, timestamps
 // across three days in two zones.
-func parityCorpus(n int) []ingestor.Request {
+func parityCorpus(n int) []accesslog.Request {
 	rng := rand.New(rand.NewSource(42))
 	uas := []string{"Mozilla/5.0", "curl/7.68.0", "python-requests/2.28", "GoodBot/1.0", "goodbot/1.0", "EvilScanner/9", ""}
 	uris := []string{"/api/data", "/login", "/admin/login", "/static/app.js", "/", ""}
 	zones := []*time.Location{time.UTC, time.FixedZone("", 2*3600)}
 	base := time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)
 
-	reqs := make([]ingestor.Request, n)
+	reqs := make([]accesslog.Request, n)
 	for i := range reqs {
 		ip := uint32(10<<24) | uint32(rng.Intn(1<<14)) // heavy repetition
 		switch rng.Intn(20) {
@@ -43,7 +43,7 @@ func parityCorpus(n int) []ingestor.Request {
 		case 1, 2, 3:
 			ip = rng.Uint32() | 1<<24
 		}
-		reqs[i] = ingestor.Request{
+		reqs[i] = accesslog.Request{
 			IPUint32:  ip,
 			UserAgent: uas[rng.Intn(len(uas))],
 			URI:       uris[rng.Intn(len(uris))],

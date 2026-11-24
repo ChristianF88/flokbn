@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -539,12 +539,12 @@ endpointRegex = "/admin/.*"
 	// Test cases for trie_1
 	testCases := []struct {
 		name     string
-		request  ingestor.Request
+		request  accesslog.Request
 		expected bool
 	}{
 		{
 			name: "bot user agent and api endpoint - should include",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 				URI:       "/api/users",
 				IP:        net.ParseIP("1.2.3.4"),
@@ -553,7 +553,7 @@ endpointRegex = "/admin/.*"
 		},
 		{
 			name: "bot user agent but non-api endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 				URI:       "/home",
 				IP:        net.ParseIP("1.2.3.4"),
@@ -562,7 +562,7 @@ endpointRegex = "/admin/.*"
 		},
 		{
 			name: "non-bot user agent but api endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/api/users",
 				IP:        net.ParseIP("1.2.3.4"),
@@ -571,7 +571,7 @@ endpointRegex = "/admin/.*"
 		},
 		{
 			name: "non-bot user agent and non-api endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/home",
 				IP:        net.ParseIP("1.2.3.4"),
@@ -595,7 +595,7 @@ endpointRegex = "/admin/.*"
 		t.Fatal("Expected trie_3 to exist")
 	}
 
-	testRequest := ingestor.Request{
+	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
 		IP:        net.ParseIP("1.2.3.4"),
@@ -637,12 +637,12 @@ endpointRegex = "/admin/.*"
 
 	testCases := []struct {
 		name     string
-		request  ingestor.Request
+		request  accesslog.Request
 		expected bool
 	}{
 		{
 			name: "scanner user agent and admin endpoint - should include",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "nmap security scanner v7.80",
 				URI:       "/admin/dashboard",
 				IP:        net.ParseIP("1.2.3.4"),
@@ -651,7 +651,7 @@ endpointRegex = "/admin/.*"
 		},
 		{
 			name: "scanner user agent but non-admin endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "nmap security scanner v7.80",
 				URI:       "/public/info",
 				IP:        net.ParseIP("1.2.3.4"),
@@ -660,7 +660,7 @@ endpointRegex = "/admin/.*"
 		},
 		{
 			name: "non-scanner user agent but admin endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/admin/dashboard",
 				IP:        net.ParseIP("1.2.3.4"),
@@ -684,7 +684,7 @@ endpointRegex = "/admin/.*"
 		t.Fatal("Expected sliding_trie_2 to exist")
 	}
 
-	testRequest := ingestor.Request{
+	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
 		IP:        net.ParseIP("1.2.3.4"),
@@ -897,7 +897,7 @@ endpointRegex = ""
 	}
 
 	// Should accept all requests when no regex filters are compiled
-	testRequest := ingestor.Request{
+	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
 		IP:        net.ParseIP("1.2.3.4"),
@@ -917,11 +917,11 @@ func TestCompileRegex(t *testing.T) {
 		if err := tc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed: %v", err)
 		}
-		req := ingestor.Request{UserAgent: "Googlebot", URI: "/api/users", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "Googlebot", URI: "/api/users", IP: net.ParseIP("1.2.3.4")}
 		if !tc.ShouldIncludeRequest(req) {
 			t.Error("Expected matching request to be included")
 		}
-		req2 := ingestor.Request{UserAgent: "Mozilla", URI: "/home", IP: net.ParseIP("1.2.3.4")}
+		req2 := accesslog.Request{UserAgent: "Mozilla", URI: "/home", IP: net.ParseIP("1.2.3.4")}
 		if tc.ShouldIncludeRequest(req2) {
 			t.Error("Expected non-matching request to be excluded")
 		}
@@ -939,7 +939,7 @@ func TestCompileRegex(t *testing.T) {
 		if err := tc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed on empty: %v", err)
 		}
-		req := ingestor.Request{UserAgent: "anything", URI: "/any", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "anything", URI: "/any", IP: net.ParseIP("1.2.3.4")}
 		if !tc.ShouldIncludeRequest(req) {
 			t.Error("Expected all requests accepted with no regex")
 		}
@@ -953,7 +953,7 @@ func TestCompileRegex(t *testing.T) {
 		if err := stc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed: %v", err)
 		}
-		req := ingestor.Request{UserAgent: "nmap scanner", URI: "/admin/panel", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "nmap scanner", URI: "/admin/panel", IP: net.ParseIP("1.2.3.4")}
 		if !stc.ShouldIncludeRequest(req) {
 			t.Error("Expected matching request to be included")
 		}

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 )
 
 // timestampSkewWarnings returns the "outside the sliding window" warnings in
@@ -28,7 +28,7 @@ func timestampSkewWarnings(events []logEvent) []logEvent {
 func TestRunLiveLoop_WarnsWhenBatchIsStaleOnArrival(t *testing.T) {
 	stale := time.Now().Add(-5 * time.Hour) // e.g. UTC-5 local time read as UTC
 	fake := &fakeIngestor{
-		batches: [][]ingestor.Request{
+		batches: [][]accesslog.Request{
 			hotBlock(10, 5, 5, stale, "/api/item"),
 			hotBlock(10, 5, 6, stale, "/api/item"),
 		},
@@ -80,7 +80,7 @@ func TestRunLiveLoop_WarnsWhenBatchIsStaleOnArrival(t *testing.T) {
 func TestRunLiveLoop_FutureTimestampsAreClampedAndWarned(t *testing.T) {
 	future := time.Now().Add(5 * time.Hour)
 	fake := &fakeIngestor{
-		batches:         [][]ingestor.Request{hotBlock(10, 5, 5, future, "/api/item")},
+		batches:         [][]accesslog.Request{hotBlock(10, 5, 5, future, "/api/item")},
 		closeAfterDrain: true,
 	}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
@@ -118,7 +118,7 @@ func TestRunLiveLoop_FutureTimestampsAreClampedAndWarned(t *testing.T) {
 func TestRunLiveLoop_NoTimestampWarningForCurrentTraffic(t *testing.T) {
 	now := time.Now()
 	batch := append(hotBlock(10, 5, 5, now, "/api/item"), noiseRequests(now.Add(-5*time.Hour), "/api/item")...)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfigSized(t, "", true, time.Hour, 100000),
 	})

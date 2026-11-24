@@ -3,6 +3,8 @@ package ingestor
 import (
 	"encoding/json"
 	"errors"
+
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // The ingestor used to queue go-lumber batches of generically decoded JSON
@@ -22,13 +24,13 @@ var lineIngestor = newQueueIngestor(0)
 // malformed status/bytes fields the line added to the ingestor's counter. The
 // count is a before/after difference, so tests calling this must not run in
 // parallel.
-func parseLine(msg string, out *Request) (malformed int, err error) {
+func parseLine(msg string, out *accesslog.Request) (malformed int, err error) {
 	before := lineIngestor.Stats().MalformedFieldsTotal
 	err = lineIngestor.parseLine(msg, out)
 	return int(lineIngestor.Stats().MalformedFieldsTotal - before), err
 }
 
-func parseEvent(evt map[string]interface{}, out *Request) (int, error) {
+func parseEvent(evt map[string]interface{}, out *accesslog.Request) (int, error) {
 	msg, ok := evt["message"].(string)
 	if !ok {
 		return 0, errors.New("missing message field")
@@ -38,7 +40,7 @@ func parseEvent(evt map[string]interface{}, out *Request) (int, error) {
 
 // parseEventSafe is parseEvent: the recover guard it used to add is part of
 // TCPIngestor.parseLine now.
-func parseEventSafe(evt map[string]interface{}, out *Request) (int, error) {
+func parseEventSafe(evt map[string]interface{}, out *accesslog.Request) (int, error) {
 	return parseEvent(evt, out)
 }
 

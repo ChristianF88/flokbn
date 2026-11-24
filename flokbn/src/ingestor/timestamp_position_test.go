@@ -3,6 +3,8 @@ package ingestor
 import (
 	"testing"
 	"time"
+
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // The timestamp used to be located by the first '[' and first ']' anywhere in
@@ -23,7 +25,7 @@ func TestParseLine_TimestampLocatedByPosition(t *testing.T) {
 	}
 	for name, line := range cases {
 		t.Run(name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			malformed, err := parseLine(line, &req)
 			if err != nil {
 				t.Fatalf("event dropped: %v", err)
@@ -33,7 +35,7 @@ func TestParseLine_TimestampLocatedByPosition(t *testing.T) {
 			}
 			// Everything after the timestamp is located relative to it, so
 			// the rest of the line must still line up.
-			if req.Method != GET || req.URI != "/x" || req.Status != 200 || req.Bytes != 10 || req.UserAgent != "UA" {
+			if req.Method != accesslog.GET || req.URI != "/x" || req.Status != 200 || req.Bytes != 10 || req.UserAgent != "UA" {
 				t.Errorf("fields after the timestamp misparsed: %+v", req)
 			}
 			if malformed != 0 {
@@ -63,7 +65,7 @@ func TestParseLine_TimestampFallbackForOtherLayouts(t *testing.T) {
 	}
 	for name, line := range cases {
 		t.Run(name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			if _, err := parseLine(line, &req); err != nil {
 				t.Fatalf("event dropped: %v", err)
 			}
@@ -90,7 +92,7 @@ func TestParseLine_TimestampStillRejected(t *testing.T) {
 		"line ends after user": `192.168.1.1 - - `,
 	} {
 		t.Run(name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			if _, err := parseLine(line, &req); err == nil {
 				t.Errorf("line accepted with timestamp %v, want an error", req.Timestamp)
 			}

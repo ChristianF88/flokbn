@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/jail"
 )
 
@@ -66,7 +66,7 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 	t.Run("FullBlock", func(t *testing.T) {
 		now := time.Now()
 		batch := append(hotBlock(10, 5, 5, now, "/api/item"), noiseRequests(now, "/api/item")...)
-		fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+		fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 		cfg := newLiveConfigWithLists(t, map[string]*config.SlidingTrieConfig{
 			"w": newWindowConfig(t, "", true),
 		}, []string{"10.5.5.0/24"}, nil)
@@ -109,7 +109,7 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 		// and stalls the jail update super-linearly.
 		now := time.Now()
 		batch := append(hotBlock(10, 5, 5, now, "/api/item"), noiseRequests(now, "/api/item")...)
-		fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+		fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 		cfg := newLiveConfigWithLists(t, map[string]*config.SlidingTrieConfig{
 			"w": newWindowConfig(t, "", true),
 		}, []string{"10.5.5.0/25"}, nil)
@@ -147,7 +147,7 @@ func TestRunLiveLoop_WhitelistPreventsBan(t *testing.T) {
 func TestRunLiveLoop_BlacklistAppearsInBanFile(t *testing.T) {
 	now := time.Now()
 	fake := &fakeIngestor{
-		batches: [][]ingestor.Request{
+		batches: [][]accesslog.Request{
 			hotBlock(10, 5, 5, now, "/api/item"),
 			noiseRequests(now, "/api/item"),
 		},
@@ -191,7 +191,7 @@ func TestRunLiveLoop_BlacklistAppearsInBanFile(t *testing.T) {
 func TestRunLiveLoop_PreexistingWhitelistedBanExcludedFromBanFile(t *testing.T) {
 	now := time.Now()
 	fake := &fakeIngestor{
-		batches:         [][]ingestor.Request{noiseRequests(now, "/api/item")},
+		batches:         [][]accesslog.Request{noiseRequests(now, "/api/item")},
 		closeAfterDrain: true,
 	}
 	cfg := newLiveConfigWithLists(t, map[string]*config.SlidingTrieConfig{
@@ -331,7 +331,7 @@ func TestRunLiveLoop_UABlacklistForceJails(t *testing.T) {
 	evil := mkRequest(198, 51, 100, 7, now, "/login")
 	evil.UserAgent = "EvilBot/1.0"
 	batch := append(noiseRequests(now, "/api/item"), evil)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfigWithUALists(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	}, nil, nil, nil, []string{"EvilBot/1.0"})
@@ -367,7 +367,7 @@ func TestRunLiveLoop_UAWhitelistImmunizesClusteredIP(t *testing.T) {
 	good := mkRequest(10, 5, 5, 10, now, "/health")
 	good.UserAgent = "GoodBot/1.0"
 	batch := append(hotBlock(10, 5, 5, now, "/api/item"), good)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfigWithUALists(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	}, nil, nil, []string{"GoodBot/1.0"}, nil)
@@ -408,7 +408,7 @@ func TestRunLiveLoop_UAWhitelistImmunizesClusteredIP(t *testing.T) {
 func TestRunLiveLoop_ManualBlacklistRespectsWhitelist(t *testing.T) {
 	now := time.Now()
 	fake := &fakeIngestor{
-		batches:         [][]ingestor.Request{noiseRequests(now, "/api/item")},
+		batches:         [][]accesslog.Request{noiseRequests(now, "/api/item")},
 		closeAfterDrain: true,
 	}
 	cfg := newLiveConfigWithLists(t, map[string]*config.SlidingTrieConfig{
@@ -440,7 +440,7 @@ func TestRunLiveLoop_UAWhitelistBeatsManualBlacklist(t *testing.T) {
 	good := mkRequest(203, 0, 113, 9, now, "/health")
 	good.UserAgent = "GoodBot/1.0"
 	batch := append(noiseRequests(now, "/api/item"), good)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfigWithUALists(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	}, nil, []string{"203.0.113.0/24"}, []string{"GoodBot/1.0"}, nil)
@@ -510,7 +510,7 @@ func TestRunLiveLoop_IdleHeartbeatExpiresUAWhitelist(t *testing.T) {
 
 	// closeAfterDrain:false -> after the one batch the ingestor stays open and
 	// returns empty batches, so the loop runs idle heartbeats.
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}}
 
 	// Tiny window time => maxWindowTime is ~1ms, so the whitelist /32 (last
 	// seen at iteration time) is already past its cutoff by the first

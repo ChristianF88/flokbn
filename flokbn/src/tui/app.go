@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -52,7 +52,7 @@ type App struct {
 
 	// Shared mutable state protected by mu (accessed from background goroutines).
 	mu              sync.Mutex
-	requests        []ingestor.Request
+	requests        []accesslog.Request
 	multiTrieResult *output.JSONOutput // Store the full multi-trie result
 
 	// Atomic flags for cross-goroutine signaling (no mutex needed)
@@ -167,7 +167,7 @@ func (a *App) ShowError(message string) {
 // requestData returns the parsed requests handed over by SetRequestData (nil
 // until then). a.requests is written by the analysis goroutine and read by the
 // UI goroutine and the precache goroutines, so every read goes through a.mu.
-func (a *App) requestData() []ingestor.Request {
+func (a *App) requestData() []accesslog.Request {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.requests
@@ -189,7 +189,7 @@ func errorText(message string) string {
 // a.visualizationView exclusively on the UI goroutine - which from that point is
 // its sole owner. This keeps the heavy precache off the event loop while ensuring
 // the view's fields/maps are never written by two goroutines at once.
-func (a *App) SetRequestData(requests []ingestor.Request) {
+func (a *App) SetRequestData(requests []accesslog.Request) {
 	if a.shuttingDown.Load() {
 		return
 	}
@@ -226,7 +226,7 @@ func (a *App) SetRequestData(requests []ingestor.Request) {
 // off-thread. If showVisualization already created the view on demand (on the UI
 // thread) before this goroutine publishes, the locally built view is discarded so
 // there is never more than one live view.
-func (a *App) buildAndPrecacheVisualization(requests []ingestor.Request) {
+func (a *App) buildAndPrecacheVisualization(requests []accesslog.Request) {
 	// Build the view locally; nothing else can reference it yet. Seed the
 	// cluster-set count from a locally derived output so we never read the
 	// UI-owned a.jsonResult off-thread.
