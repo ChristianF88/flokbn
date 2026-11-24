@@ -3,7 +3,6 @@ package analysis
 import (
 	"context"
 	"fmt"
-	"net"
 	"runtime"
 	"sort"
 	"sync"
@@ -582,53 +581,31 @@ func processClustering(trieConfig *config.TrieConfig, trieInstance *trie.Trie,
 			continue
 		}
 
+		// The ranges stay numeric through counting and merging; a string is
+		// built once per range, for the output.
 		clusterStart := time.Now()
-		cidrs := trieInstance.CollectCIDRs(argSet.MinClusterSize, argSet.MinDepth, argSet.MaxDepth, argSet.MeanSubnetDifference)
+		cidrs := trieInstance.CollectCIDRsNumeric(argSet.MinClusterSize, argSet.MinDepth, argSet.MaxDepth, argSet.MeanSubnetDifference)
 		clusterResult.ExecutionTimeUS = time.Since(clusterStart).Microseconds()
 
-		// Parse CIDRs once for reuse across operations
-		var cidrIPNets []*net.IPNet
 		// CountAll counts every insertion (duplicate IPs included), so this is
 		// the request total - percentages below are percent-of-requests.
 		totalRequests := float64(trieInstance.CountAll())
-
-		for _, cidrStr := range cidrs {
-			_, ipNet, err := net.ParseCIDR(cidrStr)
-			if err != nil {
-				jsonOutput.AddWarning("cidr_parse_error",
-					fmt.Sprintf("Error parsing CIDR %q: %v", cidrStr, err), 1)
-				continue
-			}
-			cidrIPNets = append(cidrIPNets, ipNet)
-
-			// Use IPNet-native count function for speed
-			count := trieInstance.CountInRangeIPNet(ipNet)
+		rangeOf := func(nc cidr.NumericCIDR) output.CIDRRange {
+			count := trieInstance.CountInCIDR(nc)
 			var percentage float64
 			if totalRequests > 0 {
 				percentage = float64(count) / totalRequests * 100
 			}
-
-			clusterResult.DetectedRanges = append(clusterResult.DetectedRanges, output.CIDRRange{
-				CIDR:       cidrStr,
-				Requests:   count,
-				Percentage: percentage,
-			})
+			return output.CIDRRange{CIDR: nc.String(), Requests: count, Percentage: percentage}
 		}
 
-		// Use IPNet-native merge function to avoid re-parsing
-		mergedIPNets := cidr.MergeIPNets(cidrIPNets)
-		for _, mergedIPNet := range mergedIPNets {
-			count := trieInstance.CountInRangeIPNet(mergedIPNet)
-			var percentage float64
-			if totalRequests > 0 {
-				percentage = float64(count) / totalRequests * 100
-			}
-
-			clusterResult.MergedRanges = append(clusterResult.MergedRanges, output.CIDRRange{
-				CIDR:       mergedIPNet.String(),
-				Requests:   count,
-				Percentage: percentage,
-			})
+		// Detected ranges in the order of the clustering walk.
+		for _, nc := range cidrs {
+			clusterResult.DetectedRanges = append(clusterResult.DetectedRanges, rangeOf(nc))
+		}
+		// MergeCIDRs reorders cidrs in place, so it runs after the loop above.
+		for _, nc := range cidr.MergeCIDRs(cidrs) {
+			clusterResult.MergedRanges = append(clusterResult.MergedRanges, rangeOf(nc))
 		}
 
 		trieResult.Data = append(trieResult.Data, clusterResult)

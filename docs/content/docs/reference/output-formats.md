@@ -290,7 +290,7 @@ The warning types an analysis can report:
 | `malformed_field` | Requests with a non-numeric status or bytes field; the lines are kept with that field as 0. |
 | `empty_logfile` | No request was parsed. When a jail and ban file are configured they are still refreshed (expired bans leave the ban file). |
 | `time_filter_no_results` | A trie's `startTime`/`endTime` matched no request. |
-| `invalid_cidr`, `cidr_parse_error` | A range could not be counted or parsed. |
+| `invalid_cidr` | A `cidrRanges` entry could not be parsed, so it was not counted. |
 | `whitelist_applied` | Detected ranges were kept out of the jail by the whitelist. |
 | `blacklist_applied` | Manual blacklist entries were added to the ban file. |
 | `jail_update` | Some ranges could not be added to the jail. |
