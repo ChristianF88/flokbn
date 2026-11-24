@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -206,10 +207,25 @@ func (a *App) SetRequestData(requests []accesslog.Request) {
 func (a *App) precacheRequests(multiResult *output.JSONOutput, requests []accesslog.Request) {
 	a.trieCache.PreCacheAllTries(a, multiResult, requests)
 
+	// Every trie has its grids cached now, so the TUI never reads the parsed
+	// requests again (a trie switch can no longer miss the cache). Drop the
+	// reference: nothing else holds the requests once the analysis goroutine
+	// has handed them over, and they pin the whole parsed log in memory.
+	a.mu.Lock()
+	a.requests = nil
+	a.mu.Unlock()
+
 	if a.shuttingDown.Load() {
 		return
 	}
 	a.app.QueueUpdateDraw(a.refreshVisualization)
+
+	// From here on the process only waits for key presses. It allocates next to
+	// nothing, so no garbage collection would be triggered, and the requests
+	// just released plus everything the analysis left behind (several times
+	// the size of the log) would stay resident for the whole session. Collect
+	// once and hand the memory back to the OS.
+	debug.FreeOSMemory()
 }
 
 // refreshVisualization re-renders the visualization if it is showing the
