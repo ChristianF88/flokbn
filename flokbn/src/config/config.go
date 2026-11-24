@@ -133,6 +133,7 @@ type StaticConfig struct {
 type LiveConfig struct {
 	Port        string        `toml:"port"`
 	Listen      string        `toml:"listen"`      // address the Lumberjack listener binds; empty = DefaultLiveListen
+	LogFormat   string        `toml:"logFormat"`   // format of each event's message; empty = logparser.DefaultLiveLogFormat
 	TLSCert     string        `toml:"tlsCert"`     // PEM certificate of the Lumberjack listener; with tlsKey enables TLS
 	TLSKey      string        `toml:"tlsKey"`      // PEM private key for tlsCert
 	TLSClientCA string        `toml:"tlsClientCA"` // PEM CA bundle; when set, clients must present a certificate it signed (mTLS)
@@ -188,6 +189,7 @@ var staticScalarKeys = map[string]struct{}{
 var liveScalarKeys = map[string]struct{}{
 	"port":                   {},
 	"listen":                 {},
+	"logFormat":              {},
 	"tlsCert":                {},
 	"tlsKey":                 {},
 	"tlsClientCA":            {},
@@ -206,6 +208,7 @@ var liveScalarKeys = map[string]struct{}{
 var liveSectionKeys = map[string]struct{}{
 	"port":        {},
 	"listen":      {},
+	"logFormat":   {},
 	"tlsCert":     {},
 	"tlsKey":      {},
 	"tlsClientCA": {},
@@ -765,6 +768,12 @@ func parseLiveConfig(m map[string]any, diags *ConfigDiagnostics) (*LiveConfig, e
 				return nil, fmt.Errorf("listen must be a string, got %T", value)
 			}
 			config.Listen = v
+		case "logFormat":
+			v, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("logFormat must be a string, got %T", value)
+			}
+			config.LogFormat = v
 		case "tlsCert", "tlsKey", "tlsClientCA":
 			v, ok := value.(string)
 			if !ok {
@@ -1284,6 +1293,17 @@ func (c *Config) GetListenAddr() string {
 	return net.JoinHostPort(host, port)
 }
 
+// GetLiveLogFormat returns the format live mode parses each event's message
+// with: the configured [live] logFormat, or logparser.DefaultLiveLogFormat
+// (combined log format, client IP in the first field) when unset. This is NOT
+// the static default, which reads the client IP from a trailing field.
+func (c *Config) GetLiveLogFormat() string {
+	if c.Live != nil && c.Live.LogFormat != "" {
+		return c.Live.LogFormat
+	}
+	return logparser.DefaultLiveLogFormat
+}
+
 // GetReadTimeout returns the configured live TCP read timeout, falling back
 // to DefaultLiveReadTimeout when unset.
 func (c *Config) GetReadTimeout() time.Duration {
@@ -1343,6 +1363,15 @@ func (c *Config) validateLiveInto(diags *ConfigDiagnostics) {
 		// topTalkers > 0 without statsListen is accepted but inert.
 		if c.Live.TopTalkers < 0 {
 			diags.AddRaw(fmt.Sprintf("topTalkers must be >= 0, got %d", c.Live.TopTalkers))
+		}
+		// logFormat: same check as [static] logFormat, on the effective value
+		// (an empty logFormat is valid: the live default is used).
+		effFormat := c.GetLiveLogFormat()
+		if err := logparser.ValidateFormat(effFormat); err != nil {
+			diags.Add("live", "logFormat", c.Live.LogFormat,
+				"a valid log format string with exactly one %h", err)
+		} else {
+			c.validateLiveFilterFields(diags, effFormat)
 		}
 	}
 

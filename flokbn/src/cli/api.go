@@ -225,6 +225,7 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		return fmt.Errorf("ingest TLS: %w", err)
 	}
 	ing, err := ingestor.NewTCPIngestorWithOptions(listenAddr, ingestor.Options{
+		LogFormat:   cfg.GetLiveLogFormat(),
 		ReadTimeout: cfg.GetReadTimeout(), // read timeout: avoid client disconnects
 		TLS:         tlsConfig,
 		Logger:      logger,
@@ -248,6 +249,7 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		"version", version.Version,
 		"listen", listenAddr,
 		"tls", ingestTLSMode(tlsConfig),
+		"log_format", ing.LogFormat(),
 		"jail_file", cfg.GetJailFile(),
 		"ban_file", cfg.GetBanFile(),
 		"windows", len(cfg.LiveTries),
