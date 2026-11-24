@@ -1435,30 +1435,17 @@ func regexGate(compiled *regexp.Regexp, pf *regexprefilter.Prefilter, value stri
 	return compiled.MatchString(value)
 }
 
-// ShouldIncludeRequest checks if a request should be included based on regex filters
-func (tc *TrieConfig) ShouldIncludeRequest(req accesslog.Request) bool {
+// ShouldIncludeRequest reports whether a request passes the regex filters. It
+// is promoted to TrieConfig and SlidingTrieConfig: the static pipeline calls
+// it once per request and trie, live mode once per request and window.
+func (t *TrieCommon) ShouldIncludeRequest(req accesslog.Request) bool {
 	// Apply useragent regex filter (short-circuit on empty UserAgent)
-	if !regexGate(tc.userAgentRegexCompiled, tc.userAgentPrefilter, req.UserAgent) {
+	if !regexGate(t.userAgentRegexCompiled, t.userAgentPrefilter, req.UserAgent) {
 		return false
 	}
 
 	// Apply endpoint regex filter (short-circuit on empty URI)
-	if !regexGate(tc.endpointRegexCompiled, tc.endpointPrefilter, req.URI) {
-		return false
-	}
-
-	return true
-}
-
-// ShouldIncludeRequest checks if a request should be included based on regex filters
-func (stc *SlidingTrieConfig) ShouldIncludeRequest(req accesslog.Request) bool {
-	// Apply useragent regex filter (short-circuit on empty UserAgent)
-	if !regexGate(stc.userAgentRegexCompiled, stc.userAgentPrefilter, req.UserAgent) {
-		return false
-	}
-
-	// Apply endpoint regex filter (short-circuit on empty URI)
-	if !regexGate(stc.endpointRegexCompiled, stc.endpointPrefilter, req.URI) {
+	if !regexGate(t.endpointRegexCompiled, t.endpointPrefilter, req.URI) {
 		return false
 	}
 
@@ -1522,50 +1509,29 @@ func recordRegexErrors(section string, diags *ConfigDiagnostics, errs ...error) 
 // compileRegexFields compiles both filter patterns INDEPENDENTLY: a bad
 // useragentRegex does not stop the endpointRegex from being compiled (and
 // reported), so one pass surfaces every bad pattern of the trie.
-func (tc *TrieConfig) compileRegexFields() (uaErr, epErr error) {
-	tc.userAgentRegexCompiled, tc.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", tc.UserAgentRegex)
-	tc.endpointRegexCompiled, tc.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", tc.EndpointRegex)
+func (t *TrieCommon) compileRegexFields() (uaErr, epErr error) {
+	t.userAgentRegexCompiled, t.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", t.UserAgentRegex)
+	t.endpointRegexCompiled, t.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", t.EndpointRegex)
 	return uaErr, epErr
 }
 
-// CompileRegex compiles the regex patterns for a TrieConfig and returns the
+// CompileRegex compiles the regex patterns of a trie or window and returns the
 // compile errors of both fields (joined; nil when both compile). It is a PUBLIC
 // thin wrapper retained for direct callers (config_test.go TestCompileRegex,
 // prefilter_wiring_test.go, cli/live_loop_test.go) that assert the error
 // channel; do NOT remove it. Flags/parse paths use CompileRegexInto to route
 // the same failures into a diagnostics accumulator.
-func (tc *TrieConfig) CompileRegex() error {
-	return errors.Join(tc.compileRegexFields())
+func (t *TrieCommon) CompileRegex() error {
+	return errors.Join(t.compileRegexFields())
 }
 
 // CompileRegexInto compiles the regex patterns and records every failure into
-// diags, naming the section (e.g. "static.t2_bots"). It NEVER returns an error;
-// callers proceed to build the Config and the barrier aborts before any
-// ShouldIncludeRequest call. A failed field leaves BOTH its compiled regex and
-// its prefilter nil (see compileFilterRegex).
-func (tc *TrieConfig) CompileRegexInto(section string, diags *ConfigDiagnostics) {
-	uaErr, epErr := tc.compileRegexFields()
-	recordRegexErrors(section, diags, uaErr, epErr)
-}
-
-// compileRegexFields is the SlidingTrieConfig counterpart (see
-// TrieConfig.compileRegexFields).
-func (stc *SlidingTrieConfig) compileRegexFields() (uaErr, epErr error) {
-	stc.userAgentRegexCompiled, stc.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", stc.UserAgentRegex)
-	stc.endpointRegexCompiled, stc.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", stc.EndpointRegex)
-	return uaErr, epErr
-}
-
-// CompileRegex compiles the regex patterns for a SlidingTrieConfig (public thin
-// wrapper; see TrieConfig.CompileRegex).
-func (stc *SlidingTrieConfig) CompileRegex() error {
-	return errors.Join(stc.compileRegexFields())
-}
-
-// CompileRegexInto is the SlidingTrieConfig counterpart (see
-// TrieConfig.CompileRegexInto).
-func (stc *SlidingTrieConfig) CompileRegexInto(section string, diags *ConfigDiagnostics) {
-	uaErr, epErr := stc.compileRegexFields()
+// diags, naming the section (e.g. "static.t2_bots", "live.window"). It NEVER
+// returns an error; callers proceed to build the Config and the barrier aborts
+// before any ShouldIncludeRequest call. A failed field leaves BOTH its compiled
+// regex and its prefilter nil (see compileFilterRegex).
+func (t *TrieCommon) CompileRegexInto(section string, diags *ConfigDiagnostics) {
+	uaErr, epErr := t.compileRegexFields()
 	recordRegexErrors(section, diags, uaErr, epErr)
 }
 
