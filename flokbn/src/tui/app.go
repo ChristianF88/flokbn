@@ -40,9 +40,7 @@ type App struct {
 	focusableItems []tview.Primitive
 	currentFocus   int
 
-	logFile        string
-	clusterArgSets []string
-	rangesCidr     []string
+	logFile string
 
 	// jsonResult and currentTrie are owned exclusively by the tview UI goroutine
 	// (read/written only inside QueueUpdateDraw closures). Background precache
@@ -65,10 +63,10 @@ type App struct {
 	// shuttingDown is set true when Run() returns (the tview application has
 	// stopped). The analysis setters check it first so a late-finishing
 	// background analysis cannot QueueUpdateDraw on a stopped application.
-	shuttingDown  atomic.Bool
-	requestsReady chan struct{} // closed when requests are available
+	shuttingDown atomic.Bool
 
-	// Multi-trie support (immutable after construction)
+	// cfg is the static config the analysis runs with. NewAppFromConfig is the
+	// only constructor, so it is never nil; immutable after construction.
 	cfg        *config.Config
 	configPath string
 
@@ -79,13 +77,12 @@ type App struct {
 // NewAppFromConfig creates a new TUI application from config file
 func NewAppFromConfig(cfg *config.Config, configPath string) *App {
 	app := &App{
-		app:           tview.NewApplication(),
-		pages:         tview.NewPages(),
-		cfg:           cfg,
-		configPath:    configPath,
-		logFile:       cfg.Static.LogFile,
-		currentTrie:   0,
-		requestsReady: make(chan struct{}),
+		app:         tview.NewApplication(),
+		pages:       tview.NewPages(),
+		cfg:         cfg,
+		configPath:  configPath,
+		logFile:     cfg.Static.LogFile,
+		currentTrie: 0,
 	}
 
 	// Initialize performance optimization components
@@ -197,9 +194,6 @@ func (a *App) SetRequestData(requests []accesslog.Request) {
 	a.requests = requests
 	multiResult := a.multiTrieResult
 	a.mu.Unlock()
-
-	// Signal that requests are available (kept for any external waiters).
-	close(a.requestsReady)
 
 	if a.trieCache != nil && multiResult != nil {
 		go func() {
@@ -319,7 +313,7 @@ func (a *App) setupUI() {
 			}
 			return nil
 		case 't', 'T':
-			if a.analysisComplete.Load() && a.cfg != nil && a.multiTrieResult != nil {
+			if a.analysisComplete.Load() && a.multiTrieResult != nil {
 				// Check if we have multiple tries stored
 				if len(a.multiTrieResult.Tries) > 1 {
 					a.nextTrie()
@@ -666,17 +660,11 @@ func (a *App) animateProgress() {
 // progressFrameText renders one frame of the progress animation: the current
 // stage line (which carries its own style tags) plus the run's static facts.
 func (a *App) progressFrameText(stage, dotStr string) string {
+	// Count cluster sets and CIDR ranges from config
 	var clusterSets, cidrRanges int
-	if a.cfg != nil {
-		// Count cluster sets and CIDR ranges from config
-		for _, trieConfig := range a.cfg.StaticTries {
-			clusterSets += len(trieConfig.ClusterArgSets)
-			cidrRanges += len(trieConfig.CIDRRanges)
-		}
-	} else {
-		// No-config mode
-		clusterSets = len(a.clusterArgSets) / 4
-		cidrRanges = len(a.rangesCidr)
+	for _, trieConfig := range a.cfg.StaticTries {
+		clusterSets += len(trieConfig.ClusterArgSets)
+		cidrRanges += len(trieConfig.CIDRRanges)
 	}
 
 	return fmt.Sprintf(`
@@ -692,10 +680,10 @@ func (a *App) progressFrameText(stage, dotStr string) string {
 `, stage, dotStr, tview.Escape(a.logFile), clusterSets, cidrRanges)
 }
 
-// nextTrie cycles to the next trie in config mode (async optimized)
+// nextTrie cycles to the next trie (async optimized)
 func (a *App) nextTrie() {
 	a.mu.Lock()
-	canSwitch := a.cfg != nil && a.multiTrieResult != nil && len(a.multiTrieResult.Tries) > 1
+	canSwitch := a.multiTrieResult != nil && len(a.multiTrieResult.Tries) > 1
 	var newTrieIndex int
 	if canSwitch {
 		newTrieIndex = (a.currentTrie + 1) % len(a.multiTrieResult.Tries)
@@ -783,21 +771,18 @@ func (a *App) switchTrieAsync(newTrieIndex int) {
 	})
 }
 
-// displayResults populates the results view with analysis data
+// displayResults populates the results view with analysis data. jsonResult is
+// only ever derived from multiTrieResult (singleTrieOutput), so a non-nil
+// jsonResult implies the multi-trie result the panel builders read.
 func (a *App) displayResults() {
 	if a.jsonResult == nil {
 		return
 	}
-
-	if a.cfg != nil && a.multiTrieResult != nil {
-		a.displayCachedResults()
-	} else {
-		a.displayResultsUncached()
-	}
+	a.displayCachedResults()
 }
 
-// displayCachedResults shows pre-rendered results for multi-trie analysis,
-// building and caching all four panels on first display.
+// displayCachedResults shows the current trie's pre-rendered panels, building
+// and caching all four on first display.
 func (a *App) displayCachedResults() {
 	summary, clustering, cidr, diagnostics, ok := a.trieCache.GetPreRenderedTexts(a.currentTrie)
 	if !ok {
@@ -811,95 +796,6 @@ func (a *App) displayCachedResults() {
 	a.clustering.SetText(clustering)
 	a.cidrAnalysis.SetText(cidr)
 	a.diagnostics.SetText(diagnostics)
-}
-
-// displayResultsUncached shows results without caching (no-config mode)
-func (a *App) displayResultsUncached() {
-	// Populate summary with fixed stats and trie-specific stats
-	summaryText := a.buildSummaryText()
-	a.setSummaryText(summaryText)
-
-	// Populate clustering results
-	var clusteringText strings.Builder
-	clusteringText.WriteString("[white::b]Detected Threats[white::-]\n\n")
-
-	for i, cluster := range a.jsonResult.Clustering.Data {
-		clusteringText.WriteString(fmt.Sprintf("[yellow]Set %d[white] (%s)\n",
-			i+1, output.FormatClusterParameters(cluster.Parameters)))
-
-		if len(cluster.MergedRanges) > 0 {
-			clusteringText.WriteString("[red]Merged Ranges:[white]\n")
-
-			// Calculate total for this cluster set; sum the per-range
-			// percentages so the total shares their denominator
-			// (requests after filtering, not unique IPs)
-			var totalRequests uint32
-			var totalPercentage float64
-			for _, cidr := range cluster.MergedRanges {
-				totalRequests += cidr.Requests
-				totalPercentage += cidr.Percentage
-			}
-
-			for _, cidr := range cluster.MergedRanges {
-				clusteringText.WriteString(fmt.Sprintf("  • %s: [red]%s[white] requests (%.2f%%)\n",
-					cidr.CIDR, output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
-			}
-			clusteringText.WriteString(fmt.Sprintf("[yellow]Total for Set %d: %s requests (%.2f%%)[white]\n",
-				i+1, output.FormatNumber(int(totalRequests)), totalPercentage))
-		} else {
-			clusteringText.WriteString("[dim]No significant ranges detected[white]\n")
-		}
-		clusteringText.WriteString("\n")
-	}
-
-	a.clustering.SetText(clusteringText.String())
-
-	// Populate CIDR analysis
-	var cidrText strings.Builder
-	cidrText.WriteString("[white::b]Range Analysis[white::-]\n\n")
-
-	if len(a.jsonResult.CIDRAnalysis.Data) > 0 {
-		for _, cidr := range a.jsonResult.CIDRAnalysis.Data {
-			cidrText.WriteString(fmt.Sprintf("[cyan]%s[white]\n", cidr.CIDR))
-			cidrText.WriteString(fmt.Sprintf("  Requests: [yellow]%s[white] (%.2f%%)\n\n",
-				output.FormatNumber(int(cidr.Requests)), cidr.Percentage))
-		}
-	} else {
-		cidrText.WriteString("[dim]No specific ranges analyzed[white]")
-	}
-
-	a.cidrAnalysis.SetText(cidrText.String())
-
-	// Populate diagnostics - filter out info messages in multi-trie mode
-	var diagText strings.Builder
-	diagText.WriteString("[white::b]Diagnostics[white::-]\n\n")
-
-	// Filter out info messages
-	var realWarnings []output.Warning
-	for _, warning := range a.jsonResult.Warnings {
-		if warning.Type != "info" {
-			realWarnings = append(realWarnings, warning)
-		}
-	}
-
-	if len(realWarnings) > 0 {
-		diagText.WriteString("[yellow]Warnings:[white]\n")
-		for _, warning := range realWarnings {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(warning.Message)))
-		}
-		diagText.WriteString("\n")
-	}
-
-	if len(a.jsonResult.Errors) > 0 {
-		diagText.WriteString("[red]Errors:[white]\n")
-		for _, err := range a.jsonResult.Errors {
-			diagText.WriteString(fmt.Sprintf("  • %s\n", tview.Escape(err.Message)))
-		}
-	} else if len(realWarnings) == 0 {
-		diagText.WriteString("[green]✓ No issues detected[white]")
-	}
-
-	a.diagnostics.SetText(diagText.String())
 }
 
 // buildClusteringText creates the clustering results text for the current trie.
@@ -1012,103 +908,77 @@ func (a *App) buildDiagnosticsTextFor(result *output.JSONOutput) string {
 // buildSummaryText creates the summary text with fixed and trie-specific stats
 // for the current trie.
 func (a *App) buildSummaryText() string {
-	return a.buildSummaryTextFor(a.jsonResult, a.currentTrie)
+	return a.buildSummaryTextFor(a.currentTrie)
 }
 
-// buildSummaryTextFor creates the summary text from an explicit single-trie
-// output and trie index, so the background precache can render a non-current
-// trie without mutating shared App state.
-func (a *App) buildSummaryTextFor(result *output.JSONOutput, trieIndex int) string {
+// buildSummaryTextFor creates the summary text for an explicit trie index, so
+// the background precache can render a non-current trie without mutating
+// shared App state. trieIndex must be a valid index into multiTrieResult.Tries
+// (every caller derives it together with that trie's single-trie output).
+func (a *App) buildSummaryTextFor(trieIndex int) string {
 	var summaryText strings.Builder
 	summaryText.WriteString("[white::b]Analysis Summary[white::-]\n")
 
 	// Fixed stats (global, not trie-specific) - always show these first
-	// Use original multiTrieResult data for truly fixed stats
-	var parseRate int64
-	var totalIPsRead int
-	var parsingTime int64
+	general := a.multiTrieResult.General
+	summaryText.WriteString(fmt.Sprintf("[dim]Parse Rate:[white] %s req/sec\n",
+		output.FormatNumber(int(general.Parsing.RatePerSecond))))
+	summaryText.WriteString(fmt.Sprintf("[dim]Amount of IPs Read:[white] %s\n",
+		output.FormatNumber(general.TotalRequests)))
+	summaryText.WriteString(fmt.Sprintf("[dim]Parsing Time:[white] %dms\n\n",
+		general.Parsing.DurationMS))
 
-	if a.cfg != nil && a.multiTrieResult != nil {
-		// Multi-trie mode - use original data
-		parseRate = a.multiTrieResult.General.Parsing.RatePerSecond
-		totalIPsRead = a.multiTrieResult.General.TotalRequests
-		parsingTime = a.multiTrieResult.General.Parsing.DurationMS
+	// Trie-specific stats (show below the fixed stats). Read multiTrieResult
+	// directly: it has the Parameters and Stats that the single-trie output
+	// conversion does not carry.
+	trieData := a.multiTrieResult.Tries[trieIndex]
+
+	// Trie names, regex filters, paths and messages are user data and are
+	// escaped wherever they are rendered: tview consumes anything that
+	// looks like "[word]" as a style tag (useragentRegex = "[Bb]ot" was
+	// displayed as "ot").
+	summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", tview.Escape(trieData.Name)))
+
+	// Active filters
+	summaryText.WriteString("[dim]Active Filters:[white] ")
+	filters := output.ActiveFilters(trieData.Parameters, a.multiTrieResult.GlobalFilters)
+	if len(filters) > 0 {
+		summaryText.WriteString(tview.Escape(strings.Join(filters, ", ")))
 	} else {
-		// No-config mode - use jsonResult data
-		parseRate = result.General.Parsing.RatePerSecond
-		totalIPsRead = result.General.TotalRequests
-		parsingTime = result.General.Parsing.DurationMS
+		summaryText.WriteString("None")
+	}
+	summaryText.WriteString("\n")
+
+	// Trie build time (filtering + inserts)
+	summaryText.WriteString(fmt.Sprintf("[dim]Trie Build Time:[white] %dms\n", trieData.Stats.InsertTimeMS))
+
+	// Requests after filtering
+	summaryText.WriteString(fmt.Sprintf("[dim]Requests After Filtering:[white] %s\n",
+		output.FormatNumber(trieData.Stats.TotalRequestsAfterFiltering)))
+
+	// Requests dropped by the global UA whitelist (shown so the count drop
+	// is explained even when no per-trie filters are active).
+	if trieData.Stats.UAWhitelistExcluded > 0 {
+		summaryText.WriteString(fmt.Sprintf("[dim]Excluded (UA whitelist):[white] %s\n",
+			output.FormatNumber(trieData.Stats.UAWhitelistExcluded)))
 	}
 
-	summaryText.WriteString(fmt.Sprintf("[dim]Parse Rate:[white] %s req/sec\n",
-		output.FormatNumber(int(parseRate))))
-	summaryText.WriteString(fmt.Sprintf("[dim]Amount of IPs Read:[white] %s\n",
-		output.FormatNumber(totalIPsRead)))
-	summaryText.WriteString(fmt.Sprintf("[dim]Parsing Time:[white] %dms\n\n",
-		parsingTime))
-
-	// Trie-specific stats (show below the fixed stats)
-	// Always use multiTrieResult directly for accurate Parameters and Stats
-	if a.cfg != nil && a.multiTrieResult != nil && trieIndex < len(a.multiTrieResult.Tries) {
-		// Always use multiTrieResult directly - it has the accurate Parameters and Stats
-		// The single-trie output conversion loses this information, so we bypass it here
-		trieData := a.multiTrieResult.Tries[trieIndex]
-
-		// Trie names, regex filters, paths and messages are user data and are
-		// escaped wherever they are rendered: tview consumes anything that
-		// looks like "[word]" as a style tag (useragentRegex = "[Bb]ot" was
-		// displayed as "ot").
-		summaryText.WriteString(fmt.Sprintf("[white::b]Trie: %s[white::-]\n", tview.Escape(trieData.Name)))
-
-		// Active filters
-		summaryText.WriteString("[dim]Active Filters:[white] ")
-		filters := output.ActiveFilters(trieData.Parameters, a.multiTrieResult.GlobalFilters)
-		if len(filters) > 0 {
-			summaryText.WriteString(tview.Escape(strings.Join(filters, ", ")))
+	// Analysis time (sum of all clustering runs)
+	totalAnalysisTime := a.calculateTotalAnalysisTime(trieData.Data)
+	clusterCount := len(trieData.Data)
+	if totalAnalysisTime == 0 && clusterCount > 0 {
+		// If 0μs but we have cluster results, show "<1μs" for very fast operations
+		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] <1μs (%d clusters)", clusterCount))
+	} else if totalAnalysisTime > 0 {
+		if totalAnalysisTime >= 1000 {
+			// Show in milliseconds if >= 1000μs
+			summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %.1fms (%d clusters)", float64(totalAnalysisTime)/1000.0, clusterCount))
 		} else {
-			summaryText.WriteString("None")
+			summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dμs (%d clusters)", totalAnalysisTime, clusterCount))
 		}
-		summaryText.WriteString("\n")
-
-		// Trie build time (filtering + inserts)
-		summaryText.WriteString(fmt.Sprintf("[dim]Trie Build Time:[white] %dms\n", trieData.Stats.InsertTimeMS))
-
-		// Requests after filtering
-		summaryText.WriteString(fmt.Sprintf("[dim]Requests After Filtering:[white] %s\n",
-			output.FormatNumber(trieData.Stats.TotalRequestsAfterFiltering)))
-
-		// Requests dropped by the global UA whitelist (shown so the count drop
-		// is explained even when no per-trie filters are active).
-		if trieData.Stats.UAWhitelistExcluded > 0 {
-			summaryText.WriteString(fmt.Sprintf("[dim]Excluded (UA whitelist):[white] %s\n",
-				output.FormatNumber(trieData.Stats.UAWhitelistExcluded)))
-		}
-
-		// Analysis time (sum of all clustering runs)
-		totalAnalysisTime := a.calculateTotalAnalysisTime(trieData.Data)
-		clusterCount := len(trieData.Data)
-		if totalAnalysisTime == 0 && clusterCount > 0 {
-			// If 0μs but we have cluster results, show "<1μs" for very fast operations
-			summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] <1μs (%d clusters)", clusterCount))
-		} else if totalAnalysisTime > 0 {
-			if totalAnalysisTime >= 1000 {
-				// Show in milliseconds if >= 1000μs
-				summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %.1fms (%d clusters)", float64(totalAnalysisTime)/1000.0, clusterCount))
-			} else {
-				summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dμs (%d clusters)", totalAnalysisTime, clusterCount))
-			}
-		} else {
-			// No clustering results
-			summaryText.WriteString("[dim]Analysis Time:[white] N/A (no clustering)")
-		}
-
 	} else {
-		// No-config CLI mode
-		summaryText.WriteString("[white::b]Legacy Analysis[white::-]\n")
-		summaryText.WriteString(fmt.Sprintf("[dim]Log File:[white] %s\n", tview.Escape(result.General.LogFile)))
-		summaryText.WriteString(fmt.Sprintf("[dim]Unique IPs:[white] %s\n",
-			output.FormatNumber(result.General.UniqueIPs)))
-		summaryText.WriteString(fmt.Sprintf("[dim]Analysis Time:[white] %dms", result.Metadata.DurationMS))
+		// No clustering results
+		summaryText.WriteString("[dim]Analysis Time:[white] N/A (no clustering)")
 	}
 
 	return summaryText.String()
@@ -1186,23 +1056,19 @@ func (a *App) updateStatusBar() {
 		panelNames := []string{"Clustering Results", "CIDR Analysis", "Diagnostics"}
 		currentPanel := panelNames[a.currentFocus]
 
-		if a.cfg != nil && a.multiTrieResult != nil {
-			// Config mode - check if we have multiple tries stored
-			if len(a.multiTrieResult.Tries) > 1 {
-				// Multi-trie mode
-				if a.currentTrie >= len(a.multiTrieResult.Tries) {
-					a.currentTrie = 0
-				}
-				trieName := a.multiTrieResult.Tries[a.currentTrie].Name
-				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | [cyan]%s (%d/%d)[white] | Tab/Shift+Tab: panels, 't': next trie, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit",
-					currentPanel, tview.Escape(trieName), a.currentTrie+1, len(a.multiTrieResult.Tries)))
-			} else {
-				// Single trie config mode
-				a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
+		// analysisComplete (checked above) is only set once multiTrieResult
+		// is stored, so it is non-nil here.
+		if len(a.multiTrieResult.Tries) > 1 {
+			// Multi-trie mode
+			if a.currentTrie >= len(a.multiTrieResult.Tries) {
+				a.currentTrie = 0
 			}
+			trieName := a.multiTrieResult.Tries[a.currentTrie].Name
+			a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | [cyan]%s (%d/%d)[white] | Tab/Shift+Tab: panels, 't': next trie, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit",
+				currentPanel, tview.Escape(trieName), a.currentTrie+1, len(a.multiTrieResult.Tries)))
 		} else {
-			// No-config CLI mode
-			a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: switch panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
+			// Single trie
+			a.setStatusBarText(fmt.Sprintf("[green]Analysis complete![white] | [yellow]%s[white] focused | Tab/Shift+Tab: panels, ↑↓: scroll, 'v': visualization, 'p': progress, 'q': quit", currentPanel))
 		}
 	}
 }

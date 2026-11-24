@@ -108,7 +108,7 @@ func TestResultsPageIsConfigMode(t *testing.T) {
 	// The panels show exactly what the shared builders render for trie 0.
 	first := a.singleTrieOutput(0)
 	for _, panel := range []struct{ name, got, want string }{
-		{"summary", summary, a.buildSummaryTextFor(first, 0)},
+		{"summary", summary, a.buildSummaryTextFor(0)},
 		{"clustering", clustering, a.buildClusteringTextFor(first)},
 		{"cidr", cidr, a.buildCidrAnalysisTextFor(first)},
 		{"diagnostics", diagnostics, a.buildDiagnosticsTextFor(first)},

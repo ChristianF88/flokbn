@@ -51,7 +51,7 @@ func escapeTestApp() *App {
 func TestSummaryEscapesUserData(t *testing.T) {
 	a := escapeTestApp()
 
-	got := visibleText(a.buildSummaryTextFor(a.singleTrieOutput(0), 0))
+	got := visibleText(a.buildSummaryTextFor(0))
 
 	for _, want := range []string{
 		"Trie: bots[red]",

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"sync"
-	"time"
 
 	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/output"
@@ -33,9 +32,6 @@ type TrieCache struct {
 	globalTraffic      [256][256]uint32
 	globalMaxTraffic   uint32
 	globalTrafficReady bool
-
-	// Metadata
-	lastUpdated time.Time
 }
 
 // NewTrieCache creates a new fast trie cache
@@ -68,10 +64,6 @@ func (ftc *TrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOutput,
 	for trieIndex := 0; trieIndex < len(multiResult.Tries); trieIndex++ {
 		ftc.precacheTrie(app, trieIndex, multiResult, requests)
 	}
-
-	ftc.mu.Lock()
-	ftc.lastUpdated = time.Now()
-	ftc.mu.Unlock()
 }
 
 // PreCacheSingleTrie caches a specific trie with priority
@@ -96,7 +88,7 @@ func (ftc *TrieCache) precacheTrie(app *App, trieIndex int, multiResult *output.
 	}
 
 	// 2. Pre-render all text components
-	summary := app.buildSummaryTextFor(trieOutput, trieIndex)
+	summary := app.buildSummaryTextFor(trieIndex)
 	clustering := app.buildClusteringTextFor(trieOutput)
 	cidr := app.buildCidrAnalysisTextFor(trieOutput)
 	diagnostics := app.buildDiagnosticsTextFor(trieOutput)
