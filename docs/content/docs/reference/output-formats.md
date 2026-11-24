@@ -343,6 +343,7 @@ Other lines worth alerting on or grepping for:
 | `Filebeat disconnected: protocol violation` | warn | The peer broke the protocol or one of the [size limits]({{< relref "/docs/guides/live-protection/#protocol-limits" >}}). |
 | `ingest connection rejected: connection limit reached` | warn | More than 64 simultaneous connections. |
 | `ingest listener is reachable from other hosts and does not authenticate clients ...` | warn | Logged at startup when `listen` is not a loopback address and mutual TLS is not enabled. |
+| `most log lines are rejected by the parser` | warn | More than half of the lines that arrived lately (judged over at least 20 lines) were dropped as parse errors: `rejected` and `parsed` count them, `log_format` is the format in effect. The usual cause is a `[live] logFormat` that does not match what the web server writes, so the `%h` field is not an IPv4 address or `%t` is not a timestamp; a site whose clients are mostly IPv6 sees it too. At most once per minute. |
 | `most request timestamps fall outside the sliding window on arrival` | warn | More than half of a batch was stamped older than the window (`stale`) or more than a minute in the future (`future`). Log time and the clock of the flokbn host disagree - typically a log format without a UTC offset on a host that is not on UTC - so requests expire on arrival and nothing is detected. At most once per minute and window. |
 | `[live.NAME] startTime has no effect in live mode and is ignored ...` | warn | A `[live.NAME]` table sets `startTime`, `endTime` or `cidrRanges`. |
 

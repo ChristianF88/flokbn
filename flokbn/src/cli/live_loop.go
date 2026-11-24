@@ -121,6 +121,9 @@ type liveLoop struct {
 	// once per run, on the first ban-file write that carries any.
 	blacklistAnnounced bool
 
+	// rejects watches the share of lines the ingestor could not parse.
+	rejects rejectWatch
+
 	// clusterStats is the last iteration's per-window cluster stats,
 	// re-served by heartbeat snapshots (no traffic means no new clustering
 	// result). Nil when stats are off and before the first iteration.
@@ -251,6 +254,9 @@ func (l *liveLoop) run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// Before the empty check: when every line is rejected the batch is
+		// empty and the loop looks idle.
+		l.warnRejectedLines(loopStart)
 		if len(batch) == 0 {
 			if l.ing.IsClosed() {
 				l.logger.Info("ingestor closed, exiting loop")
@@ -285,6 +291,25 @@ func (l *liveLoop) readBatch() ([]accesslog.Request, error) {
 		}
 	}
 	return batch, nil
+}
+
+// warnRejectedLines says so when the parser rejected most of the lines that
+// arrived lately. The usual cause is a [live] logFormat that does not match
+// what the web server writes; flokbn then sees no requests and detects
+// nothing, and nothing else points at the reason.
+func (l *liveLoop) warnRejectedLines(now time.Time) {
+	st := l.ing.Stats()
+	parsed, rejected, warn := l.rejects.observe(st.RequestsTotal, st.ParseErrorsTotal, now)
+	if !warn {
+		return
+	}
+	l.logger.Warn(liveRejectedLinesMsg,
+		"rejected", rejected,
+		"parsed", parsed,
+		"log_format", l.cfg.GetLiveLogFormat(),
+		"parse_errors_total", st.ParseErrorsTotal,
+		"hint", "a line is rejected when the %h field is not an IPv4 address or the %t field is not a timestamp: compare one shipped line with log_format and set [live] logFormat to the layout the web server writes",
+	)
 }
 
 // idle waits for the next poll and runs a heartbeat when one is due.
