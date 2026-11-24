@@ -111,7 +111,7 @@ sudo systemctl restart filebeat
 
 flokbn listens on `127.0.0.1` unless `[live] listen` (or `--listen`) says otherwise. With Filebeat on the same host, point `hosts` at `127.0.0.1:8080`; for a remote Filebeat, set `listen` and protect the port as described in [Security Considerations](#security-considerations) - ideally with [mutual TLS](#tls-and-mutual-tls-for-the-ingest-listener).
 
-flokbn logs `Filebeat connected` and `Filebeat disconnected` (with the remote address and the number of open connections) whenever a shipper connects or leaves. The startup line `waiting for Filebeat to connect` only says the listener is up; it is not followed by a blocking wait.
+flokbn logs `Filebeat connected` and `Filebeat disconnected` (with the remote address and the number of open connections) whenever a shipper connects or leaves. The startup line `accepting Lumberjack connections` says the listener is up; flokbn does not wait for a shipper after it.
 
 ### Expected log line format
 

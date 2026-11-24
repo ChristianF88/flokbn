@@ -52,6 +52,10 @@ const (
 	// liveIdlePoll is how long the loop sleeps after an empty ReadBatch
 	// before polling again (ReadBatch is non-blocking).
 	liveIdlePoll = time.Second
+	// liveAcceptingMsg is logged once the ingestor serves its listener. The
+	// loop does not wait for a client after it: connects are logged by the
+	// ingestor when they happen.
+	liveAcceptingMsg = "accepting Lumberjack connections"
 	// liveTimestampSkewInterval rate-limits the per-window warning about
 	// request timestamps that disagree with the wall clock.
 	liveTimestampSkewInterval = time.Minute
@@ -224,7 +228,7 @@ func (l *liveLoop) run(ctx context.Context) error {
 		return fmt.Errorf("accepting connection: %w", err)
 	}
 
-	l.logger.Info("waiting for Filebeat to connect")
+	l.logger.Info(liveAcceptingMsg)
 
 	// Cancellation watcher: closing the ingestor unblocks the loop below.
 	// Started only after Accept so ing's internal state is never written

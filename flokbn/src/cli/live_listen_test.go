@@ -98,7 +98,7 @@ func startLive(t *testing.T, args ...string) *liveProcess {
 			p.mu.Lock()
 			p.logs.WriteString(line + "\n")
 			p.mu.Unlock()
-			if !signalled && strings.Contains(line, "waiting for Filebeat to connect") {
+			if !signalled && strings.Contains(line, liveAcceptingMsg) {
 				signalled = true
 				close(ready)
 			}

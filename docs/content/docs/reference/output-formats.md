@@ -338,7 +338,8 @@ Other lines worth alerting on or grepping for:
 
 | Message | Level | Meaning |
 |---------|-------|---------|
-| `Filebeat connected` / `Filebeat disconnected` | info | A shipper connection was opened or closed (`remote`, `open_connections`, and a `reason` when it did not end cleanly). `waiting for Filebeat to connect` at startup only says the listener is up. |
+| `Filebeat connected` / `Filebeat disconnected` | info | A shipper connection was opened or closed (`remote`, `open_connections`, and a `reason` when it did not end cleanly). |
+| `accepting Lumberjack connections` | info | Logged once at startup: the ingest listener is up. flokbn does not wait for a shipper; it runs idle heartbeats until one sends something. |
 | `Filebeat disconnected: protocol violation` | warn | The peer broke the protocol or one of the [size limits]({{< relref "/docs/guides/live-protection/#protocol-limits" >}}). |
 | `ingest connection rejected: connection limit reached` | warn | More than 64 simultaneous connections. |
 | `ingest listener is reachable from other hosts and does not authenticate clients ...` | warn | Logged at startup when `listen` is not a loopback address and mutual TLS is not enabled. |
