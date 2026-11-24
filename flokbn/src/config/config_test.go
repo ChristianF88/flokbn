@@ -1,7 +1,6 @@
 package config
 
 import (
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -549,7 +548,6 @@ endpointRegex = "/admin/.*"
 			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 				URI:       "/api/users",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: true,
 		},
@@ -558,7 +556,6 @@ endpointRegex = "/admin/.*"
 			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 				URI:       "/home",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
@@ -567,7 +564,6 @@ endpointRegex = "/admin/.*"
 			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/api/users",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
@@ -576,7 +572,6 @@ endpointRegex = "/admin/.*"
 			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/home",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
@@ -600,7 +595,6 @@ endpointRegex = "/admin/.*"
 	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
-		IP:        net.ParseIP("1.2.3.4"),
 	}
 
 	if !trie3.ShouldIncludeRequest(testRequest) {
@@ -647,7 +641,6 @@ endpointRegex = "/admin/.*"
 			request: accesslog.Request{
 				UserAgent: "nmap security scanner v7.80",
 				URI:       "/admin/dashboard",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: true,
 		},
@@ -656,7 +649,6 @@ endpointRegex = "/admin/.*"
 			request: accesslog.Request{
 				UserAgent: "nmap security scanner v7.80",
 				URI:       "/public/info",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
@@ -665,7 +657,6 @@ endpointRegex = "/admin/.*"
 			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/admin/dashboard",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
@@ -689,7 +680,6 @@ endpointRegex = "/admin/.*"
 	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
-		IP:        net.ParseIP("1.2.3.4"),
 	}
 
 	if !slidingTrie2.ShouldIncludeRequest(testRequest) {
@@ -902,7 +892,6 @@ endpointRegex = ""
 	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
-		IP:        net.ParseIP("1.2.3.4"),
 	}
 
 	if !trie1.ShouldIncludeRequest(testRequest) {
@@ -921,11 +910,11 @@ func TestCompileRegex(t *testing.T) {
 		if err := tc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed: %v", err)
 		}
-		req := accesslog.Request{UserAgent: "Googlebot", URI: "/api/users", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "Googlebot", URI: "/api/users"}
 		if !tc.ShouldIncludeRequest(req) {
 			t.Error("Expected matching request to be included")
 		}
-		req2 := accesslog.Request{UserAgent: "Mozilla", URI: "/home", IP: net.ParseIP("1.2.3.4")}
+		req2 := accesslog.Request{UserAgent: "Mozilla", URI: "/home"}
 		if tc.ShouldIncludeRequest(req2) {
 			t.Error("Expected non-matching request to be excluded")
 		}
@@ -943,7 +932,7 @@ func TestCompileRegex(t *testing.T) {
 		if err := tc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed on empty: %v", err)
 		}
-		req := accesslog.Request{UserAgent: "anything", URI: "/any", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "anything", URI: "/any"}
 		if !tc.ShouldIncludeRequest(req) {
 			t.Error("Expected all requests accepted with no regex")
 		}
@@ -959,7 +948,7 @@ func TestCompileRegex(t *testing.T) {
 		if err := stc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed: %v", err)
 		}
-		req := accesslog.Request{UserAgent: "nmap scanner", URI: "/admin/panel", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "nmap scanner", URI: "/admin/panel"}
 		if !stc.ShouldIncludeRequest(req) {
 			t.Error("Expected matching request to be included")
 		}
