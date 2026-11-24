@@ -19,49 +19,45 @@ type filterCounts struct {
 	ipsToInsert          []uint32
 }
 
-// ipSetStrings renders a collected UA IP set as dotted-quad strings (order
-// unspecified; the assertions below compare them as sets).
-func ipSetStrings(set map[uint32]struct{}) []string {
-	out := make([]string, 0, len(set))
-	for ip := range set {
+// ipSetStrings renders the IPs a filter collected for a UA list as the set of
+// their dotted-quad strings (each IP once, order unspecified; the assertions
+// below compare them as sets). The filter reports one entry per request.
+func ipSetStrings(ips []uint32) []string {
+	seen := make(map[uint32]struct{}, len(ips))
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if _, dup := seen[ip]; dup {
+			continue
+		}
+		seen[ip] = struct{}{}
 		out = append(out, ingestor.Uint32ToIPString(ip))
 	}
 	return out
 }
 
-// runSequential drives filterRequests over reqs and returns the resulting counts.
-func runSequential(reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
-	var fc filterCounts
-	wlSet := make(map[uint32]struct{})
-	blSet := make(map[uint32]struct{})
-	var ips []uint32
-	var noBounds timeBounds // no time filters in this test
-	filterRequests(reqs, tc, noBounds, m,
-		wlSet, blSet,
-		&fc.filteredRequestCount, &ips, &fc.invalidIPCount, &fc.uaWhitelistExcluded)
-	fc.whitelistIPs = ipSetStrings(wlSet)
-	fc.blacklistIPs = ipSetStrings(blSet)
-	fc.ipsToInsert = ips
-	return fc
+// toFilterCounts maps a filterResult onto the fields the parity tests compare.
+func toFilterCounts(res filterResult) filterCounts {
+	return filterCounts{
+		filteredRequestCount: len(res.ips),
+		invalidIPCount:       res.invalid,
+		uaWhitelistExcluded:  res.uaExcluded,
+		whitelistIPs:         ipSetStrings(res.uaWhitelistIPs),
+		blacklistIPs:         ipSetStrings(res.uaBlacklistIPs),
+		ipsToInsert:          res.ips,
+	}
 }
 
-// runConcurrent drives filterRequestsConcurrent over reqs and returns the counts.
+// runSequential drives filterSequential over reqs and returns the resulting counts.
+func runSequential(reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
+	var noBounds timeBounds // no time filters in this test
+	return toFilterCounts(filterSequential(reqs, tc, noBounds, m))
+}
+
+// runConcurrent drives filterConcurrent over reqs and returns the counts.
 func runConcurrent(t *testing.T, reqs []ingestor.Request, tc *config.TrieConfig, m *cidr.UserAgentMatcher) filterCounts {
 	t.Helper()
-	var fc filterCounts
-	wlSet := make(map[uint32]struct{})
-	blSet := make(map[uint32]struct{})
-	var ips []uint32
 	var noBounds timeBounds // no time filters in this test
-	if err := filterRequestsConcurrent(reqs, tc, noBounds, m,
-		wlSet, blSet,
-		&fc.filteredRequestCount, &ips, &fc.invalidIPCount, &fc.uaWhitelistExcluded); err != nil {
-		t.Fatalf("filterRequestsConcurrent error: %v", err)
-	}
-	fc.whitelistIPs = ipSetStrings(wlSet)
-	fc.blacklistIPs = ipSetStrings(blSet)
-	fc.ipsToInsert = ips
-	return fc
+	return toFilterCounts(filterConcurrent(reqs, tc, noBounds, m))
 }
 
 // TestConcurrentSequentialParity_ZeroIPWhitelistedUA is the regression test for

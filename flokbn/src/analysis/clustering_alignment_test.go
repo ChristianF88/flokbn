@@ -21,7 +21,7 @@ func alignmentLog() string {
 
 // TestInvalidClusterSetKeepsUseForJailAligned: processClustering used to skip
 // an invalid cluster arg set without appending anything to TrieResult.Data,
-// while ProcessJailWithWhitelist pairs Data[i] with UseForJail[i] by position.
+// while the publish step pairs Data[i] with UseForJail[i] by position.
 // Every set after an invalid one therefore took the useForJail flag of its
 // left neighbour - a set marked "do not jail" could be banned, and a set
 // marked for the jail could be ignored.

@@ -278,9 +278,9 @@ func TestStaticPipeline_UniqueIPsCountsDistinct(t *testing.T) {
 		name string
 		trie *config.TrieConfig
 	}{
-		// Unfiltered: exercises the IP-only fast path (processTrieFromSortedIPs).
+		// Unfiltered: exercises the IP-only parse and the shared sorted IP list.
 		{"unfiltered fast path", &config.TrieConfig{}},
-		// Filtered: a User-Agent regex forces the full path (processTrie).
+		// Filtered: a User-Agent regex forces the full parse and the request filter.
 		{"filtered full path", &config.TrieConfig{UserAgentRegex: "test"}},
 	}
 
