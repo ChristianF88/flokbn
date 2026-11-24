@@ -1,4 +1,4 @@
-package ingestor
+package accesslog
 
 // Uint32ToIPString converts uint32 back to IP string for output
 func Uint32ToIPString(ip uint32) string {

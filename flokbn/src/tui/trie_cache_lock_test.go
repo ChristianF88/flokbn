@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/gdamore/tcell/v2"
 )
@@ -14,7 +14,7 @@ import (
 // lockTestApp builds an App with several tries and cluster sets plus a request
 // corpus large enough that precaching it takes real time (full request scans
 // per trie and per cluster set).
-func lockTestApp() (*App, []ingestor.Request) {
+func lockTestApp() (*App, []accesslog.Request) {
 	multi := output.NewJSONOutput("static", time.Now())
 	for _, name := range []string{"trie-a", "trie-b", "trie-c", "trie-d"} {
 		multi.Tries = append(multi.Tries, output.TrieResult{
@@ -28,7 +28,7 @@ func lockTestApp() (*App, []ingestor.Request) {
 		})
 	}
 
-	reqs := make([]ingestor.Request, 300_000)
+	reqs := make([]accesslog.Request, 300_000)
 	for i := range reqs {
 		// Spread over the address space; never 0 (0 = "no IP", skipped).
 		reqs[i].IPUint32 = uint32(i)*2654435761 | 1

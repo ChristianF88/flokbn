@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"os"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/components"
 	"github.com/go-echarts/go-echarts/v2/opts"
@@ -72,7 +72,7 @@ func pinnedScriptTags(assets []string) ([]string, error) {
 
 // PlotHeatmap creates an interactive heatmap for /16 IP ranges (A.B.0.0/16)
 // and announces the written file on stderr.
-func PlotHeatmap(requests []ingestor.Request, filename string) error {
+func PlotHeatmap(requests []accesslog.Request, filename string) error {
 	if err := WriteHeatmap(requests, filename); err != nil {
 		return err
 	}
@@ -89,7 +89,7 @@ func PlotHeatmap(requests []ingestor.Request, filename string) error {
 // WriteHeatmap is PlotHeatmap without the stderr notice: it writes the file and
 // prints nothing. The TUI uses it, because nothing may be written to the
 // terminal while tview owns it.
-func WriteHeatmap(requests []ingestor.Request, filename string) error {
+func WriteHeatmap(requests []accesslog.Request, filename string) error {
 	var counts [256][256]uint32
 
 	// Fast bucketing into A.B.0.0/16

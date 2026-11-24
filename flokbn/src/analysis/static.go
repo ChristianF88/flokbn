@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/logparser"
 	"github.com/ChristianF88/flokbn/output"
@@ -21,7 +21,7 @@ import (
 // Static runs static analysis from config and returns the same
 // *output.JSONOutput as StaticWithRequests, without the parsed requests. When
 // no trie filters on anything but the IP (no UA/endpoint/time filter, no
-// User-Agent list) the log is parsed IP-only: no ingestor.Request is ever
+// User-Agent list) the log is parsed IP-only: no accesslog.Request is ever
 // built, which cuts allocations sharply.
 func Static(cfg *config.Config) (*output.JSONOutput, error) {
 	jsonOutput, _, err := runStatic(context.Background(), cfg, false)
@@ -31,7 +31,7 @@ func Static(cfg *config.Config) (*output.JSONOutput, error) {
 // StaticWithRequests runs static analysis from config and also returns the parsed requests.
 // It is a thin wrapper around StaticWithRequestsCtx using a background context
 // (no cancellation), preserving the signature for the ~dozen existing call sites.
-func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
+func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []accesslog.Request, error) {
 	return StaticWithRequestsCtx(context.Background(), cfg)
 }
 
@@ -42,7 +42,7 @@ func StaticWithRequests(cfg *config.Config) (*output.JSONOutput, []ingestor.Requ
 // effects, so a quit-mid-analysis run never mutates on-disk state. The hot
 // trie/clustering internals are NOT context-threaded (out of scope, and on the
 // measured path); the checks in runStatic bracket the CPU-bound phase only.
-func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSONOutput, []ingestor.Request, error) {
+func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSONOutput, []accesslog.Request, error) {
 	return runStatic(ctx, cfg, true)
 }
 
@@ -54,7 +54,7 @@ func StaticWithRequestsCtx(ctx context.Context, cfg *config.Config) (*output.JSO
 // keepRequests makes the parse step materialise and return every request even
 // when no filter needs more than the IP (the TUI and the heatmap read them).
 // Without it, and without filters, the parse step yields IPs only.
-func runStatic(ctx context.Context, cfg *config.Config, keepRequests bool) (*output.JSONOutput, []ingestor.Request, error) {
+func runStatic(ctx context.Context, cfg *config.Config, keepRequests bool) (*output.JSONOutput, []accesslog.Request, error) {
 	analysisStart := time.Now()
 	jsonOutput := output.NewJSONOutput("static", analysisStart)
 
@@ -125,7 +125,7 @@ func runStatic(ctx context.Context, cfg *config.Config, keepRequests bool) (*out
 	parser.SkipNonIPFields = !needsNonIPFields
 
 	// IP-only fast path: nobody reads anything but the IP, so the parser hands
-	// back bare IPs and no ingestor.Request is built.
+	// back bare IPs and no accesslog.Request is built.
 	ipOnly := !keepRequests && !needsNonIPFields
 
 	parseStart := time.Now()
@@ -236,7 +236,7 @@ func runStatic(ctx context.Context, cfg *config.Config, keepRequests bool) (*out
 //   - IP-only: requests is nil and the parser delivered the nonzero IPs
 //     directly. Only possible when no trie has a filter.
 type parsedLog struct {
-	requests []ingestor.Request
+	requests []accesslog.Request
 	// total is the number of parsed lines, including those without a usable IP.
 	total int
 
@@ -359,7 +359,7 @@ func sortedUniqueIPStrings(ips []uint32) []string {
 		if i > 0 && ip == ips[i-1] {
 			continue
 		}
-		out = append(out, ingestor.Uint32ToIPString(ip))
+		out = append(out, accesslog.Uint32ToIPString(ip))
 	}
 	return out
 }

@@ -5,7 +5,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/rivo/tview"
 )
@@ -23,7 +23,7 @@ type VisualizationView struct {
 	trafficData       [256][256]uint32
 	clusteredData     [256][256]uint32 // Per-/16 count of requests inside detected cluster ranges (current set)
 	maxTraffic        uint32
-	requests          []ingestor.Request
+	requests          []accesslog.Request
 	currentClusterSet int
 	totalClusterSets  int
 	blockScale        int // /16 bins per display-cell side (0 → default 8)
@@ -110,7 +110,7 @@ func (a *App) newVisualizationViewWith(totalClusterSets int) *VisualizationView 
 // callers - trie-switch closures and tests - already are). The background
 // initial-precache path must use PreCacheAllTriesFor, which never reads the
 // UI-owned App.jsonResult/currentTrie.
-func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
+func (v *VisualizationView) PreCacheAllTries(requests []accesslog.Request) {
 	v.PreCacheAllTriesFor(requests, v.app.currentTrie)
 }
 
@@ -119,7 +119,7 @@ func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
 // rather than reading the UI-owned App.jsonResult/currentTrie. This lets the
 // background initial-precache goroutine (which owns the view before it is
 // published to the UI) run with no cross-goroutine reads of UI-owned state.
-func (v *VisualizationView) PreCacheAllTriesFor(requests []ingestor.Request, restoreTrie int) {
+func (v *VisualizationView) PreCacheAllTriesFor(requests []accesslog.Request, restoreTrie int) {
 	if v.app.cfg == nil || v.app.multiTrieResult == nil {
 		// No-config mode - cache single trie
 		v.ProcessTrafficData(requests)
@@ -270,7 +270,7 @@ func (v *VisualizationView) updateTrafficDataCached() {
 // ensureClusteredData, which generateRenderText calls unconditionally before
 // every heatmap render (and which keys the grid per (trie, cluster set)).
 // Building it here too would be a discarded extra binary search per request.
-func (v *VisualizationView) ProcessTrafficData(requests []ingestor.Request) {
+func (v *VisualizationView) ProcessTrafficData(requests []accesslog.Request) {
 	v.requests = requests
 	v.maxTraffic = 0
 

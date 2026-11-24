@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // scriptTagRe matches every external script tag of the rendered page.
@@ -19,7 +19,7 @@ var scriptTagRe = regexp.MustCompile(`<script[^>]*\bsrc="[^"]*"[^>]*>`)
 func writeTestHeatmap(t *testing.T) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "heatmap.html")
-	requests := []ingestor.Request{ipv4Request(10, 5, 5, 1), ipv4Request(192, 168, 0, 3)}
+	requests := []accesslog.Request{ipv4Request(10, 5, 5, 1), ipv4Request(192, 168, 0, 3)}
 	if err := WriteHeatmap(requests, out); err != nil {
 		t.Fatalf("WriteHeatmap returned error: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestWriteHeatmap_ReplacesAtomically(t *testing.T) {
 	}
 	defer reader.Close()
 
-	requests := []ingestor.Request{ipv4Request(10, 5, 5, 1)}
+	requests := []accesslog.Request{ipv4Request(10, 5, 5, 1)}
 	if err := WriteHeatmap(requests, out); err != nil {
 		t.Fatalf("WriteHeatmap returned error: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestWriteHeatmap_FailureLeavesNoTempFile(t *testing.T) {
 		t.Fatalf("creating directory at the target path: %v", err)
 	}
 
-	if err := WriteHeatmap([]ingestor.Request{ipv4Request(10, 5, 5, 1)}, out); err == nil {
+	if err := WriteHeatmap([]accesslog.Request{ipv4Request(10, 5, 5, 1)}, out); err == nil {
 		t.Fatal("WriteHeatmap returned nil although the target is a directory")
 	}
 

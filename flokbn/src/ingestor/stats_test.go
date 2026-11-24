@@ -3,6 +3,8 @@ package ingestor
 import (
 	"testing"
 	"time"
+
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 func TestParseEvent_CountsMalformedStatusAndBytes(t *testing.T) {
@@ -39,7 +41,7 @@ func TestParseEvent_CountsMalformedStatusAndBytes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			malformed, err := parseEvent(map[string]interface{}{"message": tc.log}, &req)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)

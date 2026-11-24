@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/rivo/tview"
@@ -27,8 +27,8 @@ func newClusterSet(cidrs ...string) *output.ClusterResult {
 }
 
 // reqFor builds a synthetic request for the given dotted IP.
-func reqFor(ip string) ingestor.Request {
-	return ingestor.Request{IPUint32: iputils.IPToUint32(net.ParseIP(ip))}
+func reqFor(ip string) accesslog.Request {
+	return accesslog.Request{IPUint32: iputils.IPToUint32(net.ParseIP(ip))}
 }
 
 // bruteContains reports membership via net.Contains over the parsed CIDRs -
@@ -44,7 +44,7 @@ func bruteContains(cidrs []*net.IPNet, ipu uint32) bool {
 }
 
 // buildGridReference computes the clustered-traffic grid by brute force.
-func buildGridReference(reqs []ingestor.Request, cidrs []*net.IPNet) [256][256]uint32 {
+func buildGridReference(reqs []accesslog.Request, cidrs []*net.IPNet) [256][256]uint32 {
 	var grid [256][256]uint32
 	for i := range reqs {
 		ip := reqs[i].IPUint32
@@ -73,7 +73,7 @@ func mustCIDRs(t testing.TB, cidrs ...string) []*net.IPNet {
 
 // newOverlayView builds a legacy-mode view with a single cluster set made of
 // the given CIDRs and runs ProcessTrafficData over reqs.
-func newOverlayView(reqs []ingestor.Request, cidrs ...string) *VisualizationView {
+func newOverlayView(reqs []accesslog.Request, cidrs ...string) *VisualizationView {
 	app := &App{}
 	app.jsonResult = &output.JSONOutput{}
 	app.jsonResult.Clustering.Data = []output.ClusterResult{*newClusterSet(cidrs...)}
@@ -89,8 +89,8 @@ func newOverlayView(reqs []ingestor.Request, cidrs ...string) *VisualizationView
 }
 
 // repeatReq returns n copies of a request for the given dotted IP.
-func repeatReq(ip string, n int) []ingestor.Request {
-	out := make([]ingestor.Request, n)
+func repeatReq(ip string, n int) []accesslog.Request {
+	out := make([]accesslog.Request, n)
 	r := reqFor(ip)
 	for i := range out {
 		out[i] = r
@@ -110,7 +110,7 @@ func TestClusteredTrafficGrid(t *testing.T) {
 		"152.88.205.0/24", // another /24
 	}
 
-	reqs := []ingestor.Request{
+	reqs := []accesslog.Request{
 		reqFor("20.171.207.2"),   // in /32
 		reqFor("20.171.207.3"),   // NOT in /32 (adjacent)
 		reqFor("45.40.50.200"),   // in /26
@@ -178,7 +178,7 @@ func TestClusteredTrafficGrid(t *testing.T) {
 // clustered grid only matches the reference after ensureClusteredData runs.
 func TestProcessTrafficDataLegacyMode(t *testing.T) {
 	cidrStrs := []string{"45.40.50.192/26", "14.160.0.0/12"}
-	reqs := []ingestor.Request{
+	reqs := []accesslog.Request{
 		reqFor("45.40.50.200"),
 		reqFor("45.40.50.201"),
 		reqFor("14.170.1.1"),
@@ -544,9 +544,9 @@ func BenchmarkSetRenderText(b *testing.B) {
 // makeClusteredRequests synthesizes n requests with a clustered IP distribution:
 // a configurable fraction lands inside the given cluster CIDRs, the rest is
 // spread across random /16s outside them.
-func makeClusteredRequests(n int, clusteredFrac float64, cidrs []*net.IPNet) []ingestor.Request {
+func makeClusteredRequests(n int, clusteredFrac float64, cidrs []*net.IPNet) []accesslog.Request {
 	rng := rand.New(rand.NewSource(42))
-	reqs := make([]ingestor.Request, n)
+	reqs := make([]accesslog.Request, n)
 	for i := range reqs {
 		var ip uint32
 		if rng.Float64() < clusteredFrac && len(cidrs) > 0 {
@@ -769,7 +769,7 @@ func TestCacheKeysNoCompositeCollision(t *testing.T) {
 // requests and is identical for every trie - only the clustered overlay may
 // differ per trie. Guards against re-introducing per-trie traffic filtering.
 func TestTrafficMatrixIsGroundTruth(t *testing.T) {
-	reqs := []ingestor.Request{
+	reqs := []accesslog.Request{
 		reqFor("14.169.1.1"), reqFor("14.169.1.1"), reqFor("14.169.2.2"),
 		reqFor("45.40.50.200"), reqFor("8.8.8.8"), reqFor("203.0.113.5"),
 	}

@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/output"
 )
 
 // heatmapTestRequests is a tiny request corpus for the heatmap writer.
-func heatmapTestRequests() []ingestor.Request {
-	return []ingestor.Request{
+func heatmapTestRequests() []accesslog.Request {
+	return []accesslog.Request{
 		{IPUint32: 10<<24 | 5<<16 | 5<<8 | 1},
 		{IPUint32: 192<<24 | 168<<16 | 3},
 	}
@@ -129,7 +129,7 @@ func TestTUIHeatmap_Skipped(t *testing.T) {
 	for name, tc := range map[string]struct {
 		ctx      context.Context
 		plotPath string
-		requests []ingestor.Request
+		requests []accesslog.Request
 	}{
 		"no plotPath":   {context.Background(), "", heatmapTestRequests()},
 		"no requests":   {context.Background(), plotPath, nil},

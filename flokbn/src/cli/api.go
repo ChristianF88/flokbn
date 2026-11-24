@@ -76,7 +76,7 @@ func executeStaticAnalysis(cfg *config.Config, outputConfig OutputConfig) error 
 	}
 
 	// No heatmap requested: take the IP-only fast path that never materialises
-	// the []ingestor.Request slice (the requests would otherwise be discarded).
+	// the []accesslog.Request slice (the requests would otherwise be discarded).
 	if cfg.Static == nil || cfg.Static.PlotPath == "" {
 		result, err := analysis.Static(cfg)
 		if err != nil {
@@ -225,6 +225,7 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		return fmt.Errorf("ingest TLS: %w", err)
 	}
 	ing, err := ingestor.NewTCPIngestorWithOptions(listenAddr, ingestor.Options{
+		LogFormat:   cfg.GetLiveLogFormat(),
 		ReadTimeout: cfg.GetReadTimeout(), // read timeout: avoid client disconnects
 		TLS:         tlsConfig,
 		Logger:      logger,
@@ -248,6 +249,7 @@ func executeLiveAnalysis(cfg *config.Config) error {
 		"version", version.Version,
 		"listen", listenAddr,
 		"tls", ingestTLSMode(tlsConfig),
+		"log_format", ing.LogFormat(),
 		"jail_file", cfg.GetJailFile(),
 		"ban_file", cfg.GetBanFile(),
 		"windows", len(cfg.LiveTries),

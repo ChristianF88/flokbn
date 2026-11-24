@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -16,13 +16,13 @@ import (
 
 // raceTestRequests synthesizes a small request corpus that lands inside both
 // tries' cluster ranges so every precache pass has real work to do.
-func raceTestRequests() []ingestor.Request {
+func raceTestRequests() []accesslog.Request {
 	dots := []string{
 		"10.0.0.1", "10.1.2.3", "10.255.255.254", // inside trie-a 10.0.0.0/8
 		"192.168.1.1", "192.168.254.9", // inside trie-b 192.168.0.0/16
 		"8.8.8.8", "1.1.1.1", "203.0.113.5", // outside both
 	}
-	reqs := make([]ingestor.Request, 0, len(dots))
+	reqs := make([]accesslog.Request, 0, len(dots))
 	for _, d := range dots {
 		reqs = append(reqs, reqFor(d))
 	}

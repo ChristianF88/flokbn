@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/ingestor"
 )
@@ -18,14 +19,14 @@ import (
 // loop asks IsClosed.
 type lateBatchIngestor struct {
 	mu    sync.Mutex
-	late  []ingestor.Request
+	late  []accesslog.Request
 	reads int
 }
 
 func (l *lateBatchIngestor) Accept() error { return nil }
 func (l *lateBatchIngestor) Close() error  { return nil }
 
-func (l *lateBatchIngestor) ReadBatch() ([]ingestor.Request, error) {
+func (l *lateBatchIngestor) ReadBatch() ([]accesslog.Request, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.reads++

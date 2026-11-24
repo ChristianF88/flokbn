@@ -112,6 +112,7 @@ flokbn live [options]
 | `--config` | string | No | - | Path to TOML config file. When used, only `--logLevel` is allowed alongside it. |
 | `--port` | string | Yes (unless `--config`) | - | Port for Lumberjack protocol listener |
 | `--listen` | string | No | `127.0.0.1` | Address the Lumberjack listener binds to (an IP address or host name, without a port). The port does not authenticate shippers, so pass another address such as `0.0.0.0` only when access to the port is restricted; flokbn then logs a warning at startup. Same as `[live] listen`. |
+| `--logFormat` | string | No | `%h %^ %^ [%t] "%r" %s %b "%^" "%u"` | Format of the shipped log lines. Same syntax as the static flag, but a **different default**: the client IP is read from the *first* field. Must contain `%t`. Same as `[live] logFormat`. See [Log Formats]({{< relref "/docs/reference/log-formats/#defaults" >}}). |
 | `--jailFile` | string | Yes (unless `--config`) | - | Path to jail state file (JSON) |
 | `--banFile` | string | Yes (unless `--config`) | - | Path to ban list output (CIDRs plus `#` comment headers) |
 | `--logLevel` | string | No | `info` | Verbosity of the live-mode log lines on stderr: `debug`, `info`, `warn`, or `error`. Overrides the `[log]` level from the config file. |
@@ -136,9 +137,9 @@ Flags-only live mode creates a **single** sliding window (internally named `cli_
 
 ### Filtering Options
 
-Live mode supports the same filter flags as static mode: `--useragentRegex`, `--endpointRegex`, `--whitelist`, `--blacklist`, `--userAgentWhitelist`, `--userAgentBlacklist`.
+Live mode supports the same filter flags as static mode: `--useragentRegex`, `--endpointRegex`, `--whitelist`, `--blacklist`, `--userAgentWhitelist`, `--userAgentBlacklist`. As in static mode, a filter is rejected at startup when `--logFormat` does not extract the field it reads (`%u` for the User-Agent regex and lists, `%r` or `%U` for the endpoint regex).
 
-`--rangesCidr`, `--plotPath`, `--startTime`, `--endTime`, `--logfile`, `--logFormat`, `--plain`, `--compact`, and `--tui` are static-only flags - the live command rejects them with an error. Live mode produces log lines, the jail/ban files, and the optional HTTP endpoints, not a report.
+`--rangesCidr`, `--plotPath`, `--startTime`, `--endTime`, `--logfile`, `--plain`, `--compact`, and `--tui` are static-only flags - the live command rejects them with an error. Live mode produces log lines, the jail/ban files, and the optional HTTP endpoints, not a report.
 
 ---
 

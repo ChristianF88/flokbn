@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // TestDelimiter_AfterBracketedAndQuotedFields: a non-space delimiter that
@@ -15,7 +15,7 @@ import (
 func TestDelimiter_AfterBracketedAndQuotedFields(t *testing.T) {
 	type want struct {
 		ip     string
-		method ingestor.HTTPMethod
+		method accesslog.HTTPMethod
 		uri    string
 		status uint16
 		bytes  uint32
@@ -32,13 +32,13 @@ func TestDelimiter_AfterBracketedAndQuotedFields(t *testing.T) {
 			name:   "documented pipe format",
 			format: `%h|[%t]|%m|%U|%s`,
 			line:   `192.0.2.1|[09/Oct/2025:10:15:23 +0000]|POST|/index.html|404`,
-			want:   want{ip: "192.0.2.1", method: ingestor.POST, uri: "/index.html", status: 404, ts: true},
+			want:   want{ip: "192.0.2.1", method: accesslog.POST, uri: "/index.html", status: 404, ts: true},
 		},
 		{
 			name:   "pipes around quoted fields",
 			format: `%h|"%r"|%s|"%u"|%b`,
 			line:   `192.0.2.1|"POST /a b HTTP/1.1"|404|"Mozilla/5.0 (X11; Linux)"|1234`,
-			want:   want{ip: "192.0.2.1", method: ingestor.POST, uri: "/a", status: 404, ua: "Mozilla/5.0 (X11; Linux)", bytes: 1234},
+			want:   want{ip: "192.0.2.1", method: accesslog.POST, uri: "/a", status: 404, ua: "Mozilla/5.0 (X11; Linux)", bytes: 1234},
 		},
 		{
 			name:   "CSV with a comma inside a quoted field",
@@ -86,7 +86,7 @@ func TestDelimiter_AfterBracketedAndQuotedFields(t *testing.T) {
 			name:   "space-separated default is unaffected",
 			format: DefaultLogFormat,
 			line:   `10.0.0.1 - - [09/Oct/2025:10:15:23 +0000] "POST /x HTTP/1.1" 404 1234 "-" "curl/8" "192.0.2.1"`,
-			want:   want{ip: "192.0.2.1", method: ingestor.POST, uri: "/x", status: 404, bytes: 1234, ua: "curl/8", ts: true},
+			want:   want{ip: "192.0.2.1", method: accesslog.POST, uri: "/x", status: 404, bytes: 1234, ua: "curl/8", ts: true},
 		},
 	}
 
@@ -99,10 +99,10 @@ func TestDelimiter_AfterBracketedAndQuotedFields(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := ingestor.Uint32ToIPString(req.IPUint32); got != tt.want.ip {
+			if got := accesslog.Uint32ToIPString(req.IPUint32); got != tt.want.ip {
 				t.Errorf("IP = %s, want %s", got, tt.want.ip)
 			}
-			if got := ingestor.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != tt.want.ip {
+			if got := accesslog.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != tt.want.ip {
 				t.Errorf("IP-only parse: IP = %s, want %s", got, tt.want.ip)
 			}
 			if req.Method != tt.want.method {

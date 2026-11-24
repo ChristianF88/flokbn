@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/trie"
 )
@@ -164,7 +164,7 @@ func BenchmarkIPStringConversion(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			// Direct uint32 to string conversion
-			_ = ingestor.Uint32ToIPString(ip)
+			_ = accesslog.Uint32ToIPString(ip)
 		}
 	})
 }

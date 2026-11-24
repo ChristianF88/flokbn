@@ -5,23 +5,19 @@ import (
 	"time"
 )
 
-// TestStaticTimestampParity_OffsetAndOffsetless is the static half of the
-// AUDIT-07 live<->static timestamp parity contract. parseTimestamp (static) and
-// ingestor.parseEvent (live) live in different packages and are both unexported,
-// so neither test package can call both production functions in one body.
-// Instead, each side is independently pinned to the SAME documented oracle for
-// IDENTICAL bracket-interior content:
+// TestStaticTimestampParity_OffsetAndOffsetless pins parseTimestamp to the
+// documented oracle of the AUDIT-07 live<->static timestamp parity contract:
 //
 //   - offset-less "06/Jul/2025:19:57:26" (20 bytes) -> time.Date(...,time.UTC)
 //   - offset-bearing "06/Jul/2025:06:00:00 -0700"   -> 06:00 wall-clock, -0700
 //
-// The live half (ingestor.TestParseEvent_AcceptsOffsetlessTimestampAsUTC and
-// TestParseEvent_RetainsTimezoneOffset) asserts the live ingestor produces the
-// same instants and zone offsets. Pinning both implementations to one oracle is
-// what guarantees parity: if either side drifts, its package test fails.
+// Live mode had its own timestamp parser when this was written, pinned to the
+// same oracle by ingestor.TestParseEvent_AcceptsOffsetlessTimestampAsUTC and
+// TestParseEvent_RetainsTimezoneOffset. It now runs parseTimestamp through
+// LineParser, so the two modes cannot drift apart; those ingestor tests still
+// hold the live side to the oracle end to end.
 //
-// parseTimestamp takes the bracket *interior* via [start,end); live parseEvent
-// slices the identical interior as msg[start+1:end], so both see the same bytes.
+// parseTimestamp takes the bracket *interior* via [start,end).
 func TestStaticTimestampParity_OffsetAndOffsetless(t *testing.T) {
 	cases := []struct {
 		name      string

@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // ipv4Request builds an IPv4-only request from four octets (flokbn is
 // IPv4-only; the heatmap buckets on the first two octets via GetIPNet().To4()).
-func ipv4Request(o1, o2, o3, o4 byte) ingestor.Request {
-	return ingestor.Request{
+func ipv4Request(o1, o2, o3, o4 byte) accesslog.Request {
+	return accesslog.Request{
 		IPUint32: uint32(o1)<<24 | uint32(o2)<<16 | uint32(o3)<<8 | uint32(o4),
 	}
 }
@@ -20,7 +20,7 @@ func ipv4Request(o1, o2, o3, o4 byte) ingestor.Request {
 // TestPlotHeatmap_HappyPath writes a heatmap for a small valid IPv4 fixture to
 // a writable temp path and asserts success plus a non-empty rendered file.
 func TestPlotHeatmap_HappyPath(t *testing.T) {
-	requests := []ingestor.Request{
+	requests := []accesslog.Request{
 		ipv4Request(10, 5, 5, 1),
 		ipv4Request(10, 5, 6, 2),
 		ipv4Request(192, 168, 0, 3),
@@ -46,7 +46,7 @@ func TestPlotHeatmap_HappyPath(t *testing.T) {
 // line there makes the entire output unparseable
 // (jq: "Invalid numeric literal at line 1, column 8").
 func TestPlotHeatmap_StdoutStaysClean(t *testing.T) {
-	requests := []ingestor.Request{
+	requests := []accesslog.Request{
 		ipv4Request(10, 5, 5, 1),
 		ipv4Request(192, 168, 0, 3),
 	}
@@ -106,7 +106,7 @@ func TestPlotHeatmap_UncreatablePathErrors(t *testing.T) {
 // not touch the terminal (the TUI). It writes the same file as PlotHeatmap but
 // prints nothing, on stdout or stderr.
 func TestWriteHeatmap_IsSilent(t *testing.T) {
-	requests := []ingestor.Request{
+	requests := []accesslog.Request{
 		ipv4Request(10, 5, 5, 1),
 		ipv4Request(192, 168, 0, 3),
 	}

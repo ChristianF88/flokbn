@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/output"
 )
 
@@ -59,7 +59,7 @@ func NewTrieCache() *TrieCache {
 // stores plus a matrix copy). The UI goroutine reads this cache under the read
 // lock on every trie switch, so holding the write lock across the scans would
 // freeze the TUI for the whole precache.
-func (ftc *TrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOutput, requests []ingestor.Request) {
+func (ftc *TrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOutput, requests []accesslog.Request) {
 	if multiResult == nil || len(multiResult.Tries) == 0 {
 		return
 	}
@@ -75,7 +75,7 @@ func (ftc *TrieCache) PreCacheAllTries(app *App, multiResult *output.JSONOutput,
 }
 
 // PreCacheSingleTrie caches a specific trie with priority
-func (ftc *TrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResult *output.JSONOutput, requests []ingestor.Request) bool {
+func (ftc *TrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResult *output.JSONOutput, requests []accesslog.Request) bool {
 	if multiResult == nil || trieIndex >= len(multiResult.Tries) {
 		return false
 	}
@@ -88,7 +88,7 @@ func (ftc *TrieCache) PreCacheSingleTrie(app *App, trieIndex int, multiResult *o
 // Renders from the locally-derived single-trie output and index - it does NOT
 // touch app.jsonResult/currentTrie, which are owned exclusively by the tview UI
 // goroutine. Returns false when the trie cannot be converted.
-func (ftc *TrieCache) precacheTrie(app *App, trieIndex int, multiResult *output.JSONOutput, requests []ingestor.Request) bool {
+func (ftc *TrieCache) precacheTrie(app *App, trieIndex int, multiResult *output.JSONOutput, requests []accesslog.Request) bool {
 	// 1. Convert to single-trie output
 	trieOutput := app.singleTrieOutput(trieIndex)
 	if trieOutput == nil {
@@ -128,7 +128,7 @@ func (ftc *TrieCache) precacheTrie(app *App, trieIndex int, multiResult *output.
 // request slice (a precache that runs before the request data has arrived) is
 // never published as the final matrix, so a later call with the real requests
 // still computes it.
-func (ftc *TrieCache) globalTrafficData(requests []ingestor.Request) (*[256][256]uint32, uint32) {
+func (ftc *TrieCache) globalTrafficData(requests []accesslog.Request) (*[256][256]uint32, uint32) {
 	ftc.mu.RLock()
 	if ftc.globalTrafficReady {
 		m, maxTraffic := ftc.globalTraffic, ftc.globalMaxTraffic
@@ -166,7 +166,7 @@ func (ftc *TrieCache) globalTrafficData(requests []ingestor.Request) (*[256][256
 
 // clusteredGrids builds one clustered-traffic grid per cluster set of a trie in
 // a single pass over the requests. It touches no cache state and takes no lock.
-func clusteredGrids(requests []ingestor.Request, trieResult output.TrieResult) map[int][256][256]uint32 {
+func clusteredGrids(requests []accesslog.Request, trieResult output.TrieResult) map[int][256][256]uint32 {
 	// Pre-parse each cluster set's detected ranges once into sorted intervals so
 	// membership is an allocation-free binary search in the hot loop. One
 	// clustered grid is accumulated per cluster set in a single pass.

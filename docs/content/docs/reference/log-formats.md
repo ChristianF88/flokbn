@@ -17,7 +17,7 @@ seo:
 
 flokbn parses HTTP access logs using a format string that maps log fields to specifiers.
 
-Format strings apply to **static mode only**. Live mode ignores `logFormat`: it parses incoming events with a fixed combined-log layout (client IP as the first field) - see [Expected log line format]({{< relref "/docs/guides/live-protection/#expected-log-line-format" >}}) in the Live Protection guide for what a live log line must look like.
+Format strings apply to **both modes**, and both compile them with the same parser: `static --logFormat` / `[static] logFormat` describes the lines of the log file, `live --logFormat` / `[live] logFormat` describes the `message` of each shipped event. The two modes have **different defaults** - see [Defaults](#defaults) - and live mode adds a few rules of its own, listed under [Live Mode](#live-mode).
 
 ## Format Specifiers
 
@@ -35,7 +35,18 @@ Format strings apply to **static mode only**. Live mode ignores `logFormat`: it 
 
 **Constraints**: Exactly one `%h` is required. Each field specifier may appear at most once (e.g., two `%t` fields are not allowed); only `%^` (skip) may repeat. IPv4 only.
 
-**Filters need their field.** A filter that reads a field the format does not extract is rejected at startup: `useragentRegex` and the User-Agent whitelist/blacklist need `%u`, `endpointRegex` needs `%r` or `%U`, `startTime`/`endTime` need `%t`. Keep those specifiers in the format when you use the filter - see [Config File]({{< relref "/docs/reference/config-file/#validation-rules" >}}).
+**Filters need their field.** A filter that reads a field the format does not extract is rejected at startup, in both modes: `useragentRegex` and the User-Agent whitelist/blacklist need `%u`, `endpointRegex` needs `%r` or `%U`, `startTime`/`endTime` (static mode) need `%t`. Keep those specifiers in the format when you use the filter - see [Config File]({{< relref "/docs/reference/config-file/#validation-rules" >}}).
+
+## Defaults
+
+| Mode | Default format | Client IP read from |
+|------|----------------|---------------------|
+| `static` | `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"` | the **last** field (a trailing, quoted `X-Forwarded-For` / real-IP field) |
+| `live` | `%h %^ %^ [%t] "%r" %s %b "%^" "%u"` | the **first** field (plain combined log) |
+
+The defaults differ for a historical reason that is also a practical one. Live mode has always read the first field: that is where a web server puts the client address, and Filebeat ships the line unchanged, so existing deployments keep working without a `logFormat`. Static mode was built around logs written behind a reverse proxy, with the real client in a trailing field.
+
+The consequence: **a `logFormat` set for one mode does not apply to the other.** If static and live mode read the same log, set the same format string in both places (`[static] logFormat` and `[live] logFormat`). Read with the wrong default, a proxied log yields the proxy's address for every request - and flokbn would detect and ban your proxy.
 
 ## Common Formats
 
@@ -149,9 +160,9 @@ Expected format: `DD/MMM/YYYY:HH:MM:SS ±ZZZZ`
 
 Months: Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec. Timezone is optional.
 
-The value is validated, not guessed: every digit position must hold a digit and the date and time must exist (`31/Apr`, `29/Feb` outside a leap year, hour `24`, minute or second `60` are rejected). A line with an invalid timestamp is kept but carries no timestamp: it sorts before every real time, so a trie with a `startTime` excludes it (a trie with only an `endTime` does not).
+The value is validated, not guessed: every digit position must hold a digit and the date and time must exist (`31/Apr`, `29/Feb` outside a leap year, hour `24`, minute or second `60` are rejected). In static mode a line with an invalid timestamp is kept but carries no timestamp: it sorts before every real time, so a trie with a `startTime` excludes it (a trie with only an `endTime` does not). In live mode such a line is dropped and counted as a parse error, because a sliding window cannot place it in time.
 
-**Timezone handling is identical in both modes.** When the `±ZZZZ` offset is present (a 26-byte field like `06/Jul/2025:19:57:26 +0200`), both the static parser and live mode parse it and the timestamp is the true instant it denotes. When the offset is absent (a 20-byte field like `06/Jul/2025:19:57:26`), both modes treat the wall-clock as **UTC**. So static and live agree byte-for-byte on the same line. Practical rule: an offset-less log is interpreted as UTC, so keep offset-less timestamps and your `--startTime`/`--endTime` values both in UTC, or include the `±ZZZZ` offset in your log so the instant is unambiguous.
+**Timezone handling is identical in both modes** - it is the same code. When the `±ZZZZ` offset is present (a 26-byte field like `06/Jul/2025:19:57:26 +0200`), the timestamp is the true instant it denotes. When the offset is absent (a 20-byte field like `06/Jul/2025:19:57:26`), or is not written as ` ±ZZZZ` directly behind the seconds, the wall-clock is read as **UTC**. Practical rule: an offset-less log is interpreted as UTC, so keep offset-less timestamps and your `--startTime`/`--endTime` values both in UTC, or include the `±ZZZZ` offset in your log so the instant is unambiguous.
 
 Include surrounding brackets in the format string if present in the log:
 
@@ -173,6 +184,25 @@ Parses the User-Agent string. Must be quoted in the format string if quoted in t
 Use `%^` for any field you don't need. Can appear unlimited times.
 
 Write `\"%^\"` for a field the log quotes (the Referer in a combined log) so the format documents the real layout. As a safety net, a value that starts with a double quote is always read up to its closing quote, even when the format leaves that slot bare: a Referer such as `"http://a b"` is one field, never two. Without that rule a space inside a quoted, client-controlled field would shift every later field and a client could choose the address that `%h` reads.
+
+## Live Mode
+
+Live mode parses the `message` of every shipped event with its `logFormat` (default: client IP first, see [Defaults](#defaults)). On top of the rules above:
+
+- **`%t` is required.** A sliding window is bounded in time; a format without `%t` is rejected at startup.
+- **A line is dropped** (and counted in `ingest.parse_errors_total`) when its `%h` value is not a valid IPv4 address - this includes every IPv6 address and `0.0.0.0` - or when its timestamp is invalid. Everything else is kept: a truncated line or a non-numeric status still counts as a request from that address.
+- **Re-alignment on the timestamp.** Fields are taken by position, so a space inside an unquoted field shifts every field behind it. In the combined log format the user name in front of the timestamp is such a field, and it is whatever the client sent as its HTTP basic-auth name. When the timestamp does not parse at its position and the format brackets it (`[%t]`), live mode takes the first `[...]` in the line that holds a valid timestamp as the `%t` field and reads the fields before and after it relative to that. A client therefore cannot keep its requests out of the window with a space in its user name. The same mechanism accepts lines with more or fewer fields in front of the timestamp than the format says - but set a matching `logFormat` rather than relying on it.
+
+{{< callout context="caution" title="Unquoted free-text fields stay client-controlled" icon="outline/alert-triangle" >}}
+Re-alignment cannot tell a forged timestamp from the real one: a client whose user name is itself a bracketed, valid, old timestamp gets its requests stamped with that time, and they expire from the window at once. If you do not need the user name in the log, drop it from the web server's log format (nginx: write `-` instead of `$remote_user`) or quote it (`"$remote_user"` with `\"%^\"` in the format); a quoted field cannot shift the others. Static mode takes fields strictly by position and does not re-align.
+{{< /callout >}}
+
+```toml
+[live]
+port = "8080"
+# client IP in a trailing forwarded field, as written behind a reverse proxy
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
+```
 
 ## Lines
 
@@ -214,7 +244,7 @@ If parsing succeeds, you'll see `Total Requests: 1` in the output.
 
 ## TOML Configuration
 
-In TOML, specify the format in the `[static]` section:
+In TOML, specify the format in the `[static]` section (and, for live mode, separately in the `[live]` section - see [Live Mode](#live-mode)):
 
 ```toml
 [static]

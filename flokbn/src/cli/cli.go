@@ -120,6 +120,14 @@ var (
 		Usage: "Sleep duration between iterations in seconds",
 		Value: config.DefaultSleepBetweenIterations,
 	}
+	// liveLogFormatFlag is --logFormat on the live command. Same format
+	// language as the static flag, different default: live mode reads the
+	// client IP from the first field unless told otherwise.
+	liveLogFormatFlag = &cli.StringFlag{
+		Name:  "logFormat",
+		Usage: "Log format string of the shipped lines (same syntax as 'static --logFormat'; note the different default: client IP in the FIRST field)",
+		Value: logparser.DefaultLiveLogFormat,
+	}
 	clusterArgSetFlag = &cli.StringSliceFlag{
 		Name:    "clusterArgSet",
 		Aliases: []string{"clusterArgSets"}, // the static flag / TOML key spelling
@@ -328,8 +336,9 @@ func handleLiveFlagsMode(c *cli.Context) error {
 			UserAgentBlacklist: c.String("userAgentBlacklist"),
 		},
 		Live: &config.LiveConfig{
-			Port:   c.String("port"),
-			Listen: c.String("listen"),
+			Port:      c.String("port"),
+			Listen:    c.String("listen"),
+			LogFormat: c.String("logFormat"),
 		},
 		LiveTries: make(map[string]*config.SlidingTrieConfig),
 	}
@@ -532,6 +541,7 @@ var App = &cli.App{
 				// Live-specific flags
 				portFlag,
 				listenFlag,
+				liveLogFormatFlag,
 				logLevelFlag,
 				slidingWindowMaxTimeFlag,
 				slidingWindowMaxSizeFlag,

@@ -129,6 +129,9 @@ Real-time traffic analysis with automatic banning.
 ```bash
 --config value          # Path to TOML config file (exclusive with other flags)
 --port value            # Port to listen on (required if not using --config)
+--logFormat value       # Log format string of the shipped lines
+                        # (default: "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"" - client IP
+                        # in the FIRST field; not the static default)
 ```
 
 #### Sliding Window Options
@@ -320,6 +323,9 @@ useForJail = [true, false]
 [live]
 port = "8080"        # Required: Port to listen on
 listen = "127.0.0.1" # Optional: address to listen on (default "127.0.0.1"; the port is unauthenticated)
+# Optional: format of the shipped lines. Default as below (client IP first);
+# [static] logFormat does not apply to live mode. Must contain %t.
+logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 readTimeout = "5s"   # Optional: TCP read timeout (duration string, default "5s")
 tlsCert = "/etc/flokbn/tls/server.crt"          # Optional: with tlsKey, serve TLS
 tlsKey = "/etc/flokbn/tls/server.key"

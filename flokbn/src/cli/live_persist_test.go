@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/jail"
 )
 
@@ -20,7 +20,7 @@ type gatedIngestor struct {
 	closed chan struct{}
 }
 
-func newGatedIngestor(batches ...[]ingestor.Request) *gatedIngestor {
+func newGatedIngestor(batches ...[]accesslog.Request) *gatedIngestor {
 	return &gatedIngestor{
 		fakeIngestor: &fakeIngestor{batches: batches},
 		gate:         make(chan struct{}),
@@ -28,7 +28,7 @@ func newGatedIngestor(batches ...[]ingestor.Request) *gatedIngestor {
 	}
 }
 
-func (g *gatedIngestor) ReadBatch() ([]ingestor.Request, error) {
+func (g *gatedIngestor) ReadBatch() ([]accesslog.Request, error) {
 	select {
 	case <-g.gate:
 	case <-g.closed:

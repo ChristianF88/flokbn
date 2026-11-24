@@ -17,10 +17,10 @@ seo:
 
 Live mode provides real-time detection by continuously monitoring incoming logs via the Lumberjack protocol and automatically detecting and blocking high-volume IP ranges.
 
-{{< callout context="caution" title="Live mode ignores logFormat: the client IP must be the first field" icon="outline/alert-triangle" >}}
-Live mode does **not** use the configurable log format. It always takes the text before the first space of each line as the client IP and expects the standard combined log layout after it. `flokbn live` has no `--logFormat` flag, `[live]` has no `logFormat` key, and a `logFormat` under `[static]` has no effect here.
+{{< callout context="caution" title="Live mode has its own logFormat, and its default reads the FIRST field" icon="outline/alert-triangle" >}}
+Live mode parses each shipped line with `[live] logFormat` (or `live --logFormat`). When you do not set it, the client IP is read from the **first** field of the line - the plain combined log format. A `logFormat` under `[static]` has no effect here.
 
-This matters most behind a proxy or load balancer. Static mode's **default** format reads the client IP from the *last* field (an `X-Forwarded-For` layout); live mode reads the *first* field of the very same line - which is then your proxy's address. flokbn would cluster and ban your own proxy. Before enabling live mode, make sure your web server writes the real client IP first (see [Expected log line format](#expected-log-line-format)), and whitelist your proxy addresses as a safety net.
+This matters most behind a proxy or load balancer. Static mode's **default** format reads the client IP from the *last* field (an `X-Forwarded-For` layout); live mode's default reads the *first* field of the very same line - which is then your proxy's address, and flokbn would cluster and ban your own proxy. Before enabling live mode, either make your web server write the real client IP first, or set `[live] logFormat` to the layout it does write (see [Expected log line format](#expected-log-line-format)), and whitelist your proxy addresses as a safety net.
 {{< /callout >}}
 
 ## How Live Mode Works
@@ -115,17 +115,31 @@ flokbn logs `Filebeat connected` and `Filebeat disconnected` (with the remote ad
 
 ### Expected log line format
 
-Live mode parses each event's `message` field itself and expects the standard **combined log format with the client IP as the first field**:
+Live mode parses each event's `message` field with the same [format strings]({{< relref "/docs/reference/log-formats/" >}}) as static mode. Without a `logFormat` it expects the standard **combined log format with the client IP as the first field**:
 
 ```
 192.0.2.1 - - [09/Oct/2025:10:15:23 +0000] "GET / HTTP/1.1" 200 1234 "-" "curl/8.5.0"
 ```
 
-The configurable `--logFormat` string applies to **static mode only** - it has no effect on live ingestion, and a format you tuned for static mode says nothing about what live mode will read. The first space-separated token is the client IP, always.
+which is the format string `%h %^ %^ [%t] "%r" %s %b "%^" "%u"`. Note that this is **not** the static default (which reads the client IP from a trailing field), and that `[static] logFormat` does not apply to live mode: a format you tuned for static mode has to be repeated under `[live]`.
 
-If your web server logs a proxy IP first, change its `log_format` so the real client IP leads the line (rather than reordering fields on the flokbn side, which live mode does not support). For nginx behind a trusted proxy, either let the `realip` module rewrite `$remote_addr` (`set_real_ip_from <proxy>; real_ip_header X-Forwarded-For;`) and keep the stock format, or define a format that starts with the address your own proxy appended. Only that element of `X-Forwarded-For` is trustworthy; the rest of the header is supplied by the client.
+If your web server logs a proxy IP first, you have two options:
 
-A quick check before going live: take one line from the log Filebeat ships and confirm that its first field is a client address, not your proxy's. Lines that don't parse are counted as parse errors in `/stats` and skipped - but a line with the *wrong* IP first parses fine, so the parse-error counter will not warn you.
+- **Describe the layout to flokbn.** Set `[live] logFormat` (or `--logFormat`) so that `%h` sits where the real client address is. For a line that ends in a quoted forwarded field, that is the static default:
+
+  ```toml
+  [live]
+  logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
+  ```
+
+  When that field holds an `X-Forwarded-For` list, flokbn takes the rightmost address - the one your own proxy appended. Everything to its left is supplied by the client and is not trustworthy.
+- **Change the web server.** For nginx behind a trusted proxy, let the `realip` module rewrite `$remote_addr` (`set_real_ip_from <proxy>; real_ip_header X-Forwarded-For;`) and keep the stock format and the live default.
+
+The format must contain `%t`. If you use `useragentRegex` or the User-Agent lists it must contain `%u`, and for `endpointRegex` it must contain `%r` or `%U`; flokbn refuses to start otherwise.
+
+A quick check before going live: take one line from the log Filebeat ships and confirm that the field `%h` points at is a client address, not your proxy's. The startup line `starting live loop` shows the format in effect (`log_format=...`). Lines whose address or timestamp cannot be read are counted as parse errors in `/stats` and skipped - but a line with the *wrong* address in the `%h` position parses fine, so the parse-error counter will not warn you.
+
+A space in the user name field (the third field of the combined format, taken from the client's basic-auth header) does not get a line dropped: live mode re-aligns such a line on its bracketed timestamp. See [Log Formats]({{< relref "/docs/reference/log-formats/#live-mode" >}}) for the details and for why quoting or dropping that field is still the better choice.
 
 **Timestamps must agree with the clock of the flokbn host.** The sliding window expires entries by comparing each request's log timestamp with the wall clock. Log the UTC offset (`[09/Oct/2025:10:15:23 +0200]`, the nginx and Apache default); a timestamp without an offset is read as UTC. If the two disagree, detection silently stops working: requests stamped older than `slidingWindowMaxTime` expire the moment they arrive, and requests stamped in the future are clamped to their arrival time. When more than half of a batch is affected, flokbn logs the warning `most request timestamps fall outside the sliding window on arrival` (at most once per minute and window) with the counts of `stale` and `future` requests - see [Troubleshooting](#nothing-is-ever-detected).
 
@@ -328,7 +342,7 @@ netstat -tlnp | grep 8080           # Verify listening
 - `netstat` shows the address the listener is bound to. If it is `127.0.0.1:8080` and Filebeat runs on another host, set `[live] listen` (or `--listen`).
 - A shipper that reaches flokbn produces a `Filebeat connected` log line, and `ingest.connected` in `/stats` (`flokbn_ingest_connected` in `/metrics`) turns true. Both stay false/absent while only the listener is up.
 - With TLS enabled, a shipper without matching `ssl.*` settings connects and is dropped again: look for `Filebeat disconnected` lines with a `TLS handshake` reason.
-- If connections are established but `ingest.parse_errors_total` grows with every batch, the lines are not in the [expected format](#expected-log-line-format).
+- If connections are established but `ingest.parse_errors_total` grows with every batch, the lines do not match the log format in effect (shown as `log_format=` on the `starting live loop` line): see [expected format](#expected-log-line-format) and set `[live] logFormat` to the layout your web server writes.
 
 ### Nothing Is Ever Detected
 

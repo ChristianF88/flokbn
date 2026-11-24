@@ -3,7 +3,7 @@ package logparser
 import (
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // TestIPField_ForwardedForList: a %h field that holds an X-Forwarded-For style
@@ -48,10 +48,10 @@ func TestIPField_ForwardedForList(t *testing.T) {
 				t.Fatal(err)
 			}
 			if req.IPUint32 != want {
-				t.Errorf("full parse: IP = %s, want %s", ingestor.Uint32ToIPString(req.IPUint32), ingestor.Uint32ToIPString(want))
+				t.Errorf("full parse: IP = %s, want %s", accesslog.Uint32ToIPString(req.IPUint32), accesslog.Uint32ToIPString(want))
 			}
 			if got := p.compiled.extractIPOnly(line); got != want {
-				t.Errorf("IP-only parse: IP = %s, want %s", ingestor.Uint32ToIPString(got), ingestor.Uint32ToIPString(want))
+				t.Errorf("IP-only parse: IP = %s, want %s", accesslog.Uint32ToIPString(got), accesslog.Uint32ToIPString(want))
 			}
 		})
 	}
@@ -62,12 +62,12 @@ func TestIPField_ForwardedForList(t *testing.T) {
 func TestIPField_ExplicitCommaDelimiterUnchanged(t *testing.T) {
 	p := mustNewParser(t, `%h, %^ [%t]`)
 	line := []byte(`189.115.84.87, 198.51.10.21 [18/Jul/2025:15:30:00 +0200]`)
-	if got := ingestor.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != "189.115.84.87" {
+	if got := accesslog.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != "189.115.84.87" {
 		t.Errorf("IP = %s, want 189.115.84.87", got)
 	}
 
 	p = mustNewParser(t, `%^, %h [%t]`)
-	if got := ingestor.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != "198.51.10.21" {
+	if got := accesslog.Uint32ToIPString(p.compiled.extractIPOnly(line)); got != "198.51.10.21" {
 		t.Errorf("IP = %s, want 198.51.10.21", got)
 	}
 }
@@ -76,7 +76,7 @@ func TestIPField_ExplicitCommaDelimiterUnchanged(t *testing.T) {
 func TestForwardedTailIP_Bounds(t *testing.T) {
 	line := []byte(`xx1.1.1.1, 2.2.2.2yy`)
 	if got := forwardedTailIP(line, 2, 18); got != ipStringToUint32("2.2.2.2") {
-		t.Errorf("got %s, want 2.2.2.2", ingestor.Uint32ToIPString(got))
+		t.Errorf("got %s, want 2.2.2.2", accesslog.Uint32ToIPString(got))
 	}
 	for _, r := range [][2]int{{-1, 5}, {0, len(line) + 1}, {5, 5}, {9, 3}} {
 		if got := forwardedTailIP(line, r[0], r[1]); got != 0 {

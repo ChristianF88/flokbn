@@ -12,7 +12,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // FieldExtractor represents a compiled field extraction operation
@@ -132,7 +132,7 @@ func (pp *Parser) Stats() ParseStats {
 // Both strategies frame lines identically: "\n" or "\r\n" terminated, blank
 // lines skipped, lines longer than MaxLineLen skipped and counted in
 // Stats().OversizedLines.
-func (pp *Parser) ParseFile(filename string) ([]ingestor.Request, error) {
+func (pp *Parser) ParseFile(filename string) ([]accesslog.Request, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -161,7 +161,7 @@ func (pp *Parser) ParseFile(filename string) ([]ingestor.Request, error) {
 
 // ParseFileIPs parses a log file extracting ONLY the IPv4 address of each line
 // as a uint32, skipping all other field work and never allocating an
-// ingestor.Request. It uses the same adaptive streaming/concurrent I/O
+// accesslog.Request. It uses the same adaptive streaming/concurrent I/O
 // structure as ParseFile (same slab+batch line readers).
 //
 // Returns the slice of nonzero IPs (lines whose IP parsed successfully) and
@@ -524,7 +524,7 @@ const parseBatchSize = 1024
 // the pool only removes the per-batch allocation churn.
 var requestBatchPool = sync.Pool{
 	New: func() any {
-		s := make([]ingestor.Request, 0, parseBatchSize)
+		s := make([]accesslog.Request, 0, parseBatchSize)
 		return &s
 	},
 }
@@ -534,7 +534,7 @@ var requestBatchPool = sync.Pool{
 //
 // The caller owns `file` (and closes it); it must be positioned at offset 0.
 // fileSize is the caller's Stat size, used only for the line-count estimate.
-func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]accesslog.Request, error) {
 	// Pre-allocation estimate (~200 bytes per log line).
 	estimatedLines := int(fileSize / 200)
 	if estimatedLines < 1000 {
@@ -544,7 +544,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 	// Batched channels - each send/receive moves parseBatchSize items at once,
 	// reducing channel operations from O(lines) to O(lines/batchSize).
 	linesChan := make(chan [][]byte, pp.workers*2)
-	resultsChan := make(chan *[]ingestor.Request, pp.workers*2)
+	resultsChan := make(chan *[]accesslog.Request, pp.workers*2)
 
 	var wg sync.WaitGroup
 
@@ -559,12 +559,12 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req := &ingestor.Request{}
+			req := &accesslog.Request{}
 			for batch := range linesChan {
-				bp := requestBatchPool.Get().(*[]ingestor.Request)
+				bp := requestBatchPool.Get().(*[]accesslog.Request)
 				resBatch := (*bp)[:0]
 				for _, line := range batch {
-					*req = ingestor.Request{}
+					*req = accesslog.Request{}
 					if err := pp.compiled.parseLineReuseOpt(line, req, skipStrings, skipNonIP); err == nil {
 						resBatch = append(resBatch, *req)
 					}
@@ -581,7 +581,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 
 	// Start result collector with pre-allocated slice. It copies each pooled
 	// batch out, then returns the buffer to the pool for a worker to refill.
-	results := make([]ingestor.Request, 0, estimatedLines)
+	results := make([]accesslog.Request, 0, estimatedLines)
 	var collectorWG sync.WaitGroup
 	collectorWG.Add(1)
 
@@ -648,7 +648,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 // parseFileWithConcurrentIO implements concurrent chunked file reading.
 // Uses ReadAt for thread-safe parallel reads, batched channels matching the
 // streaming path, and per-worker Request reuse (no sync.Pool needed).
-func (pp *Parser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]accesslog.Request, error) {
 	return pp.parseFileConcurrentIOChunked(file, file.Name(), fileSize, defaultConcurrentChunkSize)
 }
 
@@ -664,7 +664,7 @@ func (pp *Parser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]in
 // is stored on the error-capture seam so a non-EOF ReadAt failure names the file
 // in its error. It is io.ReaderAt-typed callers' responsibility to pass it (the
 // reader itself is not always an *os.File, by design).
-func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fileSize int64, chunkSize int64) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fileSize int64, chunkSize int64) ([]accesslog.Request, error) {
 	numChunks := int(fileSize / chunkSize)
 	if fileSize%chunkSize != 0 {
 		numChunks++
@@ -685,7 +685,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 	// Batched channels - same pattern as streaming path
 	chunkJobs := make(chan chunkJob, numChunks)
 	linesChan := make(chan [][]byte, pp.workers*2)
-	resultsChan := make(chan []ingestor.Request, pp.workers*2)
+	resultsChan := make(chan []accesslog.Request, pp.workers*2)
 
 	readErr := chunkErrCapture{name: name}
 	var wg sync.WaitGroup
@@ -710,11 +710,11 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 		parserWG.Add(1)
 		go func() {
 			defer parserWG.Done()
-			req := &ingestor.Request{}
+			req := &accesslog.Request{}
 			for batch := range linesChan {
-				resBatch := make([]ingestor.Request, 0, len(batch))
+				resBatch := make([]accesslog.Request, 0, len(batch))
 				for _, line := range batch {
-					*req = ingestor.Request{}
+					*req = accesslog.Request{}
 					if err := pp.compiled.parseLineReuseOpt(line, req, skipStrings, skipNonIP); err == nil {
 						resBatch = append(resBatch, *req)
 					}
@@ -727,7 +727,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 	}
 
 	// Start result collector with pre-allocated slice
-	results := make([]ingestor.Request, 0, estimatedLines)
+	results := make([]accesslog.Request, 0, estimatedLines)
 	var collectorWG sync.WaitGroup
 	collectorWG.Add(1)
 	go func() {
@@ -1300,7 +1300,7 @@ func compileFormat(format string) (*CompiledFormat, error) {
 }
 
 // parseLineReuseOpt parses a log line with optional string field skipping
-func (cf *CompiledFormat) parseLineReuseOpt(line []byte, req *ingestor.Request, skipStrings, skipNonIP bool) error {
+func (cf *CompiledFormat) parseLineReuseOpt(line []byte, req *accesslog.Request, skipStrings, skipNonIP bool) error {
 	// Use compiled format extractors for optimized parsing
 	if len(cf.extractors) > 0 {
 		return cf.parseUsingCompiledFormatOpt(line, req, skipStrings, skipNonIP)
@@ -1312,7 +1312,7 @@ func (cf *CompiledFormat) parseLineReuseOpt(line []byte, req *ingestor.Request, 
 
 // parseUsingCompiledFormatOpt applies extractors with optional string field skipping
 // When skipNonIP is true, only the IP field is extracted (all others are skipped but positions still advance)
-func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor.Request, skipStrings, skipNonIP bool) error {
+func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *accesslog.Request, skipStrings, skipNonIP bool) error {
 	pos := 0
 
 	for _, extractor := range cf.extractors {
@@ -1755,9 +1755,9 @@ var daysInMonth = [13]uint8{0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 // "+HHMM"/"-HHMM" zone offset is present (end-start >= 26), that offset is
 // RETAINED on the returned time: the wall-clock digits are unchanged (06:00
 // stays 06:00) but the location reflects the log's real offset instead of being
-// mislabeled UTC. This is URGENT-09 live<->static timestamp parity: the live
-// ingestor already parses offset-aware, so the static parser must too. When no
-// offset is present (the 20-byte EOL forms), the wall-clock is returned as UTC
+// mislabeled UTC (URGENT-09). Live mode parses its lines with this same
+// function, so both modes agree on the instant by construction. When no offset
+// is present (the 20-byte EOL forms), the wall-clock is returned as UTC
 // (unchanged behavior).
 //
 // Validation: the 12 digit positions must hold ASCII digits and the values must
@@ -1904,33 +1904,33 @@ func offsetLocation(b []byte) *time.Location {
 //   - Covers all common HTTP methods: GET, POST, PUT, DELETE, HEAD, OPTIONS
 //
 // Returns: HTTPMethod enum or UNKNOWN for unrecognized methods
-func parseMethod(line []byte, start, end int) ingestor.HTTPMethod {
+func parseMethod(line []byte, start, end int) accesslog.HTTPMethod {
 	if end <= start {
-		return ingestor.UNKNOWN
+		return accesslog.UNKNOWN
 	}
 
 	// Use first byte for lookup
 	switch line[start] {
 	case 'G':
-		return ingestor.GET
+		return accesslog.GET
 	case 'P':
 		if end > start+1 {
 			switch line[start+1] {
 			case 'O':
-				return ingestor.POST
+				return accesslog.POST
 			case 'A':
-				return ingestor.PATCH
+				return accesslog.PATCH
 			}
 		}
-		return ingestor.PUT
+		return accesslog.PUT
 	case 'D':
-		return ingestor.DELETE
+		return accesslog.DELETE
 	case 'H':
-		return ingestor.HEAD
+		return accesslog.HEAD
 	case 'O':
-		return ingestor.OPTIONS
+		return accesslog.OPTIONS
 	default:
-		return ingestor.UNKNOWN
+		return accesslog.UNKNOWN
 	}
 }
 

@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 )
 
 // timeBounds carries the start/end time-range filter plus, per URGENT-09,
@@ -117,7 +117,7 @@ type filterResult struct {
 // regex is not counted anywhere; a zero IP is counted as invalid before any
 // User-Agent verdict, so 0.0.0.0 never reaches the UA lists (which become /32
 // whitelist and jail entries).
-func (f *filterResult) add(requests []ingestor.Request, trieConfig *config.TrieConfig,
+func (f *filterResult) add(requests []accesslog.Request, trieConfig *config.TrieConfig,
 	bounds *timeBounds, userAgentMatcher *cidr.UserAgentMatcher) {
 
 	for i := range requests {
@@ -149,7 +149,7 @@ func (f *filterResult) add(requests []ingestor.Request, trieConfig *config.TrieC
 
 // filterRequests applies one trie's filters to the parsed requests, fanning
 // out over several goroutines when there are enough requests to pay for it.
-func filterRequests(requests []ingestor.Request, trieConfig *config.TrieConfig,
+func filterRequests(requests []accesslog.Request, trieConfig *config.TrieConfig,
 	bounds timeBounds, userAgentMatcher *cidr.UserAgentMatcher) filterResult {
 
 	if len(requests) > concurrentFilterMin {
@@ -159,7 +159,7 @@ func filterRequests(requests []ingestor.Request, trieConfig *config.TrieConfig,
 }
 
 // filterSequential filters on the calling goroutine.
-func filterSequential(requests []ingestor.Request, trieConfig *config.TrieConfig,
+func filterSequential(requests []accesslog.Request, trieConfig *config.TrieConfig,
 	bounds timeBounds, userAgentMatcher *cidr.UserAgentMatcher) filterResult {
 
 	var result filterResult
@@ -171,7 +171,7 @@ func filterSequential(requests []ingestor.Request, trieConfig *config.TrieConfig
 // filter. Every worker accumulates into a result of its own and the results
 // are merged once at the end, so the per-request path takes no lock and sends
 // nothing over a channel.
-func filterConcurrent(requests []ingestor.Request, trieConfig *config.TrieConfig,
+func filterConcurrent(requests []accesslog.Request, trieConfig *config.TrieConfig,
 	bounds timeBounds, userAgentMatcher *cidr.UserAgentMatcher) filterResult {
 
 	// Several tries filter at the same time, so more workers per trie only add

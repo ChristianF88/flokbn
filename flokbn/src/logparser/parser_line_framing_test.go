@@ -9,7 +9,7 @@ import (
 	"testing"
 	"testing/iotest"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // framingResult is what one I/O path made of a file, in a form two paths can
@@ -60,7 +60,7 @@ func framingAllPaths(t *testing.T, format, content string, chunkSize int64) map[
 	ips, invalid = parseConcurrentIPs(t, p, path, chunkSize)
 	out["chunked/ips"] = framingResult{ips, invalid, p.Stats().OversizedLines}
 
-	fromRequests := func(reqs []ingestor.Request) ([]uint32, int) {
+	fromRequests := func(reqs []accesslog.Request) ([]uint32, int) {
 		var ips []uint32
 		invalid := 0
 		for _, r := range reqs {

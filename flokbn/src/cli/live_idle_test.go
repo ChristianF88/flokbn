@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/ingestor"
 )
 
 // TestRunLiveLoop_HeartbeatExpiresWindowsWhenIdle: windows used to be expired
@@ -20,7 +20,7 @@ func TestRunLiveLoop_HeartbeatExpiresWindowsWhenIdle(t *testing.T) {
 	const window = time.Hour
 	ts := time.Now().Add(-window + 3*time.Second)
 	fake := &fakeIngestor{ // stays open: the loop goes idle after one batch
-		batches: [][]ingestor.Request{hotBlock(10, 5, 5, ts, "/api/item")},
+		batches: [][]accesslog.Request{hotBlock(10, 5, 5, ts, "/api/item")},
 	}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfigSized(t, "", true, window, 100000),

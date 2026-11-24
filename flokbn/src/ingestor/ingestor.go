@@ -2,78 +2,17 @@ package ingestor
 
 import (
 	"crypto/tls"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ChristianF88/flokbn/accesslog"
+	"github.com/ChristianF88/flokbn/logparser"
 )
-
-type HTTPMethod uint8
-
-const (
-	GET HTTPMethod = iota
-	POST
-	PUT
-	DELETE
-	HEAD
-	OPTIONS
-	PATCH
-	UNKNOWN
-)
-
-func ParseMethod(m string) HTTPMethod {
-	switch m {
-	case "GET":
-		return GET
-	case "POST":
-		return POST
-	case "PUT":
-		return PUT
-	case "DELETE":
-		return DELETE
-	case "HEAD":
-		return HEAD
-	case "OPTIONS":
-		return OPTIONS
-	case "PATCH":
-		return PATCH
-	default:
-		return UNKNOWN
-	}
-}
-
-type Request struct {
-	// Hot fields - first cache line (accessed by trie insertion, filtering, clustering)
-	IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation in parser
-	Status    uint16     // Smaller type for status code
-	Method    HTTPMethod // 1 byte
-	_         byte       // explicit padding for alignment
-	Bytes     uint32
-	Timestamp time.Time // 24 bytes - needed for time-range filtering
-
-	// Cold fields - second cache line (only accessed during output or string filtering)
-	URI       string
-	UserAgent string
-	IP        net.IP // Legacy (TCP ingestor path only, nil from log parser)
-}
-
-// GetIPNet returns the IP as net.IP, deriving from IPUint32 if IP is nil.
-// Use this for non-hot-path code that needs net.IP.
-func (r *Request) GetIPNet() net.IP {
-	if r.IP != nil {
-		return r.IP
-	}
-	if r.IPUint32 == 0 {
-		return nil
-	}
-	return net.IPv4(byte(r.IPUint32>>24), byte(r.IPUint32>>16), byte(r.IPUint32>>8), byte(r.IPUint32))
-}
 
 // --- TCP Ingestor (Lumberjack v2, see lumberjack.go) ---
 
@@ -84,7 +23,7 @@ func (r *Request) GetIPNet() net.IP {
 // consumer must call ReadBatch until it returns nothing before giving up.
 type Ingestor interface {
 	Accept() error
-	ReadBatch() ([]Request, error)
+	ReadBatch() ([]accesslog.Request, error)
 	IsClosed() bool
 	Close() error
 	Stats() IngestStats
@@ -95,8 +34,8 @@ type IngestStats struct {
 	QueueDepth           int
 	BatchesTotal         uint64
 	RequestsTotal        uint64
-	ParseErrorsTotal     uint64 // events dropped: undecodable, no usable message, or unparseable line
-	MalformedFieldsTotal uint64
+	ParseErrorsTotal     uint64    // events dropped: undecodable, no usable message, or unparseable line
+	MalformedFieldsTotal uint64    // status or bytes fields that are not a number, on any parsed line
 	LastBatchAt          time.Time // zero until the first batch is read
 
 	OpenConnections          int    // client connections open right now
@@ -113,6 +52,10 @@ type Options struct {
 	// once it has announced it, and how long an ack write may block.
 	// <= 0 selects DefaultReadTimeout.
 	ReadTimeout time.Duration
+	// LogFormat is the logparser format string each event's message is parsed
+	// with. Empty selects logparser.DefaultLiveLogFormat (combined log format,
+	// client IP in the first field).
+	LogFormat string
 	// Limits bounds peer-driven allocations; zero fields select defaults.
 	Limits Limits
 	// TLS, when non-nil, makes the listener speak TLS (set ClientAuth and
@@ -132,6 +75,7 @@ const eventQueueBatches = 1000
 
 type TCPIngestor struct {
 	listener    net.Listener
+	parser      *logparser.LineParser
 	readTimeout time.Duration
 	limits      Limits
 	logger      *slog.Logger
@@ -150,18 +94,23 @@ type TCPIngestor struct {
 	batchesTotal    atomic.Uint64
 	requestsTotal   atomic.Uint64
 	parseErrors     atomic.Uint64
-	malformedFields atomic.Uint64
 	lastBatchUnixNs atomic.Int64
 }
 
-// NewTCPIngestor listens on addr with default limits.
+// NewTCPIngestor listens on addr with default limits and the default live log
+// format.
 func NewTCPIngestor(addr string, readTimeout time.Duration) (*TCPIngestor, error) {
 	return NewTCPIngestorWithOptions(addr, Options{ReadTimeout: readTimeout})
 }
 
 // NewTCPIngestorWithOptions listens on addr. Clients are not served until
-// Accept is called.
+// Accept is called. An invalid opts.LogFormat is reported before the address
+// is bound.
 func NewTCPIngestorWithOptions(addr string, opts Options) (*TCPIngestor, error) {
+	parser, err := newLineParser(opts.LogFormat)
+	if err != nil {
+		return nil, err
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
@@ -178,12 +127,31 @@ func NewTCPIngestorWithOptions(addr string, opts Options) (*TCPIngestor, error) 
 	limits := opts.Limits.normalized()
 	return &TCPIngestor{
 		listener:    ln,
+		parser:      parser,
 		readTimeout: opts.ReadTimeout,
 		limits:      limits,
 		logger:      opts.Logger,
 		events:      make(chan *eventBatch, eventQueueBatches),
 		budget:      newByteBudget(limits.MaxQueuedBytes),
 	}, nil
+}
+
+// newLineParser compiles the log format of an ingestor; empty selects the
+// default live format.
+func newLineParser(format string) (*logparser.LineParser, error) {
+	if format == "" {
+		format = logparser.DefaultLiveLogFormat
+	}
+	parser, err := logparser.NewLineParser(format)
+	if err != nil {
+		return nil, fmt.Errorf("invalid log format %q: %w", format, err)
+	}
+	return parser, nil
+}
+
+// LogFormat returns the format string events are parsed with.
+func (ing *TCPIngestor) LogFormat() string {
+	return ing.parser.Format()
 }
 
 // Addr returns the listener address. Useful when listening on an ephemeral
@@ -216,269 +184,24 @@ func (ing *TCPIngestor) Accept() error {
 	return nil
 }
 
-// parseLine parses one access-log line (the "message" field of a lumberjack
-// event) into out. malformed counts non-fatal field corruption (status/bytes
-// kept as zero), mirroring the log-parser's malformed-field accounting.
-func parseLine(msg string, out *Request) (malformed int, err error) {
-	// 1. Extract IP
-	spaceIdx := strings.IndexByte(msg, ' ')
-	if spaceIdx == -1 {
-		return 0, errors.New("invalid log format: no IP")
-	}
-	ipTok := msg[:spaceIdx]
-	// IPv4-only: reject IPv6 at the boundary. IPv4 literals never contain a
-	// colon; every IPv6 literal does, INCLUDING the IPv4-mapped "::ffff:a.b.c.d"
-	// form whose net.ParseIP(...).To4() is non-nil and would otherwise flow
-	// through as a usable IPv4. A To4()==nil guard alone misses that mapped form,
-	// so gate on the colon first. IPv6 previously flowed through as IP=<v6> with
-	// IPUint32=0 and was counted as a successful request; now the event is
-	// rejected, never stored or appended, and counted via parseErrors
-	// (ParseErrorsTotal), the operator-visible reject counter.
-	if strings.IndexByte(ipTok, ':') != -1 {
-		return 0, fmt.Errorf("IPv6 not supported (IPv4-only tool): %q", ipTok)
-	}
-	ip := net.ParseIP(ipTok)
-	if ip == nil {
-		return 0, errors.New("invalid IP")
-	}
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return 0, fmt.Errorf("IPv6 not supported (IPv4-only tool): %q", ipTok)
-	}
-	out.IP = ip
-	out.IPUint32 = binary.BigEndian.Uint32(ip4)
-
-	// 2. Extract timestamp
-	t, end, err := locateTimestamp(msg, spaceIdx)
-	if err != nil {
-		return 0, err
-	}
-	out.Timestamp = t
-
-	// 3. Request line (after first quote). The closing quote must be escape-aware
-	// so an Apache-escaped `\"` inside the URI does not terminate the field early.
-	// This matches the static parser (parser.go scanQuotedClose) so live and
-	// static align on the same byte offsets - and therefore extract the same
-	// Method/URI/status/bytes/UserAgent - for adversary-controlled escaped quotes.
-	start := strings.IndexByte(msg[end:], '"')
-	if start == -1 {
-		return 0, errors.New("missing request start quote")
-	}
-	start += end + 1
-	end = closeQuote(msg, start)
-	if end == -1 {
-		return 0, errors.New("missing request end quote")
-	}
-	requestLine := msg[start:end]
-	parts := strings.Fields(requestLine)
-	if len(parts) >= 2 {
-		out.Method = ParseMethod(parts[0])
-		out.URI = parts[1]
-	}
-
-	// 4. Status and bytes (keep-and-zero on corruption, but count it)
-	// Bounds-check: when the closing request-line quote is the final byte of
-	// the message, end == len(msg)-1 so end+2 == len(msg)+1, which would panic
-	// on slice. Treat a truncated line as having no status/bytes tail (status
-	// and bytes stay zero, not counted malformed) - same as any short line.
-	var fields []string
-	if end+2 <= len(msg) {
-		fields = strings.Fields(msg[end+2:])
-	}
-	if len(fields) >= 2 {
-		// "-" = absent (Apache convention): silent zero, NOT malformed - parity
-		// with the static log parser (parser.go status/bytes handling). Anything
-		// else non-numeric stays counted as malformed.
-		if fields[0] == "-" {
-			// absent status: leave out.Status == 0, not counted
-		} else if status, err := strconv.Atoi(fields[0]); err == nil {
-			out.Status = uint16(status)
-		} else {
-			malformed++
-		}
-		if fields[1] == "-" {
-			// absent bytes: leave out.Bytes == 0, not counted
-		} else if bytesSent, err := strconv.Atoi(fields[1]); err == nil {
-			out.Bytes = uint32(bytesSent)
-		} else {
-			malformed++
-		}
-	}
-
-	// 5. User-Agent: the second quoted field after the request line (request line
-	// is quotes 1-2, referer is 3-4, UA is 5-6). Walk the quoted fields forward
-	// from the request-line close quote (at `end`) using the SAME escape-aware
-	// close-quote scan as the request line and as the static parser, so an
-	// escaped `\"` inside the URI or the referer cannot shift the quote count and
-	// capture the wrong substring as UserAgent. A missing 5th/6th quote leaves
-	// UserAgent empty, preserving the prior missing-field behavior.
-	//
-	// pos starts just past the request-line closing quote.
-	pos := end + 1
-	// Referer field (quotes 3-4): skip its content escape-aware so an escaped
-	// quote in the referer does not become the UA's opening quote.
-	refOpen := strings.IndexByte(msg[pos:], '"')
-	if refOpen != -1 {
-		refStart := pos + refOpen + 1
-		refClose := closeQuote(msg, refStart)
-		if refClose != -1 {
-			pos = refClose + 1
-			// User-Agent field (quotes 5-6).
-			uaOpen := strings.IndexByte(msg[pos:], '"')
-			if uaOpen != -1 {
-				uaStart := pos + uaOpen + 1
-				uaClose := closeQuote(msg, uaStart)
-				if uaClose != -1 {
-					out.UserAgent = msg[uaStart:uaClose]
-				}
-			}
-		}
-	}
-
-	return malformed, nil
-}
-
-// locateTimestamp finds and parses the bracketed timestamp of a log line.
-// ipEnd is the index of the space that ends the client-IP token. It returns
-// the time and the index of the closing ']'.
-//
-// The timestamp is located by POSITION, not by content: in the layout live
-// mode reads (`%h ident user [time] "request" ...`) it is the fourth
-// space-separated field. Searching for the first '[' anywhere instead let a
-// bracket in the ident or user field (client-controlled via HTTP basic auth)
-// be taken for the timestamp, which dropped the event. Lines that do not have
-// the timestamp in fourth position (e.g. no ident/user fields) fall back to
-// the first bracketed field after the IP, as before.
-func locateTimestamp(msg string, ipEnd int) (time.Time, int, error) {
-	pos := ipEnd + 1
-	for i := 0; i < 2 && pos >= 0; i++ {
-		if sp := strings.IndexByte(msg[pos:], ' '); sp >= 0 {
-			pos += sp + 1
-		} else {
-			pos = -1
-		}
-	}
-	if pos >= 0 && pos < len(msg) && msg[pos] == '[' {
-		if t, end, err := parseBracketTime(msg, pos); err == nil {
-			return t, end, nil
-		}
-	}
-	first := strings.IndexByte(msg[ipEnd:], '[')
-	if first < 0 {
-		return time.Time{}, 0, errors.New("invalid timestamp format")
-	}
-	return parseBracketTime(msg, ipEnd+first)
-}
-
-// parseBracketTime parses the timestamp whose opening '[' is at msg[open] and
-// returns it with the index of the closing ']'.
-func parseBracketTime(msg string, open int) (time.Time, int, error) {
-	n := strings.IndexByte(msg[open:], ']')
-	if n < 0 {
-		return time.Time{}, 0, errors.New("invalid timestamp format")
-	}
-	end := open + n
-	field := msg[open+1 : end]
-	t, err := time.Parse("02/Jan/2006:15:04:05 -0700", field)
-	if err != nil {
-		// Offset-less Common/Apache-Log field (e.g. "06/Jul/2025:19:57:26",
-		// 20 bytes): treat the wall-clock as UTC, mirroring the static parser's
-		// >=26-byte gate (parser.go parseTimestamp). A zone-less layout returns a
-		// time located in time.UTC, byte-identical to static's time.Date(...,
-		// time.UTC) for the same wall-clock - restoring live<->static parity
-		// (AUDIT-07). The offset path is tried first, so well-formed +HHMM lines
-		// do no extra work and incur no extra allocations; the fallback runs only
-		// on the error path. Genuinely malformed brackets (e.g. "badtime") fail
-		// both layouts and are still rejected.
-		t, err = time.Parse("02/Jan/2006:15:04:05", field)
-		if err != nil {
-			return time.Time{}, 0, err
-		}
-	}
-	return t, end, nil
-}
-
-// closeQuote returns the index of the closing quote of a quoted field whose
-// content begins at contentStart, or -1 if there is no (unescaped) closing
-// quote at/after contentStart. The fast path uses strings.IndexByte (SIMD on
-// amd64); the escape-aware slow path runs only when a candidate closing quote
-// is immediately preceded by a backslash, so clean lines never pay for it.
-// Field content keeps its raw escape bytes - this fixes field ALIGNMENT, not
-// unescaping - matching the static parser exactly.
-func closeQuote(s string, contentStart int) int {
-	idx := strings.IndexByte(s[contentStart:], '"')
-	if idx < 0 {
-		return -1
-	}
-	q := contentStart + idx
-	if idx > 0 && s[q-1] == '\\' {
-		// rare slow path: the candidate quote may be escaped.
-		c := scanQuotedCloseStr(s, contentStart, q)
-		if c >= len(s) {
-			return -1 // no unescaped closing quote before end of message
-		}
-		return c
-	}
-	return q
-}
-
-// scanQuotedCloseStr is a string-typed, byte-identical port of the static
-// parser's scanQuotedClose (logparser/parser.go). ingestor is a leaf package
-// and logparser imports it, so ingestor cannot import logparser (import cycle);
-// the logic is duplicated here and proven identical to scanQuotedClose by the
-// cross-package parity test in logparser. A quote is escaped iff preceded by an
-// ODD number of consecutive backslashes back to contentStart. Returns the index
-// of the first unescaped quote at/after firstQuote, or len(s).
-func scanQuotedCloseStr(s string, contentStart, firstQuote int) int {
-	i := firstQuote
-	for {
-		bs := 0
-		for j := i - 1; j >= contentStart && s[j] == '\\'; j-- {
-			bs++
-		}
-		if bs%2 == 0 {
-			return i
-		}
-		next := strings.IndexByte(s[i+1:], '"')
-		if next < 0 {
-			return len(s)
-		}
-		i += 1 + next
-	}
-}
-
-// parseLineSafe parses a single line, recovering from any panic in parseLine
-// so one malformed (untrusted) event can never crash the live-loop goroutine.
-// A recovered panic is surfaced as an error so the caller counts it as a parse
-// error and skips the event (never appended, never zero-valued into output).
-func parseLineSafe(msg string, out *Request) (malformed int, err error) {
+// parseLine parses one access-log line (the "message" field of a Lumberjack
+// event) into out with the configured log format. The line comes from the
+// network, so a panic in the parser is turned into an error: one event can
+// then never take down the live loop, it is counted as a parse error and
+// skipped like any other line that does not parse.
+func (ing *TCPIngestor) parseLine(msg string, out *accesslog.Request) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			malformed = 0
-			err = fmt.Errorf("parseLine panic: %v", r)
+			err = fmt.Errorf("log parser panic: %v", r)
 		}
 	}()
-	return parseLine(msg, out)
-}
-
-// ParseEventForTest parses a single raw log line through the live ingestor's
-// parseLine and returns the resulting Request. It exists solely so the
-// live<->static UserAgent parity test (logparser/parser_live_ua_parity_test.go)
-// can drive the live parser from a package that ALSO compiles the static format
-// - ingestor is a leaf package that logparser imports, so the parity test cannot
-// live in ingestor (it would have to import logparser, an import cycle). This is
-// a thin wrapper over the unexported parseLine and is not part of the live data
-// path (ReadBatch uses parseLineSafe directly).
-func ParseEventForTest(line string) (Request, error) {
-	var req Request
-	_, err := parseLine(line, &req)
-	return req, err
+	return ing.parser.ParseLine(msg, out)
 }
 
 // ReadBatch drains every queued batch without blocking and returns the
 // requests parsed from them.
-func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
-	var out []Request
+func (ing *TCPIngestor) ReadBatch() ([]accesslog.Request, error) {
+	var out []accesslog.Request
 
 	for {
 		select {
@@ -493,14 +216,11 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 				ing.parseErrors.Add(uint64(batch.dropped))
 			}
 			if out == nil {
-				out = make([]Request, 0, len(batch.msgs))
+				out = make([]accesslog.Request, 0, len(batch.msgs))
 			}
 			for _, msg := range batch.msgs {
-				var entry Request
-				if malformed, err := parseLineSafe(msg, &entry); err == nil {
-					if malformed > 0 {
-						ing.malformedFields.Add(uint64(malformed))
-					}
+				var entry accesslog.Request
+				if err := ing.parseLine(msg, &entry); err == nil {
 					ing.requestsTotal.Add(1)
 					out = append(out, entry)
 				} else {
@@ -517,12 +237,13 @@ func (ing *TCPIngestor) ReadBatch() ([]Request, error) {
 // Stats returns a point-in-time view of the ingestor counters. Safe to call
 // concurrently with ReadBatch.
 func (ing *TCPIngestor) Stats() IngestStats {
+	parsed := ing.parser.Stats()
 	st := IngestStats{
 		QueueDepth:               len(ing.events),
 		BatchesTotal:             ing.batchesTotal.Load(),
 		RequestsTotal:            ing.requestsTotal.Load(),
 		ParseErrorsTotal:         ing.parseErrors.Load(),
-		MalformedFieldsTotal:     ing.malformedFields.Load(),
+		MalformedFieldsTotal:     parsed.MalformedStatus + parsed.MalformedBytes,
 		OpenConnections:          int(ing.conns.open.Load()),
 		ConnectionsTotal:         ing.conns.accepted.Load(),
 		ConnectionsRejectedTotal: ing.conns.rejected.Load(),
