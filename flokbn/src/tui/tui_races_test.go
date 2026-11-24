@@ -33,10 +33,11 @@ func raceTestRequests() []accesslog.Request {
 // Resolved decision. It reproduces the production concurrency around trie
 // switching: SetRequestData launches a BACKGROUND trieCache.PreCacheAllTries
 // goroutine (which used to mutate App.jsonResult/currentTrie under app.mu) while
-// the UI goroutine runs the visualization PreCacheAllTries and reads/writes the
-// same fields. Under UI-thread-only ownership neither precache may mutate those
-// fields off the UI goroutine; run with `go test -race ./tui` to catch any
-// residual lock-free access.
+// the UI goroutine switches tries, renders the visualization from the same
+// cache and reads/writes those fields. Under UI-thread-only ownership the
+// precache may not mutate them off the UI goroutine, and the grids it publishes
+// must be safe to render from while it is still running; run with
+// `go test -race ./tui` to catch any residual lock-free access.
 func TestConcurrentTrieSwitchingNoRace(t *testing.T) {
 	multi := output.NewJSONOutput("static", time.Now())
 	multi.General.TotalRequests = 100
@@ -86,17 +87,19 @@ func TestConcurrentTrieSwitchingNoRace(t *testing.T) {
 		}
 	}()
 
-	// "UI goroutine": the sole owner of jsonResult/currentTrie. Drive the viz
-	// PreCacheAllTries (called on the UI thread in production) plus the field
-	// reads/writes that the switch closures perform.
+	// "UI goroutine": the sole owner of jsonResult/currentTrie and of the
+	// visualization view. Drive the field reads/writes that the switch closures
+	// perform plus the heatmap render, which reads the grids the two precache
+	// goroutines above are publishing.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 50; i++ {
-			a.visualizationView.PreCacheAllTries(reqs)
 			idx := i % len(multi.Tries)
 			a.currentTrie = idx
 			a.jsonResult = a.singleTrieOutput(idx)
+			a.visualizationView.updateForCurrentTrie()
+			_ = a.visualizationView.generateRenderText()
 			_ = a.buildSummaryText()
 			_ = a.buildClusteringText()
 		}
@@ -203,53 +206,65 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	}
 }
 
-// TestVizPrecacheNoConfigConcurrentNoRace covers the no-config (single-trie)
-// branch of the viz precache, which also writes cachedClusteredData via
-// generateRenderText. It builds the view off-thread (sole writer), precaches,
-// then renders - mirroring buildAndPrecacheVisualization's single-owner model -
-// while a second goroutine reads the published view's render output, asserting
-// the map writes never overlap a reader. Run with `go test -race ./tui`.
-func TestVizPrecacheNoConfigConcurrentNoRace(t *testing.T) {
-	app := &App{}
-	app.jsonResult = &output.JSONOutput{}
-	app.jsonResult.Clustering.Data = []output.ClusterResult{
+// TestVizRenderDuringPrecacheNoRace replaces the race test of the view's own
+// (no-config) precache, which is gone: views no longer scan requests or keep
+// grids, they render from the shared TrieCache. Several views - each owned by
+// one goroutine, as the single view is owned by the UI goroutine in production
+// - render every cluster set while the cache is being precached concurrently.
+// A published grid is immutable, so the renders must never observe a write.
+// Run with `go test -race ./tui`.
+func TestVizRenderDuringPrecacheNoRace(t *testing.T) {
+	multi := output.NewJSONOutput("static", time.Now())
+	multi.Tries = []output.TrieResult{{Name: "trie", Data: []output.ClusterResult{
 		*newClusterSet("10.0.0.0/8"),
 		*newClusterSet("192.168.0.0/16"),
-	}
+	}}}
+	app := &App{cfg: &config.Config{}, multiTrieResult: multi, trieCache: NewTrieCache()}
+	app.jsonResult = app.singleTrieOutput(0)
 
 	reqs := raceTestRequests()
 
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			app.trieCache.PreCacheAllTries(app, multi, reqs)
+		}
+	}()
 	for g := 0; g < 4; g++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// Each goroutine owns its OWN view (single-owner model), precaches it
-			// to completion (the writer phase), then only reads from it. No two
-			// goroutines ever write the same view, matching the fixed production
-			// path where one goroutine builds before publishing.
-			v := app.newVisualizationViewWith(len(app.jsonResult.Clustering.Data))
-			v.PreCacheAllTriesFor(reqs, 0)
+			// Each goroutine owns its OWN view; the cache is the only shared state.
+			v := app.NewVisualizationView()
 			for i := 0; i < 20; i++ {
-				_ = v.generateRenderText()
+				v.currentClusterSet = i % v.totalClusterSets
+				v.RenderCached()
 			}
 		}()
 	}
 	wg.Wait()
+
+	// Once the precache is done every view renders the real heatmap.
+	v := app.NewVisualizationView()
+	if text := v.generateRenderText(); v.loading || !strings.Contains(text, "256 A") {
+		t.Errorf("view still shows the loading placeholder after the precache:\n%s", firstLines(text, 6))
+	}
 }
 
-// TestUpdateVisualizationFromCacheResetsClusterSet pins finding #3: the cache-hit
-// fast path must reset the displayed cluster set to 0 and refresh
-// totalClusterSets on a trie switch, matching the slow fallback path.
+// TestTrieSwitchResetsVisualizationClusterSet pins finding #3: a trie switch
+// (updateForCurrentTrie, formerly the cache-hit fast path
+// updateVisualizationFromCache) must reset the displayed cluster set to 0 and
+// refresh totalClusterSets.
 //
 // The trie counts and navigated index are chosen deliberately so the test is a
 // genuine regression test: the navigated cluster-set index (1) is IN RANGE for
 // the target trie (trie-b, 3 sets), so getCurrentClusterSet's out-of-range
-// clamp (currentClusterSet >= actualClusterSets) does NOT fire. On the unfixed
-// code (no explicit reset in updateVisualizationFromCache) currentClusterSet
-// therefore stays at 1 and this test fails; only the explicit reset added by the
-// fix yields currentClusterSet == 0.
-func TestUpdateVisualizationFromCacheResetsClusterSet(t *testing.T) {
+// clamp (currentClusterSet >= actualClusterSets) does NOT fire. Without the
+// explicit reset currentClusterSet therefore stays at 1 and this test fails;
+// only the explicit reset yields currentClusterSet == 0.
+func TestTrieSwitchResetsVisualizationClusterSet(t *testing.T) {
 	a := newCacheTestApp(t)
 	// trie-a has 2 cluster sets; trie-b has 3. The navigated index (1) is in
 	// range for trie-b so the clamp in getCurrentClusterSet cannot mask a missing
@@ -275,10 +290,10 @@ func TestUpdateVisualizationFromCacheResetsClusterSet(t *testing.T) {
 	// it on the switch - only the explicit reset under test can.
 	a.visualizationView.currentClusterSet = 1
 
-	// Switch to trie-b via the cache-hit fast path.
+	// Switch to trie-b the way the switch closures do.
 	a.currentTrie = 1
 	a.jsonResult = a.singleTrieOutput(1)
-	a.updateVisualizationFromCache(1)
+	a.visualizationView.updateForCurrentTrie()
 
 	if a.visualizationView.currentClusterSet != 0 {
 		t.Errorf("currentClusterSet = %d after cache-hit trie switch, want 0 "+
@@ -310,20 +325,9 @@ func TestHeatmapTotalPercentageSumsPerRange(t *testing.T) {
 		},
 	}
 
-	app := &App{}
-	app.jsonResult = &output.JSONOutput{}
-	app.jsonResult.General.UniqueIPs = 500000 // would yield 2.00% under the old formula
-	app.jsonResult.Clustering.Data = []output.ClusterResult{clusterSet}
-
-	v := &VisualizationView{
-		app:                 app,
-		totalClusterSets:    1,
-		currentClusterSet:   0,
-		cachedClusteredData: make(map[clusterKey][256][256]uint32),
-	}
 	// Populate some traffic so renderHeatmap runs (maxTraffic > 0).
-	v.requests = repeatReq("9.9.0.1", 100)
-	v.ProcessTrafficData(v.requests)
+	v := newOverlayViewFor(repeatReq("9.9.0.1", 100), clusterSet)
+	v.app.jsonResult.General.UniqueIPs = 500000 // would yield 2.00% under the old formula
 
 	text := v.generateRenderText()
 

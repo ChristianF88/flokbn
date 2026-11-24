@@ -87,15 +87,15 @@ probe:
 	}
 
 	// The precache must still have published every trie.
+	if _, maxTraffic, ok := ftc.GetTrafficData(); !ok || maxTraffic == 0 {
+		t.Errorf("traffic data ok=%v max=%d, want cached non-zero traffic", ok, maxTraffic)
+	}
 	for i := range a.multiTrieResult.Tries {
 		if _, ok := ftc.GetTrieOutput(i); !ok {
 			t.Errorf("trie %d: no cached output after PreCacheAllTries", i)
 		}
 		if _, _, _, _, ok := ftc.GetPreRenderedTexts(i); !ok {
 			t.Errorf("trie %d: no cached texts after PreCacheAllTries", i)
-		}
-		if _, maxTraffic, ok := ftc.GetTrafficData(i); !ok || maxTraffic == 0 {
-			t.Errorf("trie %d: traffic data ok=%v max=%d, want cached non-zero traffic", i, ok, maxTraffic)
 		}
 		for s := range a.multiTrieResult.Tries[i].Data {
 			if _, ok := ftc.GetClusteredData(i, s); !ok {
@@ -124,15 +124,15 @@ func TestPreCacheMatchesDirectComputation(t *testing.T) {
 		}
 	}
 
-	for ti := range a.multiTrieResult.Tries {
-		gotTraffic, gotMax, ok := a.trieCache.GetTrafficData(ti)
-		if !ok {
-			t.Fatalf("trie %d: traffic data not cached", ti)
-		}
-		if gotTraffic != wantTraffic || gotMax != wantMax {
-			t.Errorf("trie %d: cached traffic matrix (max %d) differs from recomputation (max %d)", ti, gotMax, wantMax)
-		}
+	gotTraffic, gotMax, ok := a.trieCache.GetTrafficData()
+	if !ok {
+		t.Fatalf("traffic data not cached")
+	}
+	if *gotTraffic != wantTraffic || gotMax != wantMax {
+		t.Errorf("cached traffic matrix (max %d) differs from recomputation (max %d)", gotMax, wantMax)
+	}
 
+	for ti := range a.multiTrieResult.Tries {
 		for si := range a.multiTrieResult.Tries[ti].Data {
 			intervals := buildClusterIntervals(&a.multiTrieResult.Tries[ti].Data[si])
 			var want [256][256]uint32
@@ -145,7 +145,7 @@ func TestPreCacheMatchesDirectComputation(t *testing.T) {
 			if !ok {
 				t.Fatalf("trie %d set %d: clustered grid not cached", ti, si)
 			}
-			if got != want {
+			if *got != want {
 				t.Errorf("trie %d set %d: cached clustered grid differs from recomputation", ti, si)
 			}
 		}
@@ -154,8 +154,9 @@ func TestPreCacheMatchesDirectComputation(t *testing.T) {
 
 // TestPreCacheWithoutRequestsDoesNotFreezeTraffic: a precache that runs before
 // the request data has arrived (a trie switch right after the results are
-// shown) must not mark the all-zero traffic matrix as final. Once the requests
-// are there, the next precache has to pick them up.
+// shown) must not mark the all-zero traffic matrix as final, nor publish
+// all-zero clustered grids for its trie. Once the requests are there, the next
+// precache has to pick them up.
 func TestPreCacheWithoutRequestsDoesNotFreezeTraffic(t *testing.T) {
 	a, reqs := lockTestApp()
 	reqs = reqs[:1000]
@@ -163,12 +164,33 @@ func TestPreCacheWithoutRequestsDoesNotFreezeTraffic(t *testing.T) {
 	if !a.trieCache.PreCacheSingleTrie(a, 1, a.multiTrieResult, nil) {
 		t.Fatal("PreCacheSingleTrie without requests returned false")
 	}
+	// The texts are there, the grids are not: the view must keep showing its
+	// loading placeholder instead of an empty heatmap.
+	if _, _, _, _, ok := a.trieCache.GetPreRenderedTexts(1); !ok {
+		t.Error("texts not cached by the precache without requests")
+	}
+	if _, _, ok := a.trieCache.GetTrafficData(); ok {
+		t.Error("traffic matrix published by a precache without requests")
+	}
+	if _, ok := a.trieCache.GetClusteredData(1, 0); ok {
+		t.Error("clustered grid published by a precache without requests")
+	}
+
 	a.trieCache.PreCacheAllTries(a, a.multiTrieResult, reqs)
 
+	if _, maxTraffic, ok := a.trieCache.GetTrafficData(); !ok || maxTraffic == 0 {
+		t.Errorf("traffic ok=%v max=%d after the requests arrived, want non-zero traffic", ok, maxTraffic)
+	}
 	for ti := range a.multiTrieResult.Tries {
-		if _, maxTraffic, ok := a.trieCache.GetTrafficData(ti); !ok || maxTraffic == 0 {
-			t.Errorf("trie %d: traffic ok=%v max=%d after the requests arrived, want non-zero traffic", ti, ok, maxTraffic)
+		if _, ok := a.trieCache.GetClusteredData(ti, 0); !ok {
+			t.Errorf("trie %d: no clustered grid after the requests arrived", ti)
 		}
+	}
+
+	// A later precache without requests must not take the grids away again.
+	a.trieCache.PreCacheSingleTrie(a, 1, a.multiTrieResult, nil)
+	if _, ok := a.trieCache.GetClusteredData(1, 0); !ok {
+		t.Error("precache without requests dropped the trie's clustered grids")
 	}
 }
 

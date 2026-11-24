@@ -9,12 +9,12 @@ import (
 
 // precacheRequestData does what SetRequestData starts in the background once
 // the parsed requests are handed over, up to the point where the first heatmap
-// can be shown: fill the trie cache and prepare the visualization.
+// can be shown: fill the trie cache and render the visualization from it.
 func precacheRequestData(a *App, reqs []accesslog.Request) *VisualizationView {
 	a.trieCache.PreCacheAllTries(a, a.multiTrieResult, reqs)
 
-	v := a.newVisualizationViewWith(len(a.multiTrieResult.Tries[0].Data))
-	v.PreCacheAllTriesFor(reqs, 0)
+	v := a.NewVisualizationView()
+	v.RenderCached()
 	return v
 }
 
