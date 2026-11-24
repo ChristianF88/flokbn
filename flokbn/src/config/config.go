@@ -274,6 +274,10 @@ type Config struct {
 	// cfg.diags never accumulates across calls. A hand-built Config (flags mode
 	// or tests) may leave this nil; ensureDiags allocates lazily.
 	diags *ConfigDiagnostics
+
+	// lists keeps the content of the [global] list files after their first
+	// read, so one run reads each file once (see lists.go).
+	lists listFiles
 }
 
 // Diagnostics returns the persistent parse/flags-phase accumulator, allocating
@@ -311,10 +315,13 @@ const (
 //   - Because it never mutates cfg.diags and every check is deterministic,
 //     calling Validate twice yields identical Len() and identical Report().
 //
-// I/O: Validate is NO LONGER pure - it READS the configured whitelist/blacklist/
-// UA-list files and the log format. It remains side-effect-free w.r.t. on-disk
-// state (it only reads). It is called EXACTLY ONCE per run, at the barrier seam
-// in executeStaticAnalysis / executeLiveAnalysis.
+// I/O: Validate is NOT pure - it READS the configured whitelist/blacklist/
+// UA-list files (unless this Config already read them: each list file is read
+// once per Config and kept, see lists.go), the jail file, and stats the log
+// file and plot directory. It remains side-effect-free w.r.t. on-disk state
+// (it only reads). It is called EXACTLY ONCE per run, at the barrier seam in
+// executeStaticAnalysis / executeLiveAnalysis; the run that follows gets the
+// list entries read here without opening the files again.
 //
 // NIL-SAFETY: Validate derefs c.Static for the logFormat + logfile-exists checks
 // (guarded by `if c.Static != nil`) and calls validateLiveInto (which guards a
@@ -372,15 +379,15 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 		}
 		c.validateListFiles(diags)
 		// Static processes the jail only when both jailFile and banFile are set
-		// (see ProcessJailWithWhitelist's guard); validate the jail at the barrier
-		// only when it will actually be loaded.
+		// (see the guard in analysis.publishJailAndBans); validate the jail at
+		// the barrier only when it will actually be loaded.
 		if c.Global != nil && c.Global.JailFile != "" && c.Global.BanFile != "" {
 			c.validateJailFile(diags)
 		}
 	case LiveMode:
 		c.validateLiveInto(diags)
 		c.validateListFiles(diags)
-		// Live always loads the jail (runLiveLoop reads it unconditionally), so
+		// Live always loads the jail (newLiveLoop reads it unconditionally), so
 		// validate it at the barrier in every live run.
 		c.validateJailFile(diags)
 	}
@@ -434,10 +441,12 @@ func plotPathDiagnostic(plotPath string) string {
 // verbatim AddRaw line (the loader error text already quotes the path and
 // offending value with the unified grammar). This is the SOLE list-load-for-
 // validation site: the flags handler must NOT also load lists (that would
-// double-count). The list bytes validated here are read again by the downstream
-// enforcers (runLiveLoop / computeGlobalFilters / ProcessJailWithWhitelist); the
-// 2-3x read with a TOCTOU window is accepted (documented in the commit body) -
-// the barrier's job is to catch a structurally broken/unreadable list at start.
+// double-count).
+//
+// The entries read here are kept on the Config (lists.go): the enforcers
+// downstream (analysis.loadGlobalLists, the static ban publish, newLiveLoop)
+// call the same Load methods and get these entries back, so a run reads each
+// list file once and enforces exactly what was validated.
 //
 // The c.Global wrappers internally guard a nil c.Global and an empty path, so a
 // nil/absent [global] section yields zero list-file diagnostics.
@@ -1434,22 +1443,23 @@ func (t *TrieCommon) ShouldIncludeRequest(req accesslog.Request) bool {
 	return true
 }
 
-// LoadWhitelistCIDRs loads CIDR ranges from whitelist file
+// LoadWhitelistCIDRs returns the CIDR ranges of the [global] whitelist file
+// (nil when none is configured). The file is read on the first call for this
+// Config; later calls return the same entries, or the same error (lists.go).
 func (c *Config) LoadWhitelistCIDRs() ([]string, error) {
 	if c.Global == nil || c.Global.Whitelist == "" {
 		return nil, nil
 	}
-
-	return loadCIDRFile(c.Global.Whitelist)
+	return c.lists.get(&c.lists.whitelist, c.Global.Whitelist, loadCIDRFile)
 }
 
-// LoadBlacklistCIDRs loads CIDR ranges from blacklist file
+// LoadBlacklistCIDRs returns the CIDR ranges of the [global] blacklist file,
+// read once per Config like LoadWhitelistCIDRs.
 func (c *Config) LoadBlacklistCIDRs() ([]string, error) {
 	if c.Global == nil || c.Global.Blacklist == "" {
 		return nil, nil
 	}
-
-	return loadCIDRFile(c.Global.Blacklist)
+	return c.lists.get(&c.lists.blacklist, c.Global.Blacklist, loadCIDRFile)
 }
 
 // compileFilterRegex compiles one filter pattern (key is the config key,
@@ -1557,20 +1567,22 @@ func ParseClusterArgSetsFromStrings(args []string) ([]ClusterArgSet, error) {
 	return sets, nil
 }
 
-// LoadUserAgentWhitelistPatterns loads User-Agent patterns from whitelist file
+// LoadUserAgentWhitelistPatterns returns the entries of the [global]
+// userAgentWhitelist file, read once per Config like LoadWhitelistCIDRs.
 func (c *Config) LoadUserAgentWhitelistPatterns() ([]string, error) {
 	if c.Global == nil || c.Global.UserAgentWhitelist == "" {
 		return nil, nil
 	}
-	return loadPatternFile(c.Global.UserAgentWhitelist)
+	return c.lists.get(&c.lists.uaWhitelist, c.Global.UserAgentWhitelist, loadPatternFile)
 }
 
-// LoadUserAgentBlacklistPatterns loads User-Agent patterns from blacklist file
+// LoadUserAgentBlacklistPatterns returns the entries of the [global]
+// userAgentBlacklist file, read once per Config like LoadWhitelistCIDRs.
 func (c *Config) LoadUserAgentBlacklistPatterns() ([]string, error) {
 	if c.Global == nil || c.Global.UserAgentBlacklist == "" {
 		return nil, nil
 	}
-	return loadPatternFile(c.Global.UserAgentBlacklist)
+	return c.lists.get(&c.lists.uaBlacklist, c.Global.UserAgentBlacklist, loadPatternFile)
 }
 
 // stripCommentLine normalizes one raw line from a CIDR list file: trims
