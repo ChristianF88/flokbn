@@ -111,7 +111,7 @@ sudo systemctl restart filebeat
 
 flokbn listens on `127.0.0.1` unless `[live] listen` (or `--listen`) says otherwise. With Filebeat on the same host, point `hosts` at `127.0.0.1:8080`; for a remote Filebeat, set `listen` and protect the port as described in [Security Considerations](#security-considerations) - ideally with [mutual TLS](#tls-and-mutual-tls-for-the-ingest-listener).
 
-flokbn logs `Filebeat connected` and `Filebeat disconnected` (with the remote address and the number of open connections) whenever a shipper connects or leaves. The startup line `waiting for Filebeat to connect` only says the listener is up; it is not followed by a blocking wait.
+flokbn logs `Filebeat connected` and `Filebeat disconnected` (with the remote address and the number of open connections) whenever a shipper connects or leaves. The startup line `accepting Lumberjack connections` says the listener is up; flokbn does not wait for a shipper after it.
 
 ### Expected log line format
 
@@ -137,7 +137,7 @@ If your web server logs a proxy IP first, you have two options:
 
 The format must contain `%t`. If you use `useragentRegex` or the User-Agent lists it must contain `%u`, and for `endpointRegex` it must contain `%r` or `%U`; flokbn refuses to start otherwise.
 
-A quick check before going live: take one line from the log Filebeat ships and confirm that the field `%h` points at is a client address, not your proxy's. The startup line `starting live loop` shows the format in effect (`log_format=...`). Lines whose address or timestamp cannot be read are counted as parse errors in `/stats` and skipped - but a line with the *wrong* address in the `%h` position parses fine, so the parse-error counter will not warn you.
+A quick check before going live: take one line from the log Filebeat ships and confirm that the field `%h` points at is a client address, not your proxy's. The startup line `starting live loop` shows the format in effect (`log_format=...`). Lines whose address or timestamp cannot be read are counted as parse errors in `/stats` and skipped; when they are the majority, flokbn logs the warning `most log lines are rejected by the parser` with the format in effect (at most once per minute). A line with the *wrong* address in the `%h` position parses fine, though, so neither the counter nor the warning will tell you about that.
 
 A space in the user name field (the third field of the combined format, taken from the client's basic-auth header) does not get a line dropped: live mode re-aligns such a line on its bracketed timestamp. See [Log Formats]({{< relref "/docs/reference/log-formats/#live-mode" >}}) for the details and for why quoting or dropping that field is still the better choice.
 
@@ -342,7 +342,7 @@ netstat -tlnp | grep 8080           # Verify listening
 - `netstat` shows the address the listener is bound to. If it is `127.0.0.1:8080` and Filebeat runs on another host, set `[live] listen` (or `--listen`).
 - A shipper that reaches flokbn produces a `Filebeat connected` log line, and `ingest.connected` in `/stats` (`flokbn_ingest_connected` in `/metrics`) turns true. Both stay false/absent while only the listener is up.
 - With TLS enabled, a shipper without matching `ssl.*` settings connects and is dropped again: look for `Filebeat disconnected` lines with a `TLS handshake` reason.
-- If connections are established but `ingest.parse_errors_total` grows with every batch, the lines do not match the log format in effect (shown as `log_format=` on the `starting live loop` line): see [expected format](#expected-log-line-format) and set `[live] logFormat` to the layout your web server writes.
+- If connections are established but `ingest.parse_errors_total` grows with every batch, the lines do not match the log format in effect (shown as `log_format=` on the `starting live loop` line, and on the warning `most log lines are rejected by the parser` that flokbn logs when more than half of the incoming lines are rejected): see [expected format](#expected-log-line-format) and set `[live] logFormat` to the layout your web server writes.
 
 ### Nothing Is Ever Detected
 

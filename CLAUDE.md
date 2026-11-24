@@ -18,7 +18,7 @@ clusters in ~1s on a workstation. Two modes:
 ```
 flokbn/src/          # THE GO MODULE lives here, not at repo root
   main.go            # entry: cli.App.Run(os.Args)
-  cli/               # command defs (urfave/cli v2), api.go orchestration, stats server, generate, synthlog
+  cli/               # command defs (urfave/cli v2), api.go entry points, live_loop.go (liveLoop), stats server, plain_output.go, generate, synthlog
   config/            # TOML + flag parsing; regexprefilter/ subpkg
   accesslog/         # leaf package: the Request record every parser fills, HTTPMethod, Uint32ToIPString
   logparser/         # format-string compiler; Parser (files, multi-worker) and LineParser (single lines, live mode)
@@ -113,8 +113,8 @@ holds a write token, and tests run in the CI job it requires.
   (O(B+W), not O(B*W)) and is byte-identical to the old path for IPv4 (proven by
   differential fuzz).
   `analysis.UpdateBans(*jail.Jail, BanInput)` runs both points plus ban expiry and the
-  jail update on an in-memory jail, without I/O; static mode publishes through it
-  (`analysis/publish.go`).
+  jail update on an in-memory jail, without I/O. Every mode publishes through it:
+  static in `analysis/publish.go`, live in `liveLoop.publishBans` (`cli/live_loop.go`).
 - **Static pipeline** (`analysis/static.go`): both entrypoints run `runStatic`. The
   parse is IP-only when no trie filters and the caller does not want the requests,
   else full. Tries without filters share one sorted IP list (`parsedLog.sortedIPs`);
@@ -153,7 +153,20 @@ holds a write token, and tests run in the CI job it requires.
   (= `--rangesCidr`); `startTime`/`endTime` use one parser for flags and TOML
   (`config.ParseTimeBound`: RFC3339 or the short forms); omitted
   `sleepBetweenIterations` = 10 on both (`config.DefaultSleepBetweenIterations`).
-- Live mode writes jail.json and the ban file only when their content changed.
+- Live loop (`cli/live_loop.go`): `liveLoop` holds the state, `run` reads batches. A
+  round is an iteration (`iterate`: a batch arrived) or a heartbeat (`heartbeat`: idle
+  for `sleepBetweenIterations`, at least 1s). Both end in `publishBans`; a heartbeat
+  hands in no detections, so it only expires bans - a ban is started or escalated by
+  an iteration alone. `clusterWindow` is the one clustering loop (iteration, and the
+  heartbeat's stats refresh after window expiry).
+  `cli/live_ban_characterization_test.go` pins the jail and ban-file outcome of both.
+- Live mode writes jail.json and the ban file only when their content changed
+  (`jailFileState`, `banFileState` in `cli/live_persist.go`).
+- Live log lines other code or docs rely on are constants: `liveAcceptingMsg`
+  ("accepting Lumberjack connections", the listener is up; nothing waits for a
+  shipper), `liveTimestampSkewMsg`, `liveRejectedLinesMsg` (more than half of at
+  least 20 incoming lines were parse errors, usually a `[live] logFormat` mismatch;
+  at most once per minute).
 - Config mode vs flag mode are mutually exclusive per command. With `--config`, only
   output flags are allowed alongside it (static: `--tui/--compact/--plain`; live: `--logLevel`).
 - `flokbn generate static-demo` writes a self-contained demo (1M-line synthetic

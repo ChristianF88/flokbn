@@ -63,7 +63,7 @@ func TestLiveLoop_EndToEnd_LumberjackToBanFile(t *testing.T) {
 
 	h := startLoop(t, ing, cfg)
 	// Deterministic readiness: the loop emits this right after Accept.
-	h.awaitMessage("waiting for Filebeat to connect")
+	h.awaitMessage(liveAcceptingMsg)
 
 	now := time.Now()
 	events := append(hotLogEvents(now, 0, 256), noiseLogEvents(now)...)
@@ -119,7 +119,7 @@ func TestLiveLoop_EndToEnd_TwoBatchesAccumulate(t *testing.T) {
 	})
 
 	h := startLoop(t, ing, cfg)
-	h.awaitMessage("waiting for Filebeat to connect")
+	h.awaitMessage(liveAcceptingMsg)
 
 	client, err := v2.SyncDial(addr)
 	if err != nil {

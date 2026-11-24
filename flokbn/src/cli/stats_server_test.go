@@ -345,7 +345,7 @@ func TestStatsServer_LifecycleNoLeak(t *testing.T) {
 
 	srv := newTestStatsServer(t)
 	h := startLoopWithStats(t, fake, cfg, srv)
-	h.awaitMessage("waiting for Filebeat to connect")
+	h.awaitMessage(liveAcceptingMsg)
 
 	h.cancel()
 	if err := h.wait(2 * time.Second); err != nil {

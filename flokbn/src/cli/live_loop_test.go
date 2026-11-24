@@ -837,7 +837,7 @@ func TestRunLiveLoop_ContextCancelClosesIngestorAndReturns(t *testing.T) {
 	})
 
 	h := startLoop(t, fake, cfg)
-	h.awaitMessage("waiting for Filebeat to connect")
+	h.awaitMessage(liveAcceptingMsg)
 
 	h.cancel()
 	if err := h.wait(2 * time.Second); err != nil {

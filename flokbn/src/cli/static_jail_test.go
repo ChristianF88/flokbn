@@ -51,8 +51,8 @@ func runAppCaptured(t *testing.T, args []string) (string, error) {
 
 // TestStaticFlagsModeJailsDetections is a regression test for the static
 // CLI-flags mode never jailing detections: handleStaticFlagsMode used to build
-// the TrieConfig without UseForJail, so ProcessJailWithWhitelist collected no
-// CIDRs and `flokbn static --jailFile X --banFile Y --clusterArgSets ...` wrote
+// the TrieConfig without UseForJail, so the publish step collected no ranges
+// for the jail and `flokbn static --jailFile X --banFile Y --clusterArgSets ...` wrote
 // a header-only ban file and no jail file. CLI-provided cluster sets must
 // default to UseForJail=true (parity with live flags mode).
 func TestStaticFlagsModeJailsDetections(t *testing.T) {

@@ -42,6 +42,8 @@ type BanUpdate struct {
 	// Jailed is the number of ranges handed to the jail (Detected minus the
 	// dropped ones, plus ForceBan).
 	Jailed int
+	// Expired is the number of bans that ran out in this round.
+	Expired int
 	// JailChanged reports that the jail needs persisting: ranges were handed to
 	// it or bans ran out. It can be true for a round that re-detected only
 	// ranges that are already banned.
@@ -61,9 +63,15 @@ type BanUpdate struct {
 //     active bans and the manual blacklist.
 //
 // It does no I/O: loading and saving the jail and writing the ban file belong
-// to the caller (publishStatic below for static mode).
+// to the caller (publishStatic below for static mode, liveLoop.publishBans in
+// package cli for live mode, where a heartbeat is a round with nothing
+// detected).
 func UpdateBans(j *jail.Jail, in BanInput) BanUpdate {
-	toJail, dropped := cidr.DropFullyWhitelisted(in.Detected, in.Whitelist)
+	var toJail []string
+	dropped := 0
+	if len(in.Detected) > 0 {
+		toJail, dropped = cidr.DropFullyWhitelisted(in.Detected, in.Whitelist)
+	}
 	if len(in.ForceBan) > 0 {
 		// Cap the capacity: with an empty whitelist toJail is in.Detected
 		// itself and must not be appended to in place.
@@ -72,9 +80,9 @@ func UpdateBans(j *jail.Jail, in BanInput) BanUpdate {
 
 	// Expiry only flips bans from active to inactive, so a change in the
 	// number of active bans is an exact signal.
-	activeBefore := len(j.ListActiveBans())
+	activeBefore := activeBanCount(j)
 	j.UpdateBanActiveStatus()
-	bansExpired := len(j.ListActiveBans()) != activeBefore
+	expired := activeBefore - activeBanCount(j)
 
 	var updateErr error
 	if len(toJail) > 0 {
@@ -90,9 +98,24 @@ func UpdateBans(j *jail.Jail, in BanInput) BanUpdate {
 		Blacklist:        blacklist,
 		WhitelistDropped: dropped,
 		Jailed:           len(toJail),
-		JailChanged:      len(toJail) > 0 || bansExpired,
+		Expired:          expired,
+		JailChanged:      len(toJail) > 0 || expired > 0,
 		UpdateErr:        updateErr,
 	}
+}
+
+// activeBanCount counts the running bans without building their list.
+func activeBanCount(j *jail.Jail) int {
+	n := 0
+	for ci := range j.Cells {
+		prisoners := j.Cells[ci].Prisoners
+		for pi := range prisoners {
+			if prisoners[pi].BanActive {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // publishJailAndBans runs the jail update and ban-file publish step when both a

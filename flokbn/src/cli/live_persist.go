@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/ChristianF88/flokbn/jail"
 )
@@ -41,4 +42,36 @@ func (s *jailFileState) save(j *jail.Jail, path string) (bool, error) {
 	}
 	s.saved, s.valid = data, true
 	return true, nil
+}
+
+// banFileState remembers which ban lists were last written to disk, so the
+// ban file (and its timestamp header) is rewritten only when what it lists
+// changed. Owned by the loop goroutine.
+type banFileState struct {
+	key   string // banListKey of the last successful write
+	valid bool   // false until the first successful write
+}
+
+// banListKey is the change-detection key for the published ban lists. The
+// NUL separator cannot appear in a CIDR string, so distinct list pairs map
+// to distinct keys.
+func banListKey(publishBans, publishBlacklist []string) string {
+	return strings.Join(publishBans, "\n") + "\x00" + strings.Join(publishBlacklist, "\n")
+}
+
+// save writes the ban file for the given lists unless they equal the last
+// successful write and the file is still there. It reports whether it wrote,
+// and the content it wrote. Until the first write has succeeded every call
+// writes, which syncs a stale ban file left on disk by an earlier run.
+func (s *banFileState) save(bans, blacklist []string, path string) (content string, wrote bool, err error) {
+	key := banListKey(bans, blacklist)
+	if s.valid && key == s.key && !fileMissing(path) {
+		return "", false, nil
+	}
+	content = jail.BuildBanFileContent(bans, blacklist)
+	if err := jail.WriteToFile(path, content); err != nil {
+		return "", false, err
+	}
+	s.key, s.valid = key, true
+	return content, true, nil
 }

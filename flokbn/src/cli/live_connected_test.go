@@ -38,7 +38,7 @@ func TestLiveLoop_ConnectedFollowsRealConnections(t *testing.T) {
 		"w": newWindowConfig(t, "", true),
 	})
 	h := startLoop(t, ing, cfg)
-	h.awaitMessage("waiting for Filebeat to connect")
+	h.awaitMessage(liveAcceptingMsg)
 
 	_, idle := h.nextHeartbeat()
 	if idle.Ingest.Connected || idle.Ingest.OpenConnections != 0 {
