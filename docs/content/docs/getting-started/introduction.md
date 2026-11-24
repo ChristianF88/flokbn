@@ -45,7 +45,7 @@ flokbn is an IP clustering tool that analyzes HTTP logs and groups IP addresses 
 
 - **IPv4 Only**: Currently only IPv4 addresses are supported. IPv6 is not implemented yet.
 - **Lumberjack Protocol**: Live mode uses the Lumberjack protocol for log ingestion. HTTP/JSON API support is planned for future releases.
-- **Fixed Live Log Layout**: Live mode expects the standard combined log format with the client IP as the first field. Configurable [format strings]({{< relref "/docs/reference/log-formats/" >}}) apply to static mode only.
+- **Different Default Log Formats**: Static and live mode take the same [format strings]({{< relref "/docs/reference/log-formats/" >}}) but default differently: static mode reads the client IP from the last field, live mode from the first. Set `logFormat` explicitly when the two read the same log.
 - **Single IP Field**: Log format must contain exactly one `%h` (IP address) field. Multiple IP fields are not supported.
 - **No Duplicate Fields**: Log format cannot contain duplicate field specifiers (e.g., two `%t` timestamp fields or two `%s` status fields).
 

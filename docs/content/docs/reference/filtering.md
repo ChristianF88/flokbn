@@ -33,7 +33,7 @@ In the ban pipeline, after clustering:
 
 CIDR ranges (`cidrRanges` / `--rangesCidr`) are **not** a filter in either layer - they only add [per-range request counts](#cidr-range-reporting) to the report.
 
-In static mode the per-request filters read fields of the parsed log line, so the [log format]({{< relref "/docs/reference/log-formats/" >}}) must extract them: the time window needs `%t`, the User-Agent regex and both User-Agent lists need `%u`, the endpoint regex needs `%r` or `%U`. A filter whose field is missing from `logFormat` aborts the run at startup; it is never silently ignored.
+The per-request filters read fields of the parsed log line, so the [log format]({{< relref "/docs/reference/log-formats/" >}}) of the mode being run (`[static] logFormat` or `[live] logFormat`) must extract them: the time window (static mode) needs `%t`, the User-Agent regex and both User-Agent lists need `%u`, the endpoint regex needs `%r` or `%U`. A filter whose field is missing from `logFormat` aborts the run at startup; it is never silently ignored.
 
 **The whitelist always wins**: over detections, over active bans, and over the manual blacklist.
 

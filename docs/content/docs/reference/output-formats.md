@@ -373,7 +373,7 @@ All three return `503` with a `Retry-After` header until the loop has published 
 | `ingest.queue_depth` | Batches received but not yet read by the detection loop |
 | `ingest.last_batch_at`, `ingest.batches_total`, `ingest.requests_total` | Time of the last batch, batches and parsed requests since startup |
 | `ingest.parse_errors_total` | Events dropped because they could not be decoded or parsed |
-| `ingest.malformed_fields_total` | Non-numeric status/bytes fields in lines that were kept |
+| `ingest.malformed_fields_total` | Status or bytes fields that are not a number (`-` is not counted), on every parsed line including lines that were then dropped |
 | `windows[].size_ips`, `windows[].requests` | Distinct IPs and requests currently in the window |
 | `windows[].accepted_total`, `windows[].rejected_by_filter_total` | Requests accepted into, or rejected by the regex filters of, the window since startup |
 | `windows[].cluster_sets[]` | Per cluster arg set: `params`, `use_for_jail`, `last_duration_us`, `detected_now` (ranges with request counts) |
@@ -398,7 +398,7 @@ All three return `503` with a `Retry-After` header until the loop has published 
 | `flokbn_ingest_open_connections` | gauge | Shipper connections currently open |
 | `flokbn_ingest_queue_depth` | gauge | Batches buffered in the ingest queue |
 | `flokbn_ingest_batches_total`, `flokbn_ingest_requests_total` | counter | Batches received / requests parsed |
-| `flokbn_ingest_parse_errors_total`, `flokbn_ingest_malformed_fields_total` | counter | Dropped events / malformed fields in kept lines |
+| `flokbn_ingest_parse_errors_total`, `flokbn_ingest_malformed_fields_total` | counter | Dropped events / malformed status or bytes fields in parsed lines |
 | `flokbn_window_unique_ips{window}`, `flokbn_window_requests{window}` | gauge | Distinct IPs / requests currently in the window |
 | `flokbn_window_accepted_total{window}`, `flokbn_window_rejected_by_filter_total{window}` | counter | Requests accepted into / rejected by the filters of the window |
 | `flokbn_cluster_detected{window,set}` | gauge | Ranges detected by this cluster arg set in its latest run (`set` is the zero-based index of the set within the window) |

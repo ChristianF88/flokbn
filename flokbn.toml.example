@@ -243,13 +243,18 @@ useForJail = [true, true, true]
 #################################################################################
 
 [live]
-# IMPORTANT: live mode does NOT use logFormat. There is no logFormat key here,
-# and the [static] logFormat above has no effect on live ingestion. Live mode
-# always reads the client IP from the FIRST space-separated field of each line
-# (standard combined log layout). If your web server logs a proxy address first
-# and the real client in X-Forwarded-For - which is what the [static] example
-# format above expects - change the web server's log format before using live
-# mode, otherwise flokbn clusters and bans your proxy.
+# OPTIONAL: Format of the shipped log lines. Same format strings as the
+# [static] logFormat above, but a DIFFERENT DEFAULT: live mode reads the client
+# IP from the FIRST field (plain combined log - what a web server writes and
+# Filebeat ships unchanged), static mode from the last one. The [static]
+# logFormat has no effect on live ingestion.
+# If your web server logs a proxy address first and the real client in a
+# trailing X-Forwarded-For field, set this to the matching format (for that
+# layout: the [static] example format above), otherwise flokbn clusters and
+# bans your proxy.
+# The format must contain %t. useragentRegex and the User-Agent lists need %u,
+# endpointRegex needs %r or %U; a filter whose field is missing aborts startup.
+# logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # REQUIRED: Network configuration (global settings only)
 port = "8080"                           # Port to listen for incoming log streams

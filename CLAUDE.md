@@ -20,8 +20,9 @@ flokbn/src/          # THE GO MODULE lives here, not at repo root
   main.go            # entry: cli.App.Run(os.Args)
   cli/               # command defs (urfave/cli v2), api.go orchestration, stats server, generate, synthlog
   config/            # TOML + flag parsing; regexprefilter/ subpkg
-  logparser/         # fast multi-worker log parser, format-string compiler
-  ingestor/          # Request type; TCPIngestor + own size-limited Lumberjack v2 reader (lumberjack.go)
+  accesslog/         # leaf package: the Request record every parser fills, HTTPMethod, Uint32ToIPString
+  logparser/         # format-string compiler; Parser (files, multi-worker) and LineParser (single lines, live mode)
+  ingestor/          # TCPIngestor + own size-limited Lumberjack v2 reader (lumberjack.go); parses with logparser.LineParser
   trie/              # binary trie, CollectCIDRsNumeric clustering walk
   cidr/              # CIDR merge/subtract, RemoveWhitelisted, UserAgentMatcher
   analysis/          # Static() / StaticWithRequests(): one pipeline (runStatic) parse→filter→trie→cluster→publish; UpdateBans
@@ -68,8 +69,9 @@ cd e2e && bash e2e_static_test.sh        # non-docker e2e scripts
 
 Go 1.23. Tests use the standard library `testing` package (no testify or go-cmp).
 `github.com/elastic/go-lumber` is in go.mod for tests only: its client drives the
-ingestor and live e2e tests, the server side is our own reader. ~137 `_test.go` files including
-differential fuzz (`cidr/removewhitelisted_diff_test.go`) and invariant tests
+ingestor and live e2e tests, the server side is our own reader. ~148 `_test.go` files including
+differential fuzz (`cidr/removewhitelisted_diff_test.go`,
+`ingestor/live_parser_diff_test.go`) and invariant tests
 (`jail/whitelist_invariant_test.go`). Real-world benchmarks are env-gated (run manually).
 
 CI (`.github/workflows/ci.yml`): prepare (go mod tidy must be clean) → lint → test
@@ -133,9 +135,20 @@ holds a write token, and tests run in the CI job it requires.
 - Log format strings: exactly one `%h`, no duplicate specifiers (except `%^`).
   Static default (`logparser.DefaultLogFormat`) is
   `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"`: `%h` last, every quoted slot quoted.
-  Static mode rejects a filter whose field is missing from the format
-  (`config/filter_fields.go`). Live mode ignores `logFormat`: its own parser in
-  `ingestor/` reads the client IP from the first field.
+  Live mode uses the same compiler through `logparser.LineParser` with its OWN key
+  (`[live] logFormat`, `live --logFormat`) and its OWN default
+  (`logparser.DefaultLiveLogFormat`, `%h %^ %^ [%t] "%r" %s %b "%^" "%u"`: `%h`
+  first, what live mode always read). `[static] logFormat` does not apply to live.
+  Both modes reject a filter whose field is missing from their format
+  (`config/filter_fields.go`); live additionally requires `%t`.
+- Live line parsing (`logparser/line.go`): a line is dropped only for an invalid
+  `%h` (`ErrInvalidIP`, incl. IPv6 and 0.0.0.0) or an invalid `%t`
+  (`ErrInvalidTimestamp`). A line whose `[%t]` does not parse in place is re-aligned
+  on the first bracket holding a valid timestamp (slow path; keeps a space in the
+  client-controlled user field from hiding a request). The file parser does not
+  re-align. The old hardcoded live parser survives only as the test oracle
+  `ingestor/legacy_parser_test.go`; `ingestor/live_parser_diff_test.go` lists every
+  divergence from it with the decision taken.
 - Flag/TOML surfaces: aliases `--logFile` (= `--logfile`) and `--cidrRanges`
   (= `--rangesCidr`); `startTime`/`endTime` use one parser for flags and TOML
   (`config.ParseTimeBound`: RFC3339 or the short forms); omitted

@@ -77,6 +77,7 @@ A filter whose field the effective `logFormat` does not extract is rejected at s
 |-------|------|----------|-------------|
 | `port` | string | Yes | Lumberjack protocol listening port |
 | `listen` | string | No | Address the Lumberjack listener binds to (default `127.0.0.1`): an IP address or host name **without** a port. The port does not authenticate shippers unless `tlsClientCA` is set, so use another address (e.g. `0.0.0.0`) only with client certificates or when access to the port is restricted to your log shippers. A non-loopback address without mutual TLS logs a warning at startup. Also available as `--listen`. |
+| `logFormat` | string | No | Format of the shipped log lines (see [Log Formats]({{< relref "/docs/reference/log-formats/" >}})). Default `%h %^ %^ [%t] "%r" %s %b "%^" "%u"`: the client IP is read from the **first** field, unlike the `[static]` default. Must contain `%t`. Also available as `--logFormat`. |
 | `tlsCert` | string | No | PEM certificate of the Lumberjack listener. Together with `tlsKey` it makes the listener speak TLS (encrypted, but any client is accepted). Config file only. |
 | `tlsKey` | string | No | PEM private key for `tlsCert`. The two must be set together. |
 | `tlsClientCA` | string | No | PEM bundle of CA certificates. When set (requires `tlsCert` and `tlsKey`), shippers must present a certificate signed by one of them (mutual TLS) - the only authentication the port has. |
@@ -86,7 +87,7 @@ A filter whose field the effective `logFormat` does not extract is rejected at s
 
 The TLS files are read once at startup (restart to rotate a certificate); a missing or mismatched file aborts the start before the port is bound. See [TLS and mutual TLS]({{< relref "/docs/guides/live-protection/#tls-and-mutual-tls-for-the-ingest-listener" >}}) for the Filebeat side and [Protocol limits]({{< relref "/docs/guides/live-protection/#protocol-limits" >}}) for the fixed size and connection limits of the listener.
 
-**There is no `logFormat` for live mode.** `[live]` rejects the key, and a `logFormat` under `[static]` does not apply. Live mode always reads the client IP from the first space-separated field of each line and expects the combined log layout after it - see [Live Protection]({{< relref "/docs/guides/live-protection/#expected-log-line-format" >}}).
+**`[live] logFormat` and `[static] logFormat` are separate keys with different defaults.** A `logFormat` under `[static]` does not apply to live mode. Without `[live] logFormat`, live mode reads the client IP from the first field of each line and expects the combined log layout after it; if your shipped lines carry the client elsewhere (for example in a trailing `X-Forwarded-For` field), set `[live] logFormat` to match - see [Live Protection]({{< relref "/docs/guides/live-protection/#expected-log-line-format" >}}).
 
 ### Live Windows: [live.NAME]
 
@@ -167,7 +168,8 @@ Enforced at load/startup (the run aborts with an error):
 10. **`[live.NAME]` windows are validated per window**: `slidingWindowMaxSize > 0`, `slidingWindowMaxTime > 0`, `sleepBetweenIterations >= 0`, and at least one `clusterArgSets` row. A window violating any of these aborts startup with a message naming the `[live.NAME]` window.
 11. `cidrRanges` entries must be valid **IPv4** CIDRs or bare IPv4 addresses (a bare address is treated as `/32`); an IPv6 entry aborts the load (IPv4-only tool), in both static and live tries. The same holds for every line of the whitelist and blacklist files and for `--rangesCidr`.
 12. **`startTime`/`endTime` must parse.** A bound that is neither RFC3339 nor one of the short forms (`YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM-DD HH:MM`, each optionally followed by ` ±HHMM`) aborts the run with a diagnostic naming the trie and the offending value, as does an `endTime` before its `startTime`. The time filter is never silently skipped.
-13. **Static mode: a filter needs its field in `logFormat`.** `useragentRegex`, `userAgentWhitelist` and `userAgentBlacklist` need `%u`; `endpointRegex` needs `%r` or `%U`; `startTime` and `endTime` need `%t`. The check runs against the effective format (the default when `logFormat` is omitted) and aborts the run naming the section, the key and the missing specifier, for example `[static.bots] useragentRegex needs the User-Agent of each request, but logFormat "%h" has no %u field`. Live mode has no `logFormat` and is not affected.
+13. **A filter needs its field in `logFormat`.** `useragentRegex`, `userAgentWhitelist` and `userAgentBlacklist` need `%u`; `endpointRegex` needs `%r` or `%U`; `startTime` and `endTime` (static mode) need `%t`. The check runs against the effective format of the mode being run (`[static] logFormat` or `[live] logFormat`, each with its own default when omitted) and aborts the run naming the section, the key and the missing specifier, for example `[static.bots] useragentRegex needs the User-Agent of each request, but logFormat "%h" has no %u field`.
+14. **`[live] logFormat` must be a valid format with a `%t` field.** It is checked like `[static] logFormat` (exactly one `%h`, no duplicate or unknown specifiers); in addition a format without `%t` is rejected, because a request without a timestamp never enters a sliding window.
 
 Not an error, but reported: `startTime`, `endTime` and `cidrRanges` in a `[live.NAME]` table each produce a startup **warning**, because they have no effect in live mode (see [Live Windows](#live-windows-livename)).
 
@@ -263,7 +265,7 @@ For a complete, working live config you can run immediately, see `docker-test-co
 
 **Invalid cluster arguments**: A malformed `clusterArgSets` row **aborts the load** with a message naming the offending row index and what is wrong with it. Each row needs exactly 4 numeric values `[minSize, minDepth, maxDepth, threshold]`: a whole `minSize >= 1`, whole depths with `0 <= minDepth <= maxDepth <= 32`, and a `threshold` between `0` and `2`; fix the named row and rerun.
 
-**Filter needs a field the log format lacks**: In static mode a regex, User-Agent list or time bound whose field is not in `logFormat` aborts the run. Add the named specifier (`%u`, `%r`/`%U`, `%t`) to `logFormat` or remove the filter.
+**Filter needs a field the log format lacks**: A regex, User-Agent list or time bound whose field is not in the `logFormat` of the mode being run aborts the run. Add the named specifier (`%u`, `%r`/`%U`, `%t`) to `logFormat` or remove the filter.
 
 **`useForJail` length mismatch**: If you provide `useForJail`, it must have exactly one entry per `clusterArgSets` row or the load aborts naming both lengths. Either match the lengths or omit `useForJail` entirely (which means "never jail any set").
 

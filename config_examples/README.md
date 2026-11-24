@@ -132,7 +132,8 @@ sqlmap/1.7.2#stable (http://sqlmap.org)
 `Googlebot` alone would only match requests whose entire User-Agent header
 is literally `Googlebot`.
 
-In static mode the User-Agent files need a `%u` field in `logFormat`; a
+The User-Agent files need a `%u` field in the `logFormat` of the mode being
+run (`[static] logFormat` or `[live] logFormat`; both defaults have one); a
 configured User-Agent list with a format that has no `%u` aborts the run.
 
 ## Processing Order
