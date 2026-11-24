@@ -206,7 +206,7 @@ func TestShowVisualizationRequestsNoRace(t *testing.T) {
 		{Name: "trie-b", Data: []output.ClusterResult{*newClusterSet("192.168.0.0/16")}},
 	}
 
-	a := NewAppFromConfig(&config.Config{Static: &config.StaticConfig{}}, "")
+	a := NewAppFromConfig(&config.Config{Static: &config.StaticConfig{}})
 	sim := tcell.NewSimulationScreen("UTF-8")
 	if err := sim.Init(); err != nil {
 		t.Fatalf("sim.Init: %v", err)

@@ -67,8 +67,7 @@ type App struct {
 
 	// cfg is the static config the analysis runs with. NewAppFromConfig is the
 	// only constructor, so it is never nil; immutable after construction.
-	cfg        *config.Config
-	configPath string
+	cfg *config.Config
 
 	// trieCache is the single cache of everything derived from the analysis:
 	// pre-rendered per-trie texts and the visualization grids. Never nil.
@@ -76,12 +75,11 @@ type App struct {
 }
 
 // NewAppFromConfig creates a new TUI application from config file
-func NewAppFromConfig(cfg *config.Config, configPath string) *App {
+func NewAppFromConfig(cfg *config.Config) *App {
 	app := &App{
 		app:         tview.NewApplication(),
 		pages:       tview.NewPages(),
 		cfg:         cfg,
-		configPath:  configPath,
 		logFile:     cfg.Static.LogFile,
 		currentTrie: 0,
 	}

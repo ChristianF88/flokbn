@@ -133,7 +133,7 @@ func TestSetRequestDataVizPathNoRace(t *testing.T) {
 		}},
 	}
 
-	a := NewAppFromConfig(&config.Config{Static: &config.StaticConfig{}}, "")
+	a := NewAppFromConfig(&config.Config{Static: &config.StaticConfig{}})
 
 	// Drive a real event loop on a headless simulation screen so QueueUpdateDraw
 	// closures actually execute (the publish + render steps run on this loop).

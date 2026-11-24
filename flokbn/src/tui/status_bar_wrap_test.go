@@ -86,7 +86,7 @@ func TestStatusBarLegendWrapsOnNarrowTerminal(t *testing.T) {
 		{60, 20},
 		{80, 24},
 	} {
-		a := NewAppFromConfig(cfg, "")
+		a := NewAppFromConfig(cfg)
 		a.setStatusBarText(longStatusLegend)
 
 		screen := renderStatusBarRegion(t, a, sz.w, sz.h)

@@ -30,7 +30,7 @@ func newResultsViewTestApp(t *testing.T) *App {
 	}}
 
 	cfg := &config.Config{Static: &config.StaticConfig{}}
-	a := NewAppFromConfig(cfg, "")
+	a := NewAppFromConfig(cfg)
 	a.multiTrieResult = jo
 	a.currentTrie = 0
 

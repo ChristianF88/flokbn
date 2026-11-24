@@ -25,7 +25,7 @@ func TestNewAppFromConfigRequiresConfig(t *testing.T) {
 			t.Fatal("NewAppFromConfig(nil) returned; an App without a config must be impossible")
 		}
 	}()
-	NewAppFromConfig(nil, "")
+	NewAppFromConfig(nil)
 }
 
 // configModeResult builds a multi-trie analysis result with one trie per name.
@@ -78,7 +78,7 @@ func (a *App) uiTexts() (summary, clustering, cidr, diagnostics, status string) 
 // and CIDR ranges across the config's tries (the removed alternative read two
 // App fields no code ever assigned, i.e. always printed 0).
 func TestProgressFrameCountsComeFromConfig(t *testing.T) {
-	a := NewAppFromConfig(configModeConfig(), "")
+	a := NewAppFromConfig(configModeConfig())
 
 	got := visibleText(a.progressFrameText("stage", ".."))
 
@@ -96,7 +96,7 @@ func TestProgressFrameCountsComeFromConfig(t *testing.T) {
 func TestResultsPageIsConfigMode(t *testing.T) {
 	multi := configModeResult("trie-a", "trie-b")
 
-	a := NewAppFromConfig(configModeConfig(), "")
+	a := NewAppFromConfig(configModeConfig())
 	stop := startSimApp(t, a)
 	defer stop()
 
@@ -149,7 +149,7 @@ func TestResultsPageIsConfigMode(t *testing.T) {
 // TestSingleTrieStatusLegend: with one trie the legend drops the trie switch
 // but is still the config-mode wording.
 func TestSingleTrieStatusLegend(t *testing.T) {
-	a := NewAppFromConfig(configModeConfig(), "")
+	a := NewAppFromConfig(configModeConfig())
 	stop := startSimApp(t, a)
 	defer stop()
 
