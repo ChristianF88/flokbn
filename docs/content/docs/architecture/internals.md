@@ -145,11 +145,10 @@ type Request struct {
     // Cold fields - second cache line (only accessed during output or string filtering)
     URI       string
     UserAgent string
-    IP        net.IP // Legacy: set only by the live TCP ingestor; nil from the log parser
 }
 ```
 
-IPs are stored as `uint32` - no string allocation per IP, no `net.IP` overhead. The struct also carries a legacy `net.IP` field that only the live ingestor path populates (the static log parser leaves it nil); non-hot-path code derives `net.IP` from `IPUint32` on demand.
+IPs are stored as `uint32` - no string allocation per IP, no `net.IP` overhead. Non-hot-path code derives a `net.IP` from `IPUint32` on demand (`Request.GetIPNet`).
 
 ### Binary Trie
 

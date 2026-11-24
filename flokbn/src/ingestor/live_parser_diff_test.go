@@ -43,8 +43,8 @@ import (
 //
 // Not visible in the compared values, and also different on purpose:
 //
-//   - Request.IP (the legacy net.IP) is no longer filled: nothing reads it,
-//     and filling it cost one allocation per event. GetIPNet derives it.
+//   - The old parser also filled a net.IP per event (one allocation each).
+//     Nothing read it; the field is gone and GetIPNet derives the net.IP.
 //   - Request.Timestamp carries a named fixed zone ("+0200") or UTC instead of
 //     time.Local or an unnamed zone. Instant and offset are the same.
 //   - The reasons for dropping a line are the fixed values
