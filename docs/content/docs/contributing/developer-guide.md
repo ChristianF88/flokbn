@@ -225,7 +225,7 @@ flokbn/
 │   ├── jail/           # Ban/jail management
 │   ├── logparser/      # Log parsing
 │   ├── output/         # Output formatting (JSON, plain, etc.)
-│   ├── pools/          # Memory pool management
+│   ├── pools/          # Trie node allocators
 │   ├── sliding/        # Sliding window for live mode
 │   ├── trie/           # IP trie clustering
 │   ├── tui/            # Terminal user interface

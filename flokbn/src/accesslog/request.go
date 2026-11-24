@@ -1,7 +1,8 @@
 // Package accesslog holds the record one access-log line is parsed into. It
-// is a leaf package: the log parser fills a Request, the live ingestor and
-// the static pipeline pass it on, and none of them has to import another to
-// name the type.
+// sits at the bottom of the import graph (it imports only iputils, for the
+// IPv4 formatter): the log parser fills a Request, the live ingestor and the
+// static pipeline pass it on, and none of them has to import another to name
+// the type.
 package accesslog
 
 import (

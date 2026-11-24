@@ -377,7 +377,7 @@ The server side is flokbn's own reader (`ingestor/lumberjack.go`), not a third-p
 
 ### Memory Pools
 
-Pre-allocated object pools (trie nodes, scratch slices) reduce allocation and GC pressure.
+Trie nodes come from chunked bump allocators (`pools/`), which reduces allocation and GC pressure.
 
 ### Regex Compilation and Prefiltering
 
@@ -408,7 +408,7 @@ flokbn/src/
 ├── logging/             # Leveled slog setup for live mode
 ├── logparser/           # Log format parsing
 ├── output/              # Output formatting (JSON, plain text)
-├── pools/               # Memory pool management, TrieNode struct
+├── pools/               # Trie node allocators, TrieNode struct
 ├── sliding/             # Sliding window for live mode
 ├── trie/                # IP trie building and cluster detection
 ├── tui/                 # Terminal user interface
