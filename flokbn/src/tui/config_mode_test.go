@@ -56,8 +56,8 @@ func configModeConfig() *config.Config {
 	return &config.Config{
 		Static: &config.StaticConfig{LogFile: "access.log"},
 		StaticTries: map[string]*config.TrieConfig{
-			"trie-a": {ClusterArgSets: make([]config.ClusterArgSet, 2), CIDRRanges: []string{"10.0.0.0/8"}},
-			"trie-b": {ClusterArgSets: make([]config.ClusterArgSet, 1), CIDRRanges: []string{"192.168.0.0/16"}},
+			"trie-a": {TrieCommon: config.TrieCommon{ClusterArgSets: make([]config.ClusterArgSet, 2)}, CIDRRanges: []string{"10.0.0.0/8"}},
+			"trie-b": {TrieCommon: config.TrieCommon{ClusterArgSets: make([]config.ClusterArgSet, 1)}, CIDRRanges: []string{"192.168.0.0/16"}},
 		},
 	}
 }

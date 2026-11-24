@@ -344,8 +344,10 @@ func handleLiveFlagsMode(c *cli.Context) error {
 	}
 
 	slidingConfig := &config.SlidingTrieConfig{
-		UserAgentRegex:         c.String("useragentRegex"),
-		EndpointRegex:          c.String("endpointRegex"),
+		TrieCommon: config.TrieCommon{
+			UserAgentRegex: c.String("useragentRegex"),
+			EndpointRegex:  c.String("endpointRegex"),
+		},
 		SlidingWindowMaxTime:   c.Duration("slidingWindowMaxTime"),
 		SlidingWindowMaxSize:   c.Int("slidingWindowMaxSize"),
 		SleepBetweenIterations: c.Int("sleepBetweenIterations"),
@@ -450,8 +452,10 @@ func handleStaticFlagsMode(c *cli.Context) error {
 	diags := cfg.Diagnostics()
 
 	trieConfig := &config.TrieConfig{
-		UserAgentRegex: c.String("useragentRegex"),
-		EndpointRegex:  c.String("endpointRegex"),
+		TrieCommon: config.TrieCommon{
+			UserAgentRegex: c.String("useragentRegex"),
+			EndpointRegex:  c.String("endpointRegex"),
+		},
 	}
 
 	// A bad --useragentRegex/--endpointRegex routes into cfg.diags; the barrier

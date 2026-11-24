@@ -300,7 +300,9 @@ func TestLiveConfigValidation(t *testing.T) {
 						SleepBetweenIterations: 10,
 						// clusterArgSets is now a per-window required field
 						// (an empty window clusters nothing - a silent no-op).
-						ClusterArgSets: []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
+						TrieCommon: TrieCommon{
+							ClusterArgSets: []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
+						},
 					},
 				},
 			},
@@ -911,8 +913,10 @@ endpointRegex = ""
 func TestCompileRegex(t *testing.T) {
 	t.Run("valid regex compiles", func(t *testing.T) {
 		tc := &TrieConfig{
-			UserAgentRegex: ".*bot.*",
-			EndpointRegex:  "/api/.*",
+			TrieCommon: TrieCommon{
+				UserAgentRegex: ".*bot.*",
+				EndpointRegex:  "/api/.*",
+			},
 		}
 		if err := tc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed: %v", err)
@@ -928,7 +932,7 @@ func TestCompileRegex(t *testing.T) {
 	})
 
 	t.Run("invalid regex returns error", func(t *testing.T) {
-		tc := &TrieConfig{UserAgentRegex: "[invalid"}
+		tc := &TrieConfig{TrieCommon: TrieCommon{UserAgentRegex: "[invalid"}}
 		if err := tc.CompileRegex(); err == nil {
 			t.Error("Expected error for invalid regex")
 		}
@@ -947,8 +951,10 @@ func TestCompileRegex(t *testing.T) {
 
 	t.Run("sliding trie config compiles", func(t *testing.T) {
 		stc := &SlidingTrieConfig{
-			UserAgentRegex: ".*scanner.*",
-			EndpointRegex:  "/admin/.*",
+			TrieCommon: TrieCommon{
+				UserAgentRegex: ".*scanner.*",
+				EndpointRegex:  "/admin/.*",
+			},
 		}
 		if err := stc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed: %v", err)

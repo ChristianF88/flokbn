@@ -33,8 +33,10 @@ func newGlobalFiltersConfig(whitelistPath, uaWhitelistPath string) *config.Confi
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"baseline": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},

@@ -58,7 +58,7 @@ endpointRegex = "[z-a]"
 // CompileRegex (the error-returning wrapper) reports both failures too, and a
 // bad pattern in one field does not stop the other field from compiling.
 func TestCompileRegexFieldsAreIndependent(t *testing.T) {
-	tc := &TrieConfig{UserAgentRegex: "(unclosed", EndpointRegex: "[z-a]"}
+	tc := &TrieConfig{TrieCommon: TrieCommon{UserAgentRegex: "(unclosed", EndpointRegex: "[z-a]"}}
 	err := tc.CompileRegex()
 	if err == nil {
 		t.Fatal("want an error for two bad patterns")
@@ -69,7 +69,7 @@ func TestCompileRegexFieldsAreIndependent(t *testing.T) {
 		}
 	}
 
-	stc := &SlidingTrieConfig{UserAgentRegex: "(unclosed", EndpointRegex: "^/api/"}
+	stc := &SlidingTrieConfig{TrieCommon: TrieCommon{UserAgentRegex: "(unclosed", EndpointRegex: "^/api/"}}
 	if err := stc.CompileRegex(); err == nil || !strings.Contains(err.Error(), "invalid useragentRegex pattern") {
 		t.Fatalf("want a useragentRegex error, got: %v", err)
 	}

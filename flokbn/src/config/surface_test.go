@@ -210,7 +210,9 @@ func TestNegativeSleepBetweenIterationsRejected(t *testing.T) {
 			SlidingWindowMaxTime:   time.Hour,
 			SlidingWindowMaxSize:   10,
 			SleepBetweenIterations: -5,
-			ClusterArgSets:         DefaultClusterArgSets(),
+			TrieCommon: TrieCommon{
+				ClusterArgSets: DefaultClusterArgSets(),
+			},
 		}},
 	}
 	err := cfg.ValidateLive()

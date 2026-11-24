@@ -27,7 +27,7 @@ func TestTimeBounds_WallClockVsInstant(t *testing.T) {
 		// so it must NOT be excluded - even though as a true instant logTS (05:00
 		// UTC) is before 06:00 UTC.
 		start := time.Date(2025, 7, 6, 6, 0, 0, 0, time.UTC)
-		tc := &config.TrieConfig{StartTime: &start, StartTimeHasOffset: false}
+		tc := &config.TrieConfig{TrieCommon: config.TrieCommon{StartTime: &start, StartTimeHasOffset: false}}
 		tb := makeTimeBounds(tc)
 		if tb.excluded(logTS) {
 			t.Errorf("+0100 06:00 line excluded by zone-less start 06:00 - wall-clock match expected")
@@ -44,7 +44,7 @@ func TestTimeBounds_WallClockVsInstant(t *testing.T) {
 
 	t.Run("zone-less end bound matches by wall-clock", func(t *testing.T) {
 		end := time.Date(2025, 7, 6, 6, 0, 0, 0, time.UTC)
-		tc := &config.TrieConfig{EndTime: &end, EndTimeHasOffset: false}
+		tc := &config.TrieConfig{TrieCommon: config.TrieCommon{EndTime: &end, EndTimeHasOffset: false}}
 		tb := makeTimeBounds(tc)
 		if tb.excluded(logTS) {
 			t.Errorf("+0100 06:00 line excluded by zone-less end 06:00 - should be within (== boundary)")
@@ -58,7 +58,7 @@ func TestTimeBounds_WallClockVsInstant(t *testing.T) {
 	t.Run("explicit-offset start bound compares as true instant", func(t *testing.T) {
 		// Bound start = 06:00 +0100 == 05:00 UTC, explicit offset → instant.
 		start := time.Date(2025, 7, 6, 6, 0, 0, 0, plusOne)
-		tc := &config.TrieConfig{StartTime: &start, StartTimeHasOffset: true}
+		tc := &config.TrieConfig{TrieCommon: config.TrieCommon{StartTime: &start, StartTimeHasOffset: true}}
 		tb := makeTimeBounds(tc)
 		// logTS is exactly 06:00 +0100 (== the bound instant) → not excluded.
 		if tb.excluded(logTS) {
@@ -78,7 +78,7 @@ func TestTimeBounds_WallClockVsInstant(t *testing.T) {
 	t.Run("explicit-offset end bound compares as true instant", func(t *testing.T) {
 		// Bound end = 06:00 +0100 == 05:00 UTC, explicit → instant.
 		end := time.Date(2025, 7, 6, 6, 0, 0, 0, plusOne)
-		tc := &config.TrieConfig{EndTime: &end, EndTimeHasOffset: true}
+		tc := &config.TrieConfig{TrieCommon: config.TrieCommon{EndTime: &end, EndTimeHasOffset: true}}
 		tb := makeTimeBounds(tc)
 		// logTSMinus7 = 13:00 UTC, after 05:00 UTC → excluded.
 		if !tb.excluded(logTSMinus7) {

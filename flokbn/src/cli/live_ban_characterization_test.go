@@ -466,11 +466,13 @@ func BenchmarkLiveLoopIteration(b *testing.B) {
 			stc := &config.SlidingTrieConfig{
 				SlidingWindowMaxTime: time.Hour,
 				SlidingWindowMaxSize: 20000,
-				ClusterArgSets: []config.ClusterArgSet{
-					testClusterArgSet(),
-					{MinClusterSize: 1000, MinDepth: 8, MaxDepth: 16, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						testClusterArgSet(),
+						{MinClusterSize: 1000, MinDepth: 8, MaxDepth: 16, MeanSubnetDifference: 0.5},
+					},
+					UseForJail: []bool{true, false},
 				},
-				UseForJail: []bool{true, false},
 			}
 			cfg := &config.Config{
 				Global: &config.GlobalConfig{

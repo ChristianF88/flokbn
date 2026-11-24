@@ -53,11 +53,11 @@ func TestShouldIncludeRequest_PrefilterEqualsPlain(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			tc := &TrieConfig{UserAgentRegex: c.uaPat, EndpointRegex: c.epPat}
+			tc := &TrieConfig{TrieCommon: TrieCommon{UserAgentRegex: c.uaPat, EndpointRegex: c.epPat}}
 			if err := tc.CompileRegex(); err != nil {
 				t.Fatalf("CompileRegex: %v", err)
 			}
-			stc := &SlidingTrieConfig{UserAgentRegex: c.uaPat, EndpointRegex: c.epPat}
+			stc := &SlidingTrieConfig{TrieCommon: TrieCommon{UserAgentRegex: c.uaPat, EndpointRegex: c.epPat}}
 			if err := stc.CompileRegex(); err != nil {
 				t.Fatalf("CompileRegex (sliding): %v", err)
 			}

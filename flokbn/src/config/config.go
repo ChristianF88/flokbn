@@ -43,12 +43,22 @@ type ClusterArgSet struct {
 	MeanSubnetDifference float64
 }
 
-type TrieConfig struct {
-	UserAgentRegex string     `toml:"useragentRegex"`
-	EndpointRegex  string     `toml:"endpointRegex"`
+// TrieCommon holds what a [static.<name>] trie and a [live.<name>] window have
+// in common: the request filters and the cluster-arg sets with their jail
+// flags. TrieConfig and SlidingTrieConfig embed it by value, so its fields and
+// methods are promoted (tc.UserAgentRegex, tc.ShouldIncludeRequest(req)) and a
+// call costs the same as on the outer type. Only a composite literal has to
+// name it:
+//
+//	config.TrieConfig{TrieCommon: config.TrieCommon{UserAgentRegex: "bot"}}
+type TrieCommon struct {
+	UserAgentRegex string `toml:"useragentRegex"`
+	EndpointRegex  string `toml:"endpointRegex"`
+	// StartTime and EndTime filter requests in a static trie. A live window
+	// parses and validates them the same way but does not apply them (the
+	// window is bounded by SlidingWindowMaxTime; see Config.LiveWarnings).
 	StartTime      *time.Time `toml:"startTime"`
 	EndTime        *time.Time `toml:"endTime"`
-	CIDRRanges     []string   `toml:"cidrRanges"`
 	ClusterArgSets []ClusterArgSet
 	UseForJail     []bool `toml:"useForJail"`
 
@@ -85,39 +95,18 @@ type TrieConfig struct {
 	useForJailHadError     bool
 }
 
+// TrieConfig is one [static.<name>] trie.
+type TrieConfig struct {
+	TrieCommon
+	CIDRRanges []string `toml:"cidrRanges"`
+}
+
+// SlidingTrieConfig is one [live.<name>] window.
 type SlidingTrieConfig struct {
-	UserAgentRegex         string        `toml:"useragentRegex"`
-	EndpointRegex          string        `toml:"endpointRegex"`
+	TrieCommon
 	SlidingWindowMaxTime   time.Duration `toml:"slidingWindowMaxTime"`
 	SlidingWindowMaxSize   int           `toml:"slidingWindowMaxSize"`
 	SleepBetweenIterations int           `toml:"sleepBetweenIterations"`
-	ClusterArgSets         []ClusterArgSet
-	UseForJail             []bool `toml:"useForJail"`
-
-	// Sliding tries do not consume these bounds for filtering (the window is
-	// time-bounded by SlidingWindowMaxTime); they exist only so Validate(LiveMode)
-	// can surface a malformed or inverted [live.<name>] startTime/endTime, parsed
-	// identically to a [static.<name>] bound.
-	StartTime          *time.Time `toml:"-"`
-	EndTime            *time.Time `toml:"-"`
-	StartTimeHasOffset bool       `toml:"-"`
-	EndTimeHasOffset   bool       `toml:"-"`
-	// Original timestamp literal (see TrieConfig.startTimeRaw).
-	startTimeRaw string
-	endTimeRaw   string
-
-	// Compiled regex patterns for fast filtering
-	userAgentRegexCompiled *regexp.Regexp
-	endpointRegexCompiled  *regexp.Regexp
-
-	// Required-literal prefilters screen inputs before the regex runs.
-	// nil means no prefilter is available (run the regex directly).
-	userAgentPrefilter *regexprefilter.Prefilter
-	endpointPrefilter  *regexprefilter.Prefilter
-
-	// CFG-02 collect-all guard flags (see TrieConfig).
-	clusterArgSetsHadError bool
-	useForJailHadError     bool
 
 	// ignoredKeys lists the keys present in this [live.<name>] table that are
 	// accepted but have no effect in live mode (see Config.LiveWarnings).
@@ -1034,14 +1023,14 @@ func parseTrieConfig(name string, m map[string]any, diags *ConfigDiagnostics) (*
 	if err != nil {
 		return nil, err
 	}
-	tc := &TrieConfig{
+	tc := &TrieConfig{TrieCommon: TrieCommon{
 		UserAgentRegex:         uaRegex,
 		EndpointRegex:          epRegex,
 		ClusterArgSets:         clusterArgSets,
 		UseForJail:             useForJail,
 		clusterArgSetsHadError: clusterHadError,
 		useForJailHadError:     useForJailHadError,
-	}
+	}}
 	// ANTI-MISALIGNMENT (security): when a clusterArgSets row was dropped, the
 	// surviving (shorter) slice must NOT be jailed by a mis-sized useForJail.
 	// The barrier always aborts when a clusterArgSets diagnostic is present, so
@@ -1138,15 +1127,17 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 		return nil, err
 	}
 	stc := &SlidingTrieConfig{
-		UserAgentRegex: uaRegex,
-		EndpointRegex:  epRegex,
+		TrieCommon: TrieCommon{
+			UserAgentRegex:         uaRegex,
+			EndpointRegex:          epRegex,
+			ClusterArgSets:         clusterArgSets,
+			UseForJail:             useForJail,
+			clusterArgSetsHadError: clusterHadError,
+			useForJailHadError:     useForJailHadError,
+		},
 		// Same default as the --sleepBetweenIterations flag; overwritten below
 		// when the key is present (an explicit 0 is honored).
 		SleepBetweenIterations: DefaultSleepBetweenIterations,
-		ClusterArgSets:         clusterArgSets,
-		UseForJail:             useForJail,
-		clusterArgSetsHadError: clusterHadError,
-		useForJailHadError:     useForJailHadError,
 	}
 	// Keys that are validated below but never consumed by a sliding trie; the
 	// live command warns about each one (Config.LiveWarnings).
