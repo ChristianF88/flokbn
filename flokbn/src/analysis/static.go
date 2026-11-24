@@ -182,10 +182,10 @@ func runStatic(ctx context.Context, cfg *config.Config, keepRequests bool) (*out
 	}
 
 	// The log's sorted IPs feed general.unique_ips and every trie without
-	// filters. On an IP-only run every trie starts from them, so sort before
-	// the trie phase. On a full run sort in the background while the tries
-	// with filters select their requests; joined right after the trie phase.
-	if parsed.ipOnly {
+	// filters. When no trie filters, every trie starts from them: sort before
+	// the trie phase. Otherwise sort in the background while the tries with
+	// filters select their requests; joined right after the trie phase.
+	if !needsNonIPFields {
 		parsed.sortedIPs()
 	} else {
 		go parsed.sortedIPs()
