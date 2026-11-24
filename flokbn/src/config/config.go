@@ -329,20 +329,15 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 		diags.msgs = append(diags.msgs, c.diags.msgs...)
 	}
 
+	// Per-table checks: the same for a [static.<name>] trie and a
+	// [live.<name>] window.
+	c.eachTrie(mode, func(section string, t *TrieCommon) {
+		t.validateTimestamps(diags, section)
+		t.validateUseForJailAlignment(diags, section)
+	})
+
 	switch mode {
 	case StaticMode:
-		for name, tc := range c.StaticTries {
-			if tc == nil {
-				continue
-			}
-			validateTrieTimestamps(diags, "static."+name,
-				tc.startTimeRaw, tc.endTimeRaw,
-				tc.StartTime, tc.EndTime,
-				tc.StartTimeHasOffset, tc.EndTimeHasOffset)
-			validateUseForJailAlignment("static."+name,
-				tc.ClusterArgSets, tc.UseForJail,
-				tc.clusterArgSetsHadError, tc.useForJailHadError, diags)
-		}
 		// logFormat: the SAME empty->default fallback analysis applies (an empty
 		// logFormat is valid; the default is used). validateFormat("") FAILS for
 		// the missing %h, so the fallback MUST precede the check.
@@ -357,7 +352,7 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 			} else {
 				// A filter needing a field the format never extracts would
 				// silently match nothing (or everything); reject it here.
-				c.validateFilterFields(diags, effFormat)
+				c.validateFilterFields(diags, StaticMode, effFormat)
 			}
 			// logFile-exists migrated from the CLI handler (CFG-02): a configured
 			// but absent logfile enumerates alongside (e.g.) a bad startTime instead
@@ -383,18 +378,6 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 			c.validateJailFile(diags)
 		}
 	case LiveMode:
-		for name, stc := range c.LiveTries {
-			if stc == nil {
-				continue
-			}
-			validateTrieTimestamps(diags, "live."+name,
-				stc.startTimeRaw, stc.endTimeRaw,
-				stc.StartTime, stc.EndTime,
-				stc.StartTimeHasOffset, stc.EndTimeHasOffset)
-			validateUseForJailAlignment("live."+name,
-				stc.ClusterArgSets, stc.UseForJail,
-				stc.clusterArgSetsHadError, stc.useForJailHadError, diags)
-		}
 		c.validateLiveInto(diags)
 		c.validateListFiles(diags)
 		// Live always loads the jail (runLiveLoop reads it unconditionally), so
@@ -402,6 +385,27 @@ func (c *Config) Validate(mode RunMode) *ConfigDiagnostics {
 		c.validateJailFile(diags)
 	}
 	return diags
+}
+
+// eachTrie calls fn for every table of the mode - the [static.<name>] tries or
+// the [live.<name>] windows - with the table's section name as diagnostics
+// spell it ("static.<name>" / "live.<name>", no brackets) and the part both
+// kinds share. Tables are visited in map order.
+func (c *Config) eachTrie(mode RunMode, fn func(section string, t *TrieCommon)) {
+	switch mode {
+	case StaticMode:
+		for name, tc := range c.StaticTries {
+			if tc != nil {
+				fn("static."+name, &tc.TrieCommon)
+			}
+		}
+	case LiveMode:
+		for name, stc := range c.LiveTries {
+			if stc != nil {
+				fn("live."+name, &stc.TrieCommon)
+			}
+		}
+	}
 }
 
 // plotPathDiagnostic returns a non-empty diagnostic line when a configured
@@ -464,26 +468,24 @@ func (c *Config) validateJailFile(diags *ConfigDiagnostics) {
 	}
 }
 
-// validateTrieTimestamps runs the (a) startTime-format, (b) endTime-format, and
-// (c) endTime<startTime range checks for one trie, in that order, with NO early
-// return: a single trie with BOTH a bad startTime AND a bad endTime yields TWO
+// validateTimestamps runs the (a) startTime-format, (b) endTime-format, and
+// (c) endTime<startTime range checks for one table, in that order, with NO early
+// return: a single table with BOTH a bad startTime AND a bad endTime yields TWO
 // messages. The section is passed WITHOUT brackets (Add/AddRange add them) and
 // matches the unknown-key grammar prefix ("static."+name / "live."+name).
-func validateTrieTimestamps(diags *ConfigDiagnostics, section string,
-	startRaw, endRaw string, start, end *time.Time, startHasOffset, endHasOffset bool) {
-
+func (t *TrieCommon) validateTimestamps(diags *ConfigDiagnostics, section string) {
 	// Format: raw captured (non-empty) but never parsed => no accepted layout matched.
-	if startRaw != "" && start == nil {
-		diags.Add(section, "startTime", startRaw, TimeBoundFormats, nil)
+	if t.startTimeRaw != "" && t.StartTime == nil {
+		diags.Add(section, "startTime", t.startTimeRaw, TimeBoundFormats, nil)
 	}
-	if endRaw != "" && end == nil {
-		diags.Add(section, "endTime", endRaw, TimeBoundFormats, nil)
+	if t.endTimeRaw != "" && t.EndTime == nil {
+		diags.Add(section, "endTime", t.endTimeRaw, TimeBoundFormats, nil)
 	}
 	// Range: only when both bounds parsed. The offset-equality gate matches
 	// makeTimeBounds (URGENT-09): a zone-less wall-clock bound and an
 	// offset-bearing instant are not comparable via time.Before, so skip then.
-	if start != nil && end != nil && startHasOffset == endHasOffset && end.Before(*start) {
-		diags.AddRange(section, endRaw, startRaw)
+	if t.StartTime != nil && t.EndTime != nil && t.StartTimeHasOffset == t.EndTimeHasOffset && t.EndTime.Before(*t.StartTime) {
+		diags.AddRange(section, t.endTimeRaw, t.startTimeRaw)
 	}
 }
 
@@ -1198,23 +1200,23 @@ func parseSlidingTrieConfig(name string, m map[string]any, diags *ConfigDiagnost
 // useForJail[i], so a present-but-mismatched array silently shifts and disables
 // operator-requested jail rules - the landmine the ticket calls out.
 //
-// GUARD (CFG-02, security): SKIP the check when clusterHadError || jailHadError
-// for this trie - EITHER producer dropped a row/element, shortening its slice,
+// GUARD (CFG-02, security): SKIP the check when clusterArgSetsHadError ||
+// useForJailHadError - EITHER producer dropped a row/element, shortening its slice,
 // which would emit a SPURIOUS mismatch. The guard trips on ANY error for the
 // trie (not per-row). The barrier already aborts on the producer's diagnostic.
 //
 // An OMITTED useForJail (len 0) is valid regardless of clusterArgSets length:
 // it is the explicit "cluster but never jail" default, an omitted-optional-
 // field, not a misalignment.
-func validateUseForJailAlignment(section string, clusterArgSets []ClusterArgSet, useForJail []bool, clusterHadError, jailHadError bool, diags *ConfigDiagnostics) {
-	if clusterHadError || jailHadError {
+func (t *TrieCommon) validateUseForJailAlignment(diags *ConfigDiagnostics, section string) {
+	if t.clusterArgSetsHadError || t.useForJailHadError {
 		return
 	}
-	if len(useForJail) == 0 {
+	if len(t.UseForJail) == 0 {
 		return
 	}
-	if len(useForJail) != len(clusterArgSets) {
-		diags.AddRaw(fmt.Sprintf("[%s] useForJail has %d entries but clusterArgSets has %d; they must match one-to-one (omit useForJail to apply no jail rules)", section, len(useForJail), len(clusterArgSets)))
+	if len(t.UseForJail) != len(t.ClusterArgSets) {
+		diags.AddRaw(fmt.Sprintf("[%s] useForJail has %d entries but clusterArgSets has %d; they must match one-to-one (omit useForJail to apply no jail rules)", section, len(t.UseForJail), len(t.ClusterArgSets)))
 	}
 }
 
@@ -1342,7 +1344,7 @@ func (c *Config) validateLiveInto(diags *ConfigDiagnostics) {
 			diags.Add("live", "logFormat", c.Live.LogFormat,
 				"a valid log format string with exactly one %h", err)
 		} else {
-			c.validateLiveFilterFields(diags, effFormat)
+			c.validateFilterFields(diags, LiveMode, effFormat)
 		}
 	}
 
