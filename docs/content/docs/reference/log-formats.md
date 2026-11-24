@@ -3,7 +3,7 @@ title: "Log Formats"
 description: "Log format specifiers for parsing HTTP access logs"
 summary: "Complete reference for flokbn log format specifiers and common format patterns"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-11-23T10:00:00+00:00
+lastmod: 2026-11-24T10:00:00+00:00
 draft: false
 weight: 230
 slug: "log-formats"
@@ -137,7 +137,7 @@ Log: `192.0.2.1|[09/Oct/2025:10:15:23 +0000]|GET|/index.html|200`
 
 The same works with any single-character delimiter (`,`, `;`, tab) and with quoted fields: `%h|\"%r\"|%s|\"%u\"` for `192.0.2.1|"GET / HTTP/1.1"|200|"curl/8"`. Two rules apply to delimiter-separated logs:
 
-- A value that is neither quoted nor bracketed ends at the delimiter **or at a space**. A value containing spaces (a timestamp with a zone offset, a User-Agent, a request line) must therefore be bracketed or quoted in the log. `%h|%t|%m` only works for a timestamp without an offset, such as `09/Oct/2025:10:15:23`.
+- A free-text value that is neither quoted nor bracketed (`%U`, `%u`, `%r`, `%t`, `%^`) runs to its delimiter, spaces included: `%h|%t|%U|%s` reads `192.0.2.1|09/Oct/2025:10:15:23 +0000|/a b|200` correctly in static mode. An address, a method, a status and a byte count (`%h`, `%m`, `%s`, `%b`) cannot contain a space and end at the delimiter **or at a space**. Live mode ends every bare value at the first space - see [Spaces in bare fields](#spaces-in-bare-fields).
 - An empty value between two delimiters (`192.0.2.1||GET`) is one empty field.
 
 ### Syslog Prefix
@@ -185,6 +185,39 @@ Use `%^` for any field you don't need. Can appear unlimited times.
 
 Write `\"%^\"` for a field the log quotes (the Referer in a combined log) so the format documents the real layout. As a safety net, a value that starts with a double quote is always read up to its closing quote, even when the format leaves that slot bare: a Referer such as `"http://a b"` is one field, never two. Without that rule a space inside a quoted, client-controlled field would shift every later field and a client could choose the address that `%h` reads.
 
+## Spaces in bare fields
+
+A *bare* field is one the format neither quotes nor brackets: `%^`, `%U`, `%s` as opposed to `\"%r\"` or `[%t]`. A bare value has no closing character, so it is read up to the next space. That is a problem when the value is free text chosen by the client. The standard example is the user name of the combined log format (`$remote_user`, Apache `%u`): it is whatever the client sent as its HTTP basic-auth name, spaces included. Read naively, `john doe` is two fields, every field behind it sits one slot off, and the line is either dropped as an invalid address or - worse - `%h` is read from a field the client also controls.
+
+flokbn therefore lets **the literals of the format delimit the fields**. A space inside a bare field has no influence on the fields behind it when the format is *properly specified* for that field, which means that one of these follows it:
+
+| What follows the bare field in the format | Example | How the end of the field is found |
+|---|---|---|
+| a bracketed timestamp | `%^ [%t]` | The timestamp is recognised by its content: the fields from `%t` on are read from the first `[...]` behind the field that holds a valid timestamp. |
+| a quoted field | `%^ \"%r\"` | The quoted field starts at the next double quote that follows a space. |
+| a bracketed timestamp, then a quoted field | `%^ [%t] \"%r\"` | Both of the above; in addition the timestamp used is the bracketed field directly in front of that quote, so a timestamp forged inside the user name is not taken. |
+| a delimiter other than a space | `%U\|`, `%^,`, `[%^]`, the last field of a quoted group (`%^\"`) | The value runs to that delimiter (applies to the free-text specifiers `%^`, `%U`, `%u`, `%r`, `%t`). |
+
+Both default formats are properly specified for the user name: it is followed by ` [%t] \"%r\"`.
+
+The format is **inherently ambiguous** where a bare field is followed by a single space and another bare field - `%^ %^`, `%U %s`, `%^ %h`. Nothing in the format says which of the two a space belongs to, so there the first space ends the field, as it always has. In practice:
+
+- In a run of bare fields in front of an anchor (`%h %^ %^ [%t]`), fields are counted from the left. A space in one of them shifts the *remaining fields of the same run* and nothing else. That is harmless when the client-controlled field is the last of the run (the user name is), and it is why `%h` belongs in front of a client-controlled bare field, never directly behind one.
+- Bare fields behind the timestamp (`[%t] %m %U %s`) have no anchor in front of them. Quote them in the log, or separate them with a delimiter other than a space.
+
+**What a client can still do** - none of this is specific to flokbn, but you should know it:
+
+- **Servers that do not escape quotes.** Everything above assumes that a double quote written by a client arrives escaped in the log (nginx writes `\x22`, Apache `\"`; both are the default). With nginx `escape=none`, or a log written by an application that does not escape, a client can write quotes, and with them complete fake fields.
+- **A bare field directly in front of a bare `%h`** (`%^ %h`), or any other ambiguous pair: the space shifts the second field. A shifted `%h` is not an address, so the line is counted under `skipped_invalid_ips` - the client is not detected.
+- **A bare field behind the timestamp** (`[%t] %m`): a bracketed token in the user name (`a [x]`) is taken for the timestamp, and the line is shifted from there.
+- **An unclosed bracket in the user name** (`a [`) swallows the real timestamp. The line keeps its address and all other fields but has no timestamp, like any line with an invalid one; a trie with a `startTime` excludes it.
+- **Fewer fields than the format says** in front of the timestamp is a different log layout, not an attack; static mode does not guess it (live mode does, see below). Set a matching `logFormat`.
+- A value the format quotes must be quoted in the log. A bare value in such a slot is still accepted where it always was (a bare `-` behind a status or byte count, for instance), but directly behind a bare free-text field or the timestamp it is taken for overflow of that field.
+
+If you do not need the user name, the simplest protection is not to log it (nginx: write `-` instead of `$remote_user`), or to quote it in the log (`\"$remote_user\"`, `\"%^\"` in the format).
+
+Lines that follow their format are parsed exactly as before and at the same speed; the rules above only come into play for a line that does not fit. Live mode implements the first rule only, see the next section.
+
 ## Live Mode
 
 Live mode parses the `message` of every shipped event with its `logFormat` (default: client IP first, see [Defaults](#defaults)). On top of the rules above:
@@ -194,7 +227,7 @@ Live mode parses the `message` of every shipped event with its `logFormat` (defa
 - **Re-alignment on the timestamp.** Fields are taken by position, so a space inside an unquoted field shifts every field behind it. In the combined log format the user name in front of the timestamp is such a field, and it is whatever the client sent as its HTTP basic-auth name. When the timestamp does not parse at its position and the format brackets it (`[%t]`), live mode takes the first `[...]` in the line that holds a valid timestamp as the `%t` field and reads the fields before and after it relative to that. A client therefore cannot keep its requests out of the window with a space in its user name. The same mechanism accepts lines with more or fewer fields in front of the timestamp than the format says - but set a matching `logFormat` rather than relying on it.
 
 {{< callout context="caution" title="Unquoted free-text fields stay client-controlled" icon="outline/alert-triangle" >}}
-Re-alignment cannot tell a forged timestamp from the real one: a client whose user name is itself a bracketed, valid, old timestamp gets its requests stamped with that time, and they expire from the window at once. If you do not need the user name in the log, drop it from the web server's log format (nginx: write `-` instead of `$remote_user`) or quote it (`"$remote_user"` with `\"%^\"` in the format); a quoted field cannot shift the others. Static mode takes fields strictly by position and does not re-align.
+Re-alignment cannot tell a forged timestamp from the real one: a client whose user name is itself a bracketed, valid, old timestamp gets its requests stamped with that time, and they expire from the window at once. If you do not need the user name in the log, drop it from the web server's log format (nginx: write `-` instead of `$remote_user`) or quote it (`"$remote_user"` with `\"%^\"` in the format); a quoted field cannot shift the others. Static mode re-aligns on the timestamp too, and has further rules that live mode lacks (it uses the timestamp directly in front of the quoted request, and it re-aligns on quotes and non-space delimiters) - see [Spaces in bare fields](#spaces-in-bare-fields).
 {{< /callout >}}
 
 ```toml
@@ -219,7 +252,8 @@ One request per line, terminated by `\n` or `\r\n`. The rules are the same for s
 3. **Brackets** must be included if present (`[%t]` for `[timestamp]`)
 4. **Delimiters** must match (spaces, pipes, etc.)
 5. **Quoted groups**: several fields inside one pair of quotes (`\"%^ %U %^\"` for `"GET /x HTTP/1.1"` when you want the path via `%U`) must begin with `%^` (it absorbs the opening quote) and be followed by a space. A group followed by another delimiter (`\"%^ %U %^\"|%s`) is rejected at startup; use `\"%r\"` there instead.
-6. **Literal words are not matched.** Only the specifiers and the single character after each one are compiled. A standalone word such as `- -` between specifiers is not consumed from the log, so write `%h %^ %^ [%t]`, not `%h - - [%t]`.
+6. **Free-text bare fields need something behind them.** A bare field whose value the client chooses (the user name) should be followed by `[%t]`, a quoted field or a delimiter other than a space - see [Spaces in bare fields](#spaces-in-bare-fields).
+7. **Literal words are not matched.** Only the specifiers and the single character after each one are compiled. A standalone word such as `- -` between specifiers is not consumed from the log, so write `%h %^ %^ [%t]`, not `%h - - [%t]`.
 
 ## Testing Your Format
 

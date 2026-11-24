@@ -35,6 +35,11 @@ type FieldExtractor struct {
 	// it. A space (also used when there is no such literal) is harmless: the
 	// next field skips leading spaces anyway.
 	after byte
+	// resync says what to do when a bare value in this slot stops at a space
+	// although the format ends the slot with something else (resyncNone:
+	// nothing, the value ends there). Set by enableRealign only - see
+	// realign.go.
+	resync uint8
 }
 
 // CompiledFormat represents a pre-compiled log format for fast parsing
@@ -49,6 +54,9 @@ type CompiledFormat struct {
 	// path pays a single bool check instead of treating the zero value (GET==0)
 	// as an "unset" sentinel - which silently clobbered a %m-parsed GET.
 	hasMethodField bool
+	// anchors is what the format literally puts around each slot, recorded at
+	// compile time for enableRealign.
+	anchors []slotAnchor
 }
 
 // parseCounters holds malformed-field tallies shared by all parse workers.
@@ -107,6 +115,8 @@ func NewParser(format string) (*Parser, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The file parser re-aligns a line on the literals of the format.
+	compiled.enableRealign()
 	p.compiled = compiled
 
 	return p, nil
@@ -1214,6 +1224,7 @@ func compileFormat(format string) (*CompiledFormat, error) {
 	}
 
 	var extractors []FieldExtractor
+	var anchors []slotAnchor
 	hasMethodField := false
 
 	for i := 0; i < len(format); i++ {
@@ -1286,6 +1297,12 @@ func compileFormat(format string) (*CompiledFormat, error) {
 				extractor.after = ' ' // the next specifier follows directly: no separator
 			}
 
+			anchors = append(anchors, slotAnchor{
+				selfQuoted:  i > 0 && format[i-1] == '"' && extractor.Delimiter == '"',
+				bracketed:   i > 0 && format[i-1] == '[' && extractor.Delimiter == ']',
+				spaceBefore: i > 1 && format[i-2] == ' ',
+				specifierOn: extractor.Delimiter == '%' && i+2 < len(format),
+			})
 			extractors = append(extractors, extractor)
 			i++ // Skip format character
 		}
@@ -1296,6 +1313,7 @@ func compileFormat(format string) (*CompiledFormat, error) {
 		pattern:        format,
 		counters:       &parseCounters{}, // never nil: hot path may Add without a nil check
 		hasMethodField: hasMethodField,
+		anchors:        anchors,
 	}, nil
 }
 
@@ -1377,8 +1395,19 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *accesslo
 				pos++
 			}
 			next = pos
-			if pos < len(line) && line[pos] == delimiter {
-				next++ // the delimiter itself
+			if pos < len(line) {
+				if line[pos] == delimiter {
+					next++ // the delimiter itself
+				} else if extractor.resync != resyncNone {
+					// Slow path (realign.go): the value stopped at a space although
+					// the format ends this slot with something else. A line that
+					// follows its format never gets here.
+					var ts *time.Time
+					if !skipNonIP {
+						ts = &req.Timestamp
+					}
+					start, pos, next = realignBare(line, start, pos, delimiter, extractor.after, extractor.resync, ts)
+				}
 			}
 		}
 
@@ -1559,8 +1588,13 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 				pos++
 			}
 			next = pos
-			if pos < len(line) && line[pos] == delimiter {
-				next++ // the delimiter itself
+			if pos < len(line) {
+				if line[pos] == delimiter {
+					next++ // the delimiter itself
+				} else if extractor.resync != resyncNone {
+					// Slow path - see parseUsingCompiledFormatOpt.
+					start, pos, next = extractor.realignIP(line, start, pos)
+				}
 			}
 		}
 
