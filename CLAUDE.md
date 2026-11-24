@@ -158,10 +158,18 @@ holds a write token, and tests run in the CI job it requires.
   `%h` (`ErrInvalidIP`, incl. IPv6 and 0.0.0.0) or an invalid `%t`
   (`ErrInvalidTimestamp`). A line whose `[%t]` does not parse in place is re-aligned
   on the first bracket holding a valid timestamp (slow path; keeps a space in the
-  client-controlled user field from hiding a request). The file parser does not
-  re-align. The old hardcoded live parser survives only as the test oracle
-  `ingestor/legacy_parser_test.go`; `ingestor/live_parser_diff_test.go` lists every
+  client-controlled user field from hiding a request). The old hardcoded live
+  parser survives only as the test oracle `ingestor/legacy_parser_test.go`; `ingestor/live_parser_diff_test.go` lists every
   divergence from it with the decision taken.
+- File parser re-alignment (`logparser/realign.go`, enabled by `NewParser`): the
+  literals of the format delimit the fields, so a space in a bare free-text field
+  (the user name) does not shift what follows when `[%t]`, a quoted slot or a
+  non-space delimiter comes behind it. `compileFormat` alone stays positional (that
+  is what `LineParser` uses). The slow path hangs off the bare scan's existing
+  "stopped on its delimiter?" test - do not add per-field work to the walkers; the
+  differential tests against `logparser/legacy_walk_test.go` and the asm of the
+  bare path are the check. Rules and residual cases: docs `reference/log-formats.md`,
+  "Spaces in bare fields".
 - Flag/TOML surfaces: aliases `--logFile` (= `--logfile`) and `--cidrRanges`
   (= `--rangesCidr`); `startTime`/`endTime` use one parser for flags and TOML
   (`config.ParseTimeBound`: RFC3339 or the short forms); omitted

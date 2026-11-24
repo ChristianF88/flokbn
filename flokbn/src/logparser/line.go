@@ -130,10 +130,30 @@ const maxTimestampLen = 64
 // The work is linear in the line length: each "[" costs one bounded search for
 // its "]" and one timestamp check that fails within the first few bytes.
 func (lp *LineParser) realign(raw []byte, req *accesslog.Request) {
-	for open := 0; ; open++ {
+	open := findBracketedTimestamp(raw, 0)
+	if open < 0 {
+		return
+	}
+	lp.uncount(raw)
+	*req = accesslog.Request{}
+	_ = lp.head.parseLineReuseOpt(raw[:open], req, false, false)
+	_ = lp.tail.parseLineReuseOpt(raw[open:], req, false, false)
+}
+
+// findBracketedTimestamp returns the offset of the first "[" at or after from
+// that opens a valid bracketed timestamp, or -1 when the rest of the line
+// holds none. It is the one search both re-alignment paths use: LineParser
+// (from the start of the line) and the file parser's walkers (from the slot
+// where the format expects the timestamp).
+//
+// Linear in the line length: each "[" costs one search for its "]" that is
+// bounded by maxTimestampLen and one timestamp check that fails within the
+// first few bytes. It does not allocate.
+func findBracketedTimestamp(raw []byte, from int) int {
+	for open := from; ; open++ {
 		i := bytes.IndexByte(raw[open:], '[')
 		if i < 0 {
-			return
+			return -1
 		}
 		open += i
 		window := raw[open+1:]
@@ -141,14 +161,9 @@ func (lp *LineParser) realign(raw []byte, req *accesslog.Request) {
 			window = window[:maxTimestampLen]
 		}
 		n := bytes.IndexByte(window, ']')
-		if n < 0 || parseTimestamp(raw, open+1, open+1+n).IsZero() {
-			continue
+		if n >= 0 && !parseTimestamp(raw, open+1, open+1+n).IsZero() {
+			return open
 		}
-		lp.uncount(raw)
-		*req = accesslog.Request{}
-		_ = lp.head.parseLineReuseOpt(raw[:open], req, false, false)
-		_ = lp.tail.parseLineReuseOpt(raw[open:], req, false, false)
-		return
 	}
 }
 
