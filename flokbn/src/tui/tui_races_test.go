@@ -111,17 +111,15 @@ func TestConcurrentTrieSwitchingNoRace(t *testing.T) {
 // TestSetRequestDataVizPathNoRace is the AUDIT-02 regression test for the
 // visualization data races (findings #1 + #2 + #3). It drives the REAL ordering
 // the CLI layer uses - SetAnalysisResults then SetRequestData - on a live tview
-// event loop (SimulationScreen), so the background visualization build/precache
-// runs concurrently with the trieCache precache and the UI render closures,
-// exactly as in production.
+// event loop (SimulationScreen), so the background precache runs concurrently
+// with the UI render closures, exactly as in production.
 //
-// On the pre-fix code this path had two concurrent writers of the same
-// VisualizationView: the off-thread preInitializeVisualization
-// (ProcessTrafficData + Render) and the UI closure (PreCacheAllTries +
-// RenderCached). Both wrote v.cachedClusteredData (a map) and v's scalar/array
-// fields, producing a concurrent-map-write panic and data races. Under the fix
-// the view is built and precached by a single goroutine that owns it, then
-// published to the UI goroutine; run with `go test -race ./tui` to verify clean.
+// This path once had two concurrent writers of the same VisualizationView (an
+// off-thread initialisation and a UI closure both wrote its maps and
+// scalar/array fields), producing a concurrent-map-write panic and data races.
+// The view now never leaves the UI goroutine and holds no data: the background
+// goroutine writes only the TrieCache, and the view renders from it. Run with
+// `go test -race ./tui` to verify clean.
 func TestSetRequestDataVizPathNoRace(t *testing.T) {
 	multi := output.NewJSONOutput("static", time.Now())
 	multi.General.TotalRequests = 100
@@ -151,14 +149,15 @@ func TestSetRequestDataVizPathNoRace(t *testing.T) {
 
 	reqs := raceTestRequests()
 
-	// Production order: results first, then request data (which builds the viz).
+	// Production order: results first, then request data (which fills the cache
+	// the viz renders from).
 	a.SetAnalysisResults(multi)
 	a.SetRequestData(reqs)
 
-	// Wait until the background build/precache has published the view and the
-	// final render ran, then drive a few UI-thread reads/writes that used to race
-	// with the off-thread producer.
-	waitFor(t, func() bool { return a.readVizPublished() }, 5*time.Second)
+	// Wait until the background precache has refreshed the view with the
+	// heatmap, then drive a few UI-thread reads/writes that used to race with
+	// the off-thread producer.
+	waitFor(t, func() bool { return showsHeatmap(a.heatmapText()) }, 5*time.Second)
 
 	a.app.QueueUpdateDraw(func() {
 		a.showVisualization()
@@ -180,15 +179,6 @@ func TestSetRequestDataVizPathNoRace(t *testing.T) {
 		t.Fatal("app.Run did not return after Stop")
 	}
 	// tview's Run() finalizes the screen on Stop; do not Fini it again here.
-}
-
-// readVizPublished reports whether the background viz build has published the
-// view, reading the pointer on the UI goroutine via QueueUpdate so the check
-// itself is race-free.
-func (a *App) readVizPublished() bool {
-	published := false
-	a.app.QueueUpdate(func() { published = a.visualizationView != nil })
-	return published
 }
 
 // waitFor polls cond until it returns true or the timeout elapses.

@@ -184,7 +184,7 @@ func errorText(message string) string {
 // writes nothing but the TrieCache, which guards itself with its own lock and
 // publishes one finished trie at a time. The visualization view never leaves
 // the UI goroutine; it reads the published grids from the cache when it
-// renders.
+// renders, and is told to render again once the precache is done.
 func (a *App) SetRequestData(requests []accesslog.Request) {
 	if a.shuttingDown.Load() {
 		return
@@ -195,7 +195,31 @@ func (a *App) SetRequestData(requests []accesslog.Request) {
 	a.mu.Unlock()
 
 	if multiResult != nil {
-		go a.trieCache.PreCacheAllTries(a, multiResult, requests)
+		go a.precacheRequests(multiResult, requests)
+	}
+}
+
+// precacheRequests fills the trie cache from the handed-over requests and then
+// lets the visualization catch up. The visualization is rendered with the
+// results, i.e. before the requests arrive, and the user may already be
+// looking at its loading placeholder ('v' pressed right after the results
+// appeared): without the refresh it would stay there until the next trie
+// switch.
+func (a *App) precacheRequests(multiResult *output.JSONOutput, requests []accesslog.Request) {
+	a.trieCache.PreCacheAllTries(a, multiResult, requests)
+
+	if a.shuttingDown.Load() {
+		return
+	}
+	a.app.QueueUpdateDraw(a.refreshVisualization)
+}
+
+// refreshVisualization re-renders the visualization if it is showing the
+// loading placeholder: the grids it was waiting for may have been published
+// since. Must run on the UI goroutine.
+func (a *App) refreshVisualization() {
+	if a.visualizationView.loading {
+		a.visualizationView.RenderCached()
 	}
 }
 
@@ -1006,10 +1030,8 @@ func (a *App) updateStatusBar() {
 func (a *App) showVisualization() {
 	// The heatmap is rendered whenever a trie is displayed. If that was before
 	// the request precache had published the trie's grids, render again: they
-	// may be there by now.
-	if a.visualizationView.loading {
-		a.visualizationView.RenderCached()
-	}
+	// may be there by now (the precache refreshes only once every trie is done).
+	a.refreshVisualization()
 
 	a.pages.SwitchToPage("visualization")
 	a.updateStatusBar()
