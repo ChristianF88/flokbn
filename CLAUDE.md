@@ -24,7 +24,7 @@ flokbn/src/          # THE GO MODULE lives here, not at repo root
   ingestor/          # Request type; TCPIngestor + own size-limited Lumberjack v2 reader (lumberjack.go)
   trie/              # binary trie, CollectCIDRsNumeric clustering walk
   cidr/              # CIDR merge/subtract, RemoveWhitelisted, UserAgentMatcher
-  analysis/          # Static() / StaticWithRequests() - wires parse→trie→cluster→filter
+  analysis/          # Static() / StaticWithRequests(): one pipeline (runStatic) parse→filter→trie→cluster→publish; UpdateBans
   sliding/           # time+size bounded window for live mode
   jail/              # persistent escalating ban state (jail.go, io.go)
   output/            # JSONOutput, plain text, PlotHeatmap (echarts HTML)
@@ -110,6 +110,17 @@ holds a write token, and tests run in the CI job it requires.
   `jail/whitelist_invariant_test.go`). `RemoveWhitelisted` parses the whitelist once
   (O(B+W), not O(B*W)) and is byte-identical to the old path for IPv4 (proven by
   differential fuzz).
+  `analysis.UpdateBans(*jail.Jail, BanInput)` runs both points plus ban expiry and the
+  jail update on an in-memory jail, without I/O; static mode publishes through it
+  (`analysis/publish.go`).
+- **Static pipeline** (`analysis/static.go`): both entrypoints run `runStatic`. The
+  parse is IP-only when no trie filters and the caller does not want the requests,
+  else full. Tries without filters share one sorted IP list (`parsedLog.sortedIPs`);
+  tries with filters go through the single request filter (`filterResult.add` in
+  `analysis/filter.go`, concurrent above 50,000 requests). The `[global]` list files
+  are read once per run (`analysis/lists.go`). Golden snapshots of the observable
+  output live in `analysis/testdata/static_pipeline/` (regenerate only for an intended
+  change: `go test ./analysis -run TestStaticPipelineGolden -update`).
 - **IPv4-only gate:** discriminator is `len(ipNet.Mask) != 4` (4 bytes = IPv4,
   16 = IPv6 incl. IPv4-mapped `::ffff:`). Rejected at config load; skipped/kept-verbatim
   in hot paths as defense-in-depth.
