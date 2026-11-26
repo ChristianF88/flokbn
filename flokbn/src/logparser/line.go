@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"github.com/ChristianF88/flokbn/accesslog"
@@ -167,15 +168,22 @@ func findBracketedTimestamp(raw []byte, from int) int {
 	}
 }
 
+// scratchCounters lends uncount its private counters. A local variable would
+// do with a current compiler, but Go 1.23 - the version CI and the releases
+// build with - moves it to the heap on every call: its escape analysis takes
+// the atomic operations on the counters for a leak.
+var scratchCounters = sync.Pool{New: func() any { return new(parseCounters) }}
+
 // uncount takes back what the first pass over a misaligned line added to the
 // malformed-field counters: it read status and bytes from the wrong slots, and
 // the re-aligned parse counts them again from the right ones. The first pass
 // is repeated against private counters to learn its exact contribution, which
 // keeps this correct when several goroutines share the parser.
 func (lp *LineParser) uncount(raw []byte) {
-	var seen parseCounters
+	seen := scratchCounters.Get().(*parseCounters)
+	*seen = parseCounters{}
 	first := *lp.compiled
-	first.counters = &seen
+	first.counters = seen
 	var discard accesslog.Request
 	_ = first.parseLineReuseOpt(raw, &discard, true, false)
 	if n := seen.malformedStatus.Load(); n != 0 {
@@ -184,6 +192,7 @@ func (lp *LineParser) uncount(raw []byte) {
 	if n := seen.malformedBytes.Load(); n != 0 {
 		lp.compiled.counters.malformedBytes.Add(-n)
 	}
+	scratchCounters.Put(seen)
 }
 
 // Stats returns the malformed-field counters, cumulative over every ParseLine
