@@ -10,19 +10,21 @@
 [![release](https://img.shields.io/github/v/release/ChristianF88/flokbn)](https://github.com/ChristianF88/flokbn/releases/latest)
 [![license](https://img.shields.io/github/license/ChristianF88/flokbn)](LICENSE)
 
-**A million IPs. A handful of ranges.**
+flokbn is a command-line tool that reads web server access logs and reports the CIDR ranges where the traffic concentrates. It is meant for botnet detection, abuse analysis and building ban lists. A botnet that spreads its requests over thousands of addresses is hard to see one IP at a time, because no single address sends much. Grouped by network, the same traffic shows up as a few ranges that can be banned as a unit.
 
-Say it "flok ban" - a *flock* of IPs, banned as one. Bots don't arrive alone; flokbn treats the flock as the unit.
+flokbn is written in Go. It puts every client IPv4 address into a binary trie and walks the trie to find the ranges. A 2-million-line log takes about a second on an ordinary workstation. `flokbn static` analyzes log files. `flokbn live` receives log lines from Filebeat over the Lumberjack protocol, keeps a sliding window of recent traffic, and maintains a persistent jail with escalating ban durations that firewall automation can read.
 
-flokbn is a Go CLI that clusters the IPs in your access logs into CIDR ranges. A binary trie does the heavy lifting - a 2-million-line log takes about a second on an ordinary workstation. Use it for botnet detection, abuse analysis, or building ban lists.
+The name is pronounced "flok ban": a flock of IPs, banned together.
 
 [Documentation](https://christianf88.github.io/flokbn/) · [Quick start](https://christianf88.github.io/flokbn/docs/getting-started/quick-start/) · [CLI reference](https://christianf88.github.io/flokbn/docs/reference/cli-flags/)
 
 ## Quick start
 
-Grab a prebuilt static binary from the [releases page](https://github.com/ChristianF88/flokbn/releases/latest) (Linux x86_64/arm64/armv7, macOS Intel & Apple Silicon, Windows x86_64 - no Go required), unpack it, and put `flokbn` on your `PATH`. Verify downloads with `sha256sum -c checksums.txt`.
+### Install
 
-Or build from source (Go 1.23+):
+Prebuilt static binaries are on the [releases page](https://github.com/ChristianF88/flokbn/releases/latest) for Linux (x86_64, arm64, armv7), macOS (Intel and Apple Silicon) and Windows (x86_64). They do not require Go. Unpack the archive, put `flokbn` on your `PATH`, and verify the download with `sha256sum -c checksums.txt`.
+
+To build from source you need Go 1.23+:
 
 ```bash
 git clone https://github.com/ChristianF88/flokbn.git
@@ -30,7 +32,9 @@ cd flokbn/flokbn/src
 go build -o flokbn .
 ```
 
-No logs at hand? flokbn builds its own demo - a 1,000,000-line synthetic access log, a calibrated config, and the whitelist/blacklist files it references, all with absolute paths already filled in:
+### Run the demo
+
+If you have no logs to try it on, flokbn can generate a demo. The command below writes a 1,000,000-line synthetic access log, a calibrated config, and the whitelist and blacklist files the config refers to, with absolute paths already filled in.
 
 ```bash
 flokbn generate static-demo --out ./demo
@@ -42,7 +46,7 @@ Run it with:
   flokbn static --config /home/you/demo/complex-static.toml --plain
 ```
 
-Run that command and you get the analysis below. The synthetic log is generated from a fixed seed, so your ranges and counts match these exactly - only the timings differ:
+The command it suggests prints the analysis below. The synthetic log is generated from a fixed seed, so your ranges and counts will match these exactly and only the timings will differ.
 
 ```
 📊 ANALYSIS OVERVIEW
@@ -78,11 +82,13 @@ Active Filters:          UA whitelist (58 patterns)
        t4_targeted_window ...]
 ```
 
-Four tries run over the same log in one pass, each a different detection profile: a baseline, one filtered to bot User-Agents, one to hot endpoints, and one narrowed by User-Agent, endpoint, time window, and CIDR range at once. Alongside the report, the run writes `flokbn_ban.txt` (the ban list), `flokbn_jail.json` (jail state), and `heatmap.html` (a traffic heatmap).
+The demo config defines four tries, each with its own detection profile, and all four run over the same log in one pass. The first is a baseline, the second is filtered to bot User-Agents, the third to hot endpoints, and the fourth is narrowed by User-Agent, endpoint, time window, and CIDR range at once. Besides the report, the run writes `flokbn_ban.txt` (the ban list), `flokbn_jail.json` (the jail state), and `heatmap.html` (a traffic heatmap).
 
-Open `demo/complex-static.toml` to see how it is put together - it is a commented tour of the config format. Each trie lists `clusterArgSets` as `minSize,minDepth,maxDepth,threshold`: a minimum request count, a CIDR depth range to search, and a balance threshold - 0.1 reports a subtree once traffic spreads across it with at most 10% imbalance between its halves. Each set is a detection tier: tight ones catch single hot hosts, loose ones whole subnets, all in one pass. `useForJail` picks which tiers feed the ban list.
+`demo/complex-static.toml` is commented and walks through the config format. Each trie lists its `clusterArgSets` as `minSize,minDepth,maxDepth,threshold`. `minSize` is a minimum request count, the two depths bound the CIDR depth range to search, and `threshold` is a balance threshold. At 0.1, a subtree is reported once traffic spreads across it with at most 10% imbalance between its halves. Each set is a detection tier. Tight sets catch single hot hosts and loose sets catch whole subnets. `useForJail` selects which tiers feed the ban list.
 
-Point it at your own logs with flags instead of a config:
+### Run it on your own logs
+
+flokbn can be driven by a TOML config file, as in the demo, or by flags:
 
 ```bash
 flokbn static --logfile /var/log/nginx/access.log \
@@ -92,45 +98,34 @@ flokbn static --logfile /var/log/nginx/access.log \
 
 ## How it works
 
-1. **Parse** - configurable format strings read Nginx, Apache, or custom logs; an IP-only fast path skips every field the analysis doesn't need.
-2. **Filter** - time windows, whitelist/blacklist files, and regex on User-Agent and endpoint, with a literal prefilter so the regex engine rarely runs.
-3. **Build trie** - every surviving IP is inserted into a binary trie.
-4. **Detect clusters** - configurable depth ranges and balance thresholds walk the trie and emit the CIDR ranges where traffic concentrates.
-5. **Jail** - detected ranges land in a persistent jail: the state your firewall automation reads to ban and unban.
+1. The log is parsed with a configurable format string, which covers Nginx, Apache, and custom layouts. An IP-only fast path skips every field the analysis does not need.
+2. Requests are filtered by time window, by whitelist and blacklist files, and by regular expressions on User-Agent and endpoint. A literal prefilter means the regex engine rarely runs.
+3. Every IP that passes the filters is inserted into a binary trie.
+4. A walk over the trie, bounded by the configured depth ranges and balance thresholds, emits the CIDR ranges where traffic concentrates.
+5. Detected ranges go into a persistent jail, which is the state your firewall automation reads to ban and unban. The ban-candidate list is inspired by fail2ban.
 
-## Two modes
+## Static and live mode
 
-**`flokbn static`** analyzes historical log files: multi-tier detection in one pass, time-window slices for forensics, and JSON, compact JSON, plain-text, or interactive TUI output.
+`flokbn static` analyzes historical log files. It runs several detection tiers in one pass, can restrict a trie to a time window for forensic work, and writes its report as JSON, compact JSON, plain text, or an interactive TUI.
 
-**`flokbn live`** monitors continuously, ingesting over the Lumberjack protocol (Filebeat-compatible). The ingest listener binds `127.0.0.1` unless you set `listen`, and can require TLS client certificates. Sliding windows watch recent traffic; detected ranges go into a persistent jail with escalating ban stages. HTTP endpoints expose `/stats`, `/bans`, and Prometheus `/metrics`. A Docker demo stack wires it into closed-loop deny enforcement with a Grafana dashboard.
+`flokbn live` runs continuously and ingests over the Lumberjack protocol, which is compatible with Filebeat. The ingest listener binds `127.0.0.1` unless you set `listen`, and it can require TLS client certificates. Sliding windows watch recent traffic, and detected ranges go into a persistent jail with escalating ban stages. HTTP endpoints expose `/stats`, `/bans`, and Prometheus `/metrics`. The repository includes a Docker demo stack that connects live mode to closed-loop deny enforcement and a Grafana dashboard.
 
-> **Static and live mode have different default log formats.** Both take the same `logFormat` strings, but static mode defaults to the client IP in the *last* field (an `X-Forwarded-For` layout) and live mode to the client IP in the *first* field (what a web server writes and Filebeat ships unchanged). If the lines you ship put a proxy address first and the client in `X-Forwarded-For`, set `[live] logFormat` (or `live --logFormat`) to match, or flokbn will ban your proxy.
+> **Static and live mode have different default log formats.** Both accept the same `logFormat` strings. By default, static mode reads the client IP from the *last* field (an `X-Forwarded-For` layout), and live mode reads it from the *first* field (what a web server writes and Filebeat ships unchanged). If the lines you ship have a proxy address first and the client in `X-Forwarded-For`, set `[live] logFormat` (or `live --logFormat`) to match. Otherwise flokbn will ban your proxy.
 
 ## Performance
+
+The figures below were measured on a 2.3M-request real-world dataset on a single Linux workstation. Your numbers will vary with hardware and log shape. The [performance docs](https://christianf88.github.io/flokbn/docs/architecture/performance/) have the details.
 
 - ~4M requests/sec full parse with a User-Agent filter active (measured)
 - ~50 ms trie build for ~1.2M requests
 - <1 ms cluster detection across multiple arg sets
 - ~50 B of memory per unique IP in the trie
 
-Measured on a 2.3M-request real-world dataset on a single Linux workstation - your numbers will vary with hardware and log shape. Details in the [performance docs](https://christianf88.github.io/flokbn/docs/architecture/performance/).
+## Limitations
 
-## What's in the box
-
-- Automatic clustering - you tune size, depth, and threshold; the trie does the rest
-- Multi-trie detection: several configurations in a single pass over the log
-- Filtering: whitelist/blacklist files, regex with literal prefiltering, time windows
-- Ban-candidate list generation, inspired by fail2ban
-- Four output formats: JSON, compact JSON, plain text, interactive TUI
-- TOML config files with full CLI-flag parity
-- Docker demo stack with closed-loop firewall enforcement and Grafana
-
-## Scope
-
-- IPv4 only. IPv6 is not implemented.
-- Live mode ingests via Lumberjack only; HTTP/JSON ingest is planned.
-- One `%h` field per log format.
-- No duplicate field specifiers in a format string.
+- Only IPv4 is supported. IPv6 is not implemented.
+- Live mode ingests via Lumberjack only. HTTP/JSON ingest is planned.
+- A log format must contain exactly one `%h` field and no duplicate field specifiers.
 
 ## Documentation
 
@@ -143,4 +138,4 @@ Full docs at **https://christianf88.github.io/flokbn/**:
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
