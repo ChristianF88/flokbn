@@ -22,7 +22,12 @@ The name is pronounced "flok ban": a flock of IPs, banned together.
   <img src="docs/static/images/tui-demo.gif" width="820" alt="Recording of flokbn's terminal UI on the generated demo log: the results of four tries and a heatmap of the traffic with the detected ranges marked">
 </p>
 
-The recording shows static mode in the terminal UI (`--tui`) on the generated demo, a 1,000,000-line access log that is read once. Four tries are built from that one pass, each with its own filters: none, a User-Agent regex, an endpoint regex, and all of User-Agent, endpoint, time window and CIDR range combined. Every trie is clustered with three arg sets, and each set is a different definition of what counts as an offending range, from large subnets carrying a lot of traffic down to small groups of hosts. The heatmap plots the traffic over the IPv4 address space and puts a red dot on the cells that lie in detected ranges, so you can check that the detected ranges are where the traffic is.
+The recording shows static mode in the terminal UI (`--tui`) on the generated demo:
+
+- **One pass over a 1,000,000-line access log.** The log is read once, and every trie is built from that pass.
+- **Four tries with different filters:** no filter, a User-Agent regex, an endpoint regex, and all of User-Agent, endpoint, time window and CIDR range combined.
+- **Three arg sets per trie.** Each set is a different definition of what counts as an offending range, from large subnets carrying a lot of traffic down to small groups of hosts.
+- **A heatmap to check the result.** The traffic is plotted over the IPv4 address space, with a red dot on the cells that lie in detected ranges, so you can see whether the detected ranges are where the traffic is.
 
 ## Quick start
 

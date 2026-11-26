@@ -262,10 +262,13 @@ Set 2: min_size=10000, depth=16-24, threshold=0.20
         <img src="{{ "images/tui-demo.gif" | relURL }}" width="1100" height="979" loading="lazy"
              alt="Recording of flokbn's terminal UI on the generated demo log: the results of four tries and a heatmap of the traffic with the detected ranges marked">
         <figcaption>
-          <strong>Static mode in the terminal UI</strong> (<code>--tui</code>), recorded on the generated demo: a 1,000,000-line access log, read once.
-          Four tries are built from that one pass, each with its own filters: none, a User-Agent regex, an endpoint regex, and all of them plus a time window and CIDR ranges.
-          Every trie is clustered with three arg sets, and each set is a different definition of what counts as an offending range.
-          The heatmap plots the traffic over the IPv4 address space and puts a red dot on the cells that lie in detected ranges, so you can check that the detected ranges are where the traffic is.
+          <p><strong>Static mode in the terminal UI</strong> (<code>--tui</code>), recorded on the generated demo:</p>
+          <ul>
+            <li><strong>One pass over a 1,000,000-line access log.</strong> The log is read once, and every trie is built from that pass.</li>
+            <li><strong>Four tries with different filters:</strong> no filter, a User-Agent regex, an endpoint regex, and all of User-Agent, endpoint, time window and CIDR range combined.</li>
+            <li><strong>Three arg sets per trie.</strong> Each set is a different definition of what counts as an offending range, from large subnets carrying a lot of traffic down to small groups of hosts.</li>
+            <li><strong>A heatmap to check the result.</strong> The traffic is plotted over the IPv4 address space, with a red dot on the cells that lie in detected ranges, so you can see whether the detected ranges are where the traffic is.</li>
+          </ul>
           {{ with site.GetPage "/docs/guides/complex-static-analysis" }}<a class="cx-inline-link" href="{{ .RelPermalink }}">Walk through this run &rarr;</a>{{ end }}
         </figcaption>
       </figure>
