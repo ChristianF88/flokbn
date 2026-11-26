@@ -3,7 +3,7 @@ title: "Complex Static Analysis"
 description: "Full-coverage static-mode example: multiple tries, every filter, and jail wiring in one TOML"
 summary: "Walkthrough of the committed complex-static.toml example exercising the full static filter surface"
 date: 2026-06-12T10:00:00+00:00
-lastmod: 2026-11-23T10:00:00+00:00
+lastmod: 2026-11-26T10:00:00+00:00
 draft: false
 weight: 815
 slug: "complex-static-analysis-guide"
@@ -75,6 +75,12 @@ need to be in a particular directory. Running the analysis writes
 `heatmap.html`, `flokbn_jail.json`, and `flokbn_ban.txt` into the same demo
 directory. The jail file persists across runs - delete it (together with
 `flokbn_ban.txt` and `heatmap.html`) for a clean rerun.
+
+{{< tui-demo >}}
+This run in the TUI: the results of `t1_baseline`, its heatmap for the three
+arg sets with a red dot on every cell that lies in a detected range, and then
+the results of the other three tries.
+{{< /tui-demo >}}
 
 ## Global Lists
 
