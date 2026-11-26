@@ -1,0 +1,6 @@
+{{- /* The recorded TUI run of the generated demo. One file for the README and the site: static/images/tui-demo.gif */ -}}
+<figure class="cx-recording">
+  <img src="{{ "images/tui-demo.gif" | relURL }}" width="1100" height="979" loading="lazy"
+       alt="Recording of flokbn's terminal UI on the generated demo log: the results of four tries and a heatmap of the traffic with the detected ranges marked">
+  {{ with .Inner }}<figcaption>{{ . | markdownify }}</figcaption>{{ end }}
+</figure>
