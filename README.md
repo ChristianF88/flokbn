@@ -76,6 +76,9 @@ Active Filters:          UA whitelist (58 patterns)
     35.217.0.0/16             11,220 requests  (  1.25%)
     50.231.0.0/16             11,938 requests  (  1.33%)
     87.26.0.0/16              15,018 requests  (  1.68%)
+    143.173.0.0/16            15,955 requests  (  1.78%)
+    166.94.0.0/16             12,563 requests  (  1.40%)
+    183.77.0.0/16             15,046 requests  (  1.68%)
     ───────────────────       99,578 requests  ( 11.11%) [TOTAL]
 
   [... two more arg sets, then tries t2_bots, t3_hot_endpoints,
