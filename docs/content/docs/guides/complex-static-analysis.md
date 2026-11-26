@@ -3,7 +3,7 @@ title: "Complex Static Analysis"
 description: "Full-coverage static-mode example: multiple tries, every filter, and jail wiring in one TOML"
 summary: "Walkthrough of the committed complex-static.toml example exercising the full static filter surface"
 date: 2026-06-12T10:00:00+00:00
-lastmod: 2026-06-12T10:00:00+00:00
+lastmod: 2026-11-23T10:00:00+00:00
 draft: false
 weight: 815
 slug: "complex-static-analysis-guide"
@@ -153,7 +153,7 @@ popularity is Zipf-distributed, so the top nine carry ~60% of traffic and
 ### t4_targeted_window - everything combined
 
 UA regex + endpoint regex + a 24-hour `startTime`/`endTime` window
-(RFC3339; the fake log spans `2026-02-03T23:56Z` to `2026-02-06T23:58Z`).
+(written as RFC3339 here, so compared as true instants; the fake log spans `2026-02-03T23:56Z` to `2026-02-06T23:58Z`).
 Each filter multiplies: bots × hot endpoints × one third of the time range
 leaves ~39k requests, hotspot `/16`s carrying just ~310-760 - hence minSizes
 of 300/150/60. Even after triple filtering, the coarse sweep still recovers

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/ingestor"
 )
@@ -107,7 +108,7 @@ func TestNewStatsServerFromConfig_OffByDefault(t *testing.T) {
 func TestStatsEndpoint_SchemaAndValues(t *testing.T) {
 	now := time.Now()
 	batch := hotBlock(10, 5, 5, now, "/api/item")
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	})
@@ -216,7 +217,7 @@ func TestStatsEndpoint_SchemaAndValues(t *testing.T) {
 func TestBansEndpoint_ByteEqualToBanFile(t *testing.T) {
 	now := time.Now()
 	batch := hotBlock(10, 5, 5, now, "/api/item")
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfigWithLists(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	}, nil, []string{"203.0.113.0/24"})
@@ -279,7 +280,7 @@ func TestStatsServer_NotFoundAndMethodNotAllowed(t *testing.T) {
 // immutability, and every 200 body must decode cleanly.
 func TestStatsEndpoint_ConcurrentReads(t *testing.T) {
 	now := time.Now()
-	batches := [][]ingestor.Request{
+	batches := [][]accesslog.Request{
 		hotBlock(10, 5, 5, now, "/api/item"),
 		noiseRequests(now, "/api/item"),
 		hotBlock(10, 6, 6, now, "/api/item"),
@@ -344,7 +345,7 @@ func TestStatsServer_LifecycleNoLeak(t *testing.T) {
 
 	srv := newTestStatsServer(t)
 	h := startLoopWithStats(t, fake, cfg, srv)
-	h.awaitMessage("Filebeat connected")
+	h.awaitMessage(liveAcceptingMsg)
 
 	h.cancel()
 	if err := h.wait(2 * time.Second); err != nil {
@@ -369,7 +370,7 @@ func TestStatsServer_LifecycleNoLeak(t *testing.T) {
 
 func TestStatsEndpoint_TopTalkers(t *testing.T) {
 	now := time.Now()
-	var batch []ingestor.Request
+	var batch []accesslog.Request
 	for i := 0; i < 5; i++ {
 		batch = append(batch, mkRequest(10, 0, 0, 1, now, "/api/item"))
 	}
@@ -378,7 +379,7 @@ func TestStatsEndpoint_TopTalkers(t *testing.T) {
 	}
 	batch = append(batch, mkRequest(10, 0, 0, 3, now, "/api/item"))
 
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	})
@@ -405,7 +406,7 @@ func TestStatsEndpoint_TopTalkers(t *testing.T) {
 func TestStatsEndpoint_TopTalkersFieldAbsentWhenDisabled(t *testing.T) {
 	now := time.Now()
 	batch := hotBlock(10, 5, 5, now, "/api/item")
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	}) // TopTalkers defaults to 0

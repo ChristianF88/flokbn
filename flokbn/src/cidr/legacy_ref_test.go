@@ -146,3 +146,36 @@ func refGenerateOptimal(start, end uint32) []string {
 	}
 	return result
 }
+
+// IsWhitelistedIPNet is a verbatim copy of the former cidr.IsWhitelistedIPNet:
+// it reports whether an IPNet is covered by a single whitelist IPNet. Its last
+// production caller, DropFullyWhitelisted, now compares numeric intervals; the
+// copy stays as the oracle behind refIsWhitelisted and oldDropFullyWhitelisted.
+func IsWhitelistedIPNet(candidateNet *net.IPNet, whitelistNets []*net.IPNet) bool {
+	// IPv4-only tool: the uint32 comparison below reads the mask via
+	// BigEndian.Uint32, which misreads a 16-byte (IPv6/IPv4-mapped) mask. A CIDR
+	// parsed from IPv4 dotted-quad notation always has a 4-byte mask; anything
+	// else is non-IPv4 and is treated as "not whitelisted" (kept verbatim).
+	if len(candidateNet.Mask) != 4 {
+		return false
+	}
+	candidateStart := iputils.IPToUint32(candidateNet.IP)
+	candidateEnd := candidateStart | ^binary.BigEndian.Uint32(candidateNet.Mask)
+	for _, whitelistNet := range whitelistNets {
+		if len(whitelistNet.Mask) != 4 {
+			continue
+		}
+		// The numeric subset test is sufficient on its own: if the candidate's
+		// whole [start,end] range lies inside the whitelist's [start,end] range,
+		// the candidate IP is contained AND the whitelist mask is necessarily
+		// smaller-or-equal. The earlier Contains() and mask comparison were
+		// redundant (and Contains() allocated/iterated per entry on the hot
+		// DropFullyWhitelisted path).
+		whitelistStart := iputils.IPToUint32(whitelistNet.IP)
+		whitelistEnd := whitelistStart | ^binary.BigEndian.Uint32(whitelistNet.Mask)
+		if candidateStart >= whitelistStart && candidateEnd <= whitelistEnd {
+			return true
+		}
+	}
+	return false
+}

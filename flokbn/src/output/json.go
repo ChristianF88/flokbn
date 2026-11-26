@@ -12,11 +12,17 @@ import (
 
 // JSONOutput represents the complete analysis output structure
 type JSONOutput struct {
-	Metadata              Metadata     `json:"metadata"`
-	General               General      `json:"general"`
-	Tries                 []TrieResult `json:"tries,omitempty"`
-	Clustering            Clustering   `json:"clustering"`
-	CIDRAnalysis          CIDRAnalysis `json:"cidr_analysis"`
+	Metadata Metadata     `json:"metadata"`
+	General  General      `json:"general"`
+	Tries    []TrieResult `json:"tries,omitempty"`
+	// Clustering and CIDRAnalysis are in-memory single-trie views used only by
+	// the TUI (tui.App.singleTrieOutput fills them from one entry of Tries).
+	// They are NOT part of the JSON document: the analysis never fills them, so
+	// the CLI used to emit two always-empty "clustering" / "cidr_analysis"
+	// objects next to the real per-trie results under "tries". Consumers read
+	// tries[].data and tries[].stats.cidr_analysis.
+	Clustering            Clustering   `json:"-"`
+	CIDRAnalysis          CIDRAnalysis `json:"-"`
 	Warnings              []Warning    `json:"warnings"`
 	Errors                []Error      `json:"errors"`
 	UserAgentWhitelistIPs []string     `json:"useragent_whitelist_ips,omitempty"`
@@ -37,7 +43,7 @@ type JSONOutput struct {
 //
 // Only the UA whitelist actually drops requests from every trie, so it is the
 // only global list the renderers surface as an active filter. The IP whitelist
-// acts solely in the jail/ban publish pipeline (ProcessJailWithWhitelist /
+// acts solely in the jail/ban publish pipeline (analysis.UpdateBans /
 // ComposeBanLists): whitelisted traffic still enters every trie and is fully
 // counted in the statistics and threat percentages, so listing it as a filter
 // would be misleading. Its count is recorded for the JSON output only.
@@ -286,6 +292,17 @@ func ActiveFilters(params TrieParameters, gf GlobalFilters) []string {
 	}
 
 	return filters
+}
+
+// FormatClusterParameters renders one cluster arg set for humans, e.g.
+// "min_size=1000, depth=24-32, threshold=0.10". Like ActiveFilters it is the
+// single source shared by the plain renderer and the TUI (clustering panel and
+// visualization header), which used to disagree: the plain output printed the
+// threshold with two decimals, the visualization with one and under another
+// name ("mean_diff"), and the clustering panel not at all.
+func FormatClusterParameters(p ClusterParameters) string {
+	return fmt.Sprintf("min_size=%d, depth=%d-%d, threshold=%.2f",
+		p.MinClusterSize, p.MinDepth, p.MaxDepth, p.MeanSubnetDifference)
 }
 
 // FormatNumber adds thousand separators to numbers

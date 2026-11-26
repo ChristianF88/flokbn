@@ -14,6 +14,10 @@ format = "text"
 
 [live]
 port = "9000"
+# Filebeat runs in another container, so the Lumberjack listener must accept
+# connections from the compose network. The default is 127.0.0.1: the port is
+# unauthenticated, and binding it wider is an explicit choice.
+listen = "0.0.0.0"
 # HTTP stats endpoints (GET /stats, GET /bans).
 # 0.0.0.0 bind is the documented exception to the localhost-only default:
 # required so the published port is reachable from the host across the

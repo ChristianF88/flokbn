@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/output"
 )
 
@@ -30,7 +30,7 @@ func TestApp_SettersNoOpAfterShutdown(t *testing.T) {
 	// state once shuttingDown is set.
 	a.SetAnalysisResults(multi)
 	a.ShowError("should be ignored")
-	a.SetRequestData([]ingestor.Request{})
+	a.SetRequestData([]accesslog.Request{})
 
 	if a.analysisComplete.Load() {
 		t.Error("analysisComplete = true, want false (setters must no-op after shutdown)")

@@ -41,7 +41,8 @@ type statsSnapshot struct {
 }
 
 type ingestStats struct {
-	Connected            bool      `json:"connected"`
+	Connected            bool      `json:"connected"`        // at least one client connection is open
+	OpenConnections      int       `json:"open_connections"` // client connections open right now
 	QueueDepth           int       `json:"queue_depth"`
 	LastBatchAt          time.Time `json:"last_batch_at"`
 	BatchesTotal         uint64    `json:"batches_total"`
@@ -71,7 +72,8 @@ type clusterSetStats struct {
 	UseForJail     bool          `json:"use_for_jail"`
 	LastDurationUS int64         `json:"last_duration_us"`
 	// DetectedNow is the latest clustering result. Heartbeat snapshots
-	// (idle loop, no new traffic) carry the last iteration's result.
+	// (idle loop, no new traffic) carry the last result, recomputed whenever
+	// the heartbeat expired entries from the window.
 	DetectedNow []output.LiveCIDR `json:"detected_now"`
 }
 
@@ -205,11 +207,38 @@ func newClusterSetStats(argSet config.ClusterArgSet, useForJail bool, duration t
 	}
 }
 
+// clusterStatsOf turns the clustering results of one window into their
+// published form (/stats, /metrics). The returned slice is freshly allocated
+// and owned by the snapshot it is published in.
+func clusterStatsOf(results []clusterSetResult) []clusterSetStats {
+	if len(results) == 0 {
+		return nil
+	}
+	sets := make([]clusterSetStats, len(results))
+	for i := range results {
+		r := &results[i]
+		sets[i] = newClusterSetStats(r.argSet, r.useForJail, r.duration, r.detected)
+	}
+	return sets
+}
+
+// refreshTopTalkers recomputes window i's cached top talkers outside the
+// iteration cadence (the idle heartbeat calls it after expiring entries from
+// that window). The slice is replaced wholesale, never mutated in place. A
+// nil cache means top talkers are off or no iteration has run yet.
+func (st *liveStatsState) refreshTopTalkers(cfg *config.Config, windows []slidingWindowInstance, i int) {
+	if st.topTalkers == nil || cfg.Live == nil || cfg.Live.TopTalkers <= 0 {
+		return
+	}
+	st.topTalkers[i] = windows[i].window.TopTalkers(cfg.Live.TopTalkers)
+}
+
 // buildSnapshot assembles the immutable per-iteration snapshot. Called from
 // the loop goroutine only; everything reachable from the returned snapshot is
 // either freshly allocated here, immutable (strings), or never mutated after
 // startup (list CIDR slices). heartbeat snapshots (idle loop) do not count
-// as iterations and reuse the cached top-talker slices.
+// as iterations and reuse the cached top-talker slices (the heartbeat
+// refreshes the cache itself when it expired window entries).
 func buildSnapshot(
 	st *liveStatsState,
 	ing ingestor.Ingestor,
@@ -257,7 +286,8 @@ func buildSnapshot(
 		GeneratedAt:   now,
 		UptimeS:       int64(now.Sub(st.startTime).Seconds()),
 		Ingest: ingestStats{
-			Connected:            !ing.IsClosed(),
+			Connected:            ingSt.OpenConnections > 0,
+			OpenConnections:      ingSt.OpenConnections,
 			QueueDepth:           ingSt.QueueDepth,
 			LastBatchAt:          ingSt.LastBatchAt,
 			BatchesTotal:         ingSt.BatchesTotal,

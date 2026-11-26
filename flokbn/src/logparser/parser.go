@@ -12,7 +12,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // FieldExtractor represents a compiled field extraction operation
@@ -21,6 +21,25 @@ type FieldExtractor struct {
 	Delimiter byte // delimiter to find (space, quote, bracket)
 	Quoted    bool // whether field is in quotes
 	Brackets  bool // whether field is in brackets
+	// autoQuote: scan the value as a quoted string whenever it starts with a
+	// double quote, whether or not the format quotes this slot. It is false only
+	// for the first field of a quoted GROUP ("%^ %r %^"), where the leading quote
+	// is a format literal and the value is a bare token. Computed at compile time
+	// so the per-field cost is the same single flag test as before.
+	autoQuote bool
+	// after is the separator that follows this field once its closing quote or
+	// bracket has been consumed: for a slot the format closes ("%u"| or [%t]|)
+	// the literal behind the closer, for a bare slot (%^|) the slot's own
+	// delimiter, which is what follows a value that turned out to be quoted. It
+	// is consumed together with the closer so the next field does not start on
+	// it. A space (also used when there is no such literal) is harmless: the
+	// next field skips leading spaces anyway.
+	after byte
+	// resync says what to do when a bare value in this slot stops at a space
+	// although the format ends the slot with something else (resyncNone:
+	// nothing, the value ends there). Set by enableRealign only - see
+	// realign.go.
+	resync uint8
 }
 
 // CompiledFormat represents a pre-compiled log format for fast parsing
@@ -35,6 +54,9 @@ type CompiledFormat struct {
 	// path pays a single bool check instead of treating the zero value (GET==0)
 	// as an "unset" sentinel - which silently clobbered a %m-parsed GET.
 	hasMethodField bool
+	// anchors is what the format literally puts around each slot, recorded at
+	// compile time for enableRealign.
+	anchors []slotAnchor
 }
 
 // parseCounters holds malformed-field tallies shared by all parse workers.
@@ -43,6 +65,7 @@ type CompiledFormat struct {
 type parseCounters struct {
 	malformedStatus atomic.Uint64
 	malformedBytes  atomic.Uint64
+	oversizedLines  atomic.Uint64
 }
 
 // ParseStats is a snapshot of malformed-field counters, cumulative across
@@ -50,7 +73,18 @@ type parseCounters struct {
 type ParseStats struct {
 	MalformedStatus uint64
 	MalformedBytes  uint64
+	// OversizedLines is the number of lines longer than MaxLineLen. Such a line
+	// is skipped by every I/O path: it is not a request and is not part of the
+	// invalid-IP count either.
+	OversizedLines uint64
 }
+
+// MaxLineLen is the longest line, in bytes before its "\n" terminator, that
+// the file parsers accept (2 MiB). A longer line is skipped and counted in
+// ParseStats.OversizedLines; the rest of the file is parsed normally. The
+// limit bounds the memory one line can pin and is the same on the streaming
+// (<500MB) and the chunked (>=500MB) reader.
+const MaxLineLen = 2 * 1024 * 1024
 
 // Parser provides high-performance log parsing with adaptive I/O strategies
 // Combines parallel processing, object pooling, and minimal-allocation field extraction
@@ -81,6 +115,8 @@ func NewParser(format string) (*Parser, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The file parser re-aligns a line on the literals of the format.
+	compiled.enableRealign()
 	p.compiled = compiled
 
 	return p, nil
@@ -95,13 +131,18 @@ func (pp *Parser) Stats() ParseStats {
 	return ParseStats{
 		MalformedStatus: pp.compiled.counters.malformedStatus.Load(),
 		MalformedBytes:  pp.compiled.counters.malformedBytes.Load(),
+		OversizedLines:  pp.compiled.counters.oversizedLines.Load(),
 	}
 }
 
 // ParseFile parses a log file using adaptive I/O strategy (primary interface)
 // Automatically chooses between streaming I/O (small files) and chunked I/O (large files)
 // This is the recommended method for all file parsing operations.
-func (pp *Parser) ParseFile(filename string) ([]ingestor.Request, error) {
+//
+// Both strategies frame lines identically: "\n" or "\r\n" terminated, blank
+// lines skipped, lines longer than MaxLineLen skipped and counted in
+// Stats().OversizedLines.
+func (pp *Parser) ParseFile(filename string) ([]accesslog.Request, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -130,12 +171,14 @@ func (pp *Parser) ParseFile(filename string) ([]ingestor.Request, error) {
 
 // ParseFileIPs parses a log file extracting ONLY the IPv4 address of each line
 // as a uint32, skipping all other field work and never allocating an
-// ingestor.Request. It uses the same adaptive streaming/concurrent I/O
+// accesslog.Request. It uses the same adaptive streaming/concurrent I/O
 // structure as ParseFile (same slab+batch line readers).
 //
 // Returns the slice of nonzero IPs (lines whose IP parsed successfully) and
 // invalidCount = the number of lines whose IP failed to parse (extractIPOnly
-// returned 0). This matches the downstream "invalid/missing IP" semantics:
+// returned 0). Blank lines and lines longer than MaxLineLen are not lines in
+// this sense: they are skipped (the latter counted in Stats().OversizedLines)
+// and appear in neither number. This matches the downstream "invalid/missing IP" semantics:
 // nonzero IPs flow into the trie, zero IPs are counted invalid. Order is not
 // preserved (downstream radix-sorts), but the multiset of nonzero IPs and the
 // invalid count are identical to ParseFile's req.IPUint32 stream.
@@ -218,8 +261,7 @@ func (pp *Parser) parseFileIPsStreamingIO(file *os.File, fileSize int64) ([]uint
 		}
 	}()
 
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 256*1024), 2*1024*1024)
+	scanner, splitter := newLineScanner(file)
 
 	const slabSize = 256 * 1024
 	batch := make([][]byte, 0, parseBatchSize)
@@ -254,6 +296,8 @@ func (pp *Parser) parseFileIPsStreamingIO(file *os.File, fileSize int64) ([]uint
 	wg.Wait()
 	close(resultsChan)
 	collectorWG.Wait()
+
+	pp.compiled.counters.oversizedLines.Add(splitter.oversized)
 
 	if err := scanner.Err(); err != nil {
 		return nil, 0, err
@@ -383,6 +427,103 @@ func (pp *Parser) parseFileIPsConcurrentIOChunked(file io.ReaderAt, name string,
 	return ips, invalidCount, nil
 }
 
+// lineSplitter is the bufio.SplitFunc state of the streaming readers. It frames
+// lines exactly like the chunked reader (readChunkBatched), so a file parses
+// the same way on either side of the 500MB switch:
+//
+//   - a line ends at "\n"; one trailing "\r" is stripped (CRLF);
+//   - a blank line is skipped: it is not a request and not an invalid line;
+//   - a line longer than MaxLineLen is skipped and counted in oversized, and the
+//     scan resumes after its newline. bufio.ScanLines would instead fail the
+//     whole parse with ErrTooLong once the line outgrew the buffer.
+//
+// It is used by one goroutine (the reader loop), so it needs no locking.
+type lineSplitter struct {
+	discarding bool   // inside an oversized line: drop bytes up to its newline
+	oversized  uint64 // lines skipped for exceeding MaxLineLen
+}
+
+// newLineScanner returns a Scanner over r that yields the non-blank lines of at
+// most MaxLineLen bytes, plus the splitter holding its oversized-line count.
+// The buffer may grow to MaxLineLen+1 bytes: enough to hold a line of exactly
+// MaxLineLen with its newline, and enough for split to see that a longer line
+// has passed the limit before the Scanner would give up on it.
+func newLineScanner(r io.Reader) (*bufio.Scanner, *lineSplitter) {
+	ls := &lineSplitter{}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 256*1024), MaxLineLen+1) // 256KB initial
+	// The split function runs once per line, so the ordinary case is handled
+	// right here in the closure the Scanner calls (no second call): a non-empty
+	// LF-terminated line within the limit, not inside an oversized line.
+	// Everything else - CRLF, blank, oversized, end of input - goes to
+	// ls.split, which handles the ordinary case identically.
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, '\n'); i > 0 && i <= MaxLineLen && data[i-1] != '\r' && !ls.discarding {
+			return i + 1, data[:i], nil
+		}
+		return ls.split(data, atEOF)
+	})
+	return scanner, ls
+}
+
+// split implements bufio.SplitFunc in full (newLineScanner short-circuits the
+// ordinary line before calling it). It returns the next acceptable line and
+// advances past any blank or oversized lines in front of it.
+//
+// Skipped lines are consumed inside this call, by looping, instead of being
+// returned as a nil token with a positive advance: once the Scanner has seen
+// EOF it stops at the first nil token even when more data is still buffered,
+// which would silently drop every line after a blank one in the last buffer.
+// A nil token is therefore only returned when more input is needed or all of
+// data has been consumed.
+func (ls *lineSplitter) split(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	pos := 0 // start of the line under inspection; everything before it is consumed
+	for {
+		rest := data[pos:]
+		i := bytes.IndexByte(rest, '\n')
+
+		if ls.discarding {
+			// Tail of an oversized line that was already counted.
+			if i < 0 {
+				return len(data), nil, nil
+			}
+			ls.discarding = false
+			pos += i + 1
+			continue
+		}
+
+		end := i // exclusive end of the line within rest
+		next := pos + i + 1
+		if i < 0 {
+			if len(rest) > MaxLineLen {
+				// No newline within the limit: oversized however long it turns
+				// out to be. Drop what is buffered and keep dropping to its end.
+				ls.oversized++
+				ls.discarding = true
+				return len(data), nil, nil
+			}
+			if !atEOF || len(rest) == 0 {
+				return pos, nil, nil // need more data, or nothing left
+			}
+			end = len(rest) // final line without a newline
+			next = len(data)
+		} else if i > MaxLineLen {
+			ls.oversized++
+			pos = next
+			continue
+		}
+
+		if end > 0 && rest[end-1] == '\r' {
+			end--
+		}
+		if end == 0 {
+			pos = next // blank line
+			continue
+		}
+		return next, rest[:end], nil
+	}
+}
+
 // parseBatchSize is the number of lines per batch sent through channels.
 // Batching amortizes channel lock/unlock overhead: 1M lines = ~1K channel ops instead of 1M.
 const parseBatchSize = 1024
@@ -393,7 +534,7 @@ const parseBatchSize = 1024
 // the pool only removes the per-batch allocation churn.
 var requestBatchPool = sync.Pool{
 	New: func() any {
-		s := make([]ingestor.Request, 0, parseBatchSize)
+		s := make([]accesslog.Request, 0, parseBatchSize)
 		return &s
 	},
 }
@@ -403,7 +544,7 @@ var requestBatchPool = sync.Pool{
 //
 // The caller owns `file` (and closes it); it must be positioned at offset 0.
 // fileSize is the caller's Stat size, used only for the line-count estimate.
-func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]accesslog.Request, error) {
 	// Pre-allocation estimate (~200 bytes per log line).
 	estimatedLines := int(fileSize / 200)
 	if estimatedLines < 1000 {
@@ -413,7 +554,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 	// Batched channels - each send/receive moves parseBatchSize items at once,
 	// reducing channel operations from O(lines) to O(lines/batchSize).
 	linesChan := make(chan [][]byte, pp.workers*2)
-	resultsChan := make(chan *[]ingestor.Request, pp.workers*2)
+	resultsChan := make(chan *[]accesslog.Request, pp.workers*2)
 
 	var wg sync.WaitGroup
 
@@ -428,12 +569,12 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req := &ingestor.Request{}
+			req := &accesslog.Request{}
 			for batch := range linesChan {
-				bp := requestBatchPool.Get().(*[]ingestor.Request)
+				bp := requestBatchPool.Get().(*[]accesslog.Request)
 				resBatch := (*bp)[:0]
 				for _, line := range batch {
-					*req = ingestor.Request{}
+					*req = accesslog.Request{}
 					if err := pp.compiled.parseLineReuseOpt(line, req, skipStrings, skipNonIP); err == nil {
 						resBatch = append(resBatch, *req)
 					}
@@ -450,7 +591,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 
 	// Start result collector with pre-allocated slice. It copies each pooled
 	// batch out, then returns the buffer to the pool for a worker to refill.
-	results := make([]ingestor.Request, 0, estimatedLines)
+	results := make([]accesslog.Request, 0, estimatedLines)
 	var collectorWG sync.WaitGroup
 	collectorWG.Add(1)
 
@@ -465,8 +606,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 	// I/O reader - accumulate lines into batches before sending
 	// Uses a slab allocator: one contiguous []byte per batch instead of one per line.
 	// Reduces allocations from O(lines) to O(lines/batchSize).
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 256*1024), 2*1024*1024) // 256KB initial, 2MB max
+	scanner, splitter := newLineScanner(file)
 
 	const slabSize = 256 * 1024 // 256KB slab per batch (~250 bytes/line * 1024 lines)
 	batch := make([][]byte, 0, parseBatchSize)
@@ -506,6 +646,8 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 	close(resultsChan) // Signal collector to stop
 	collectorWG.Wait() // Wait for collector to finish
 
+	pp.compiled.counters.oversizedLines.Add(splitter.oversized)
+
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
@@ -516,7 +658,7 @@ func (pp *Parser) parseFileWithStreamingIO(file *os.File, fileSize int64) ([]ing
 // parseFileWithConcurrentIO implements concurrent chunked file reading.
 // Uses ReadAt for thread-safe parallel reads, batched channels matching the
 // streaming path, and per-worker Request reuse (no sync.Pool needed).
-func (pp *Parser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]accesslog.Request, error) {
 	return pp.parseFileConcurrentIOChunked(file, file.Name(), fileSize, defaultConcurrentChunkSize)
 }
 
@@ -532,7 +674,7 @@ func (pp *Parser) parseFileWithConcurrentIO(file *os.File, fileSize int64) ([]in
 // is stored on the error-capture seam so a non-EOF ReadAt failure names the file
 // in its error. It is io.ReaderAt-typed callers' responsibility to pass it (the
 // reader itself is not always an *os.File, by design).
-func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fileSize int64, chunkSize int64) ([]ingestor.Request, error) {
+func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fileSize int64, chunkSize int64) ([]accesslog.Request, error) {
 	numChunks := int(fileSize / chunkSize)
 	if fileSize%chunkSize != 0 {
 		numChunks++
@@ -553,7 +695,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 	// Batched channels - same pattern as streaming path
 	chunkJobs := make(chan chunkJob, numChunks)
 	linesChan := make(chan [][]byte, pp.workers*2)
-	resultsChan := make(chan []ingestor.Request, pp.workers*2)
+	resultsChan := make(chan []accesslog.Request, pp.workers*2)
 
 	readErr := chunkErrCapture{name: name}
 	var wg sync.WaitGroup
@@ -578,11 +720,11 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 		parserWG.Add(1)
 		go func() {
 			defer parserWG.Done()
-			req := &ingestor.Request{}
+			req := &accesslog.Request{}
 			for batch := range linesChan {
-				resBatch := make([]ingestor.Request, 0, len(batch))
+				resBatch := make([]accesslog.Request, 0, len(batch))
 				for _, line := range batch {
-					*req = ingestor.Request{}
+					*req = accesslog.Request{}
 					if err := pp.compiled.parseLineReuseOpt(line, req, skipStrings, skipNonIP); err == nil {
 						resBatch = append(resBatch, *req)
 					}
@@ -595,7 +737,7 @@ func (pp *Parser) parseFileConcurrentIOChunked(file io.ReaderAt, name string, fi
 	}
 
 	// Start result collector with pre-allocated slice
-	results := make([]ingestor.Request, 0, estimatedLines)
+	results := make([]accesslog.Request, 0, estimatedLines)
 	var collectorWG sync.WaitGroup
 	collectorWG.Add(1)
 	go func() {
@@ -790,6 +932,7 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 	// Extract lines as zero-copy sub-slices of `buffer`. The whole chunk is one
 	// allocation shared by every line slice; no per-line slab copy is done.
 	batch := make([][]byte, 0, parseBatchSize)
+	oversized := uint64(0)
 
 	for i := start; i < len(buffer); i++ {
 		if buffer[i] == '\n' {
@@ -801,6 +944,12 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 
 			lineData := buffer[start:i]
 			start = i + 1
+
+			// Same limit as the streaming reader (lineSplitter): skip and count.
+			if len(lineData) > MaxLineLen {
+				oversized++
+				continue
+			}
 
 			// Strip a trailing '\r' (CRLF line endings) to match the streaming
 			// path's bufio.Scanner behavior.
@@ -827,6 +976,10 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 	// reached EOF and whose range contains the line's start (start < chunkEnd).
 	if readEnd == fileSize && start < len(buffer) && start < chunkEnd {
 		lineData := buffer[start:]
+		if len(lineData) > MaxLineLen {
+			oversized++
+			lineData = nil
+		}
 		// Strip a trailing '\r' (file ending in "...\r" with no final '\n').
 		if n := len(lineData); n > 0 && lineData[n-1] == '\r' {
 			lineData = lineData[:n-1]
@@ -854,40 +1007,23 @@ func (pp *Parser) readChunkBatched(file io.ReaderAt, job chunkJob, fileSize int6
 		}
 	}
 
+	// Cold: only touched when this chunk actually held an oversized line.
+	if oversized > 0 {
+		pp.compiled.counters.oversizedLines.Add(oversized)
+	}
+
 	// Send remaining lines
 	if len(batch) > 0 {
 		linesChan <- batch
 	}
 }
 
-// maxRecoverLineLen caps recovery of a boundary-straddling long line at the
-// streaming path's 2MB token cap (bufio.Scanner, scanner.Buffer(..., 2*1024*1024)).
-// We stop reading once a line would exceed this cap so the chunked path never emits
-// a line that the streaming path's 2MB Scanner buffer could not hold.
-//
-// PARITY SCOPE: the two I/O paths emit the identical line multiset (and identical
-// error: nil) ONLY for line lengths strictly BELOW this cap. At or above it the
-// paths DIVERGE by design and must not be assumed byte-identical:
-//
-//   - Streaming: bufio.Scanner.Scan returns false on the over-long line and
-//     scanner.Err returns bufio.ErrTooLong, so the streaming entry point returns
-//     (nil, err) - the WHOLE parse aborts and EVERY line is discarded.
-//   - Chunked: recoverLongLine drops only that one over-long line (ok=false) and
-//     the parse continues, returning the remaining lines with a nil error.
-//
-// Genuine I/O failures during recovery ARE surfaced: a non-EOF ReadAt error is
-// recorded via the shared errCap seam through the concurrent orchestrators, so a
-// real read failure fails the parse loud. The too-long-line DROP is deliberately
-// NOT surfaced - a >=2MB line is pathological and we do not abort the whole chunked
-// parse over one such line. That single divergence from streaming's whole-parse
-// abort is the documented contract.
-const maxRecoverLineLen = 2 * 1024 * 1024
-
 // recoverLongLine re-reads, starting at the absolute file offset `lineStart` of an
 // owned line whose terminating '\n' fell beyond this chunk's overlap window, with
-// a GROWING window (doubling from the default overlap) until the '\n' is found or
-// EOF is reached. It returns the line bytes (trailing '\r' stripped to match the
-// streaming path) and ok=true when a complete owned line was recovered.
+// a GROWING window (doubling from the default overlap) until the '\n' is found,
+// EOF is reached, or the line is known to exceed MaxLineLen. It returns the line
+// bytes (trailing '\r' stripped to match the streaming path) and ok=true when a
+// complete owned line was recovered.
 //
 // Cold path only: invoked at most once per chunk (a single physical line can
 // straddle a boundary at most once for the owning chunk), so the extra ReadAt and
@@ -896,23 +1032,25 @@ const maxRecoverLineLen = 2 * 1024 * 1024
 // the zero-copy unsafe.String lifetime invariant documented on readChunkBatched
 // still holds (the recovery buffer is never reused or mutated after this read).
 //
-// Lines at/above maxRecoverLineLen are dropped (return ok=false). This is NOT
-// byte-identical to streaming at the cap: streaming raises bufio.ErrTooLong and
-// aborts the whole parse, whereas this drops only the one over-long line and
-// continues (see maxRecoverLineLen for the precise, deliberately divergent scope).
+// PARITY with the streaming reader (lineSplitter) is exact, including at the
+// limit: a line of up to MaxLineLen bytes before its '\n' is recovered, a longer
+// one is skipped and counted in ParseStats.OversizedLines, and the parse goes on.
+// The window therefore grows to at most MaxLineLen+1 bytes - one more than the
+// longest acceptable line, so its newline (or the proof that there is none) is
+// always inside the window.
 //
-// errCap is the shared store-once error seam: a genuine non-EOF ReadAt failure
-// here records the error (so the orchestrator surfaces it) AND returns ok=false.
-// The too-long-line drop above is a DIFFERENT ok=false reason and deliberately does
-// NOT record an error - that divergence from streaming's abort is the documented
-// contract, not an I/O failure. The read source is io.ReaderAt for the same
-// test-injection reason as readChunkBatched (cold path, one ReadAt per grow step).
+// ok=false has three causes: a blank line, an oversized line (counted), and a
+// genuine non-EOF ReadAt failure, which is recorded on errCap (the shared
+// store-once error seam) so the orchestrator fails the parse loud. The read
+// source is io.ReaderAt for the same test-injection reason as readChunkBatched
+// (cold path, one ReadAt per grow step).
 func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, errCap *chunkErrCapture) ([]byte, bool) {
+	const maxWindow = MaxLineLen + 1
 	window := int64(8192) // current overlap; double until '\n' found or capped
 	for {
 		window *= 2
-		if window > maxRecoverLineLen {
-			window = maxRecoverLineLen
+		if window > maxWindow {
+			window = maxWindow
 		}
 		readEnd := lineStart + window
 		atEOF := false
@@ -928,7 +1066,7 @@ func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, e
 		buf := make([]byte, readSize)
 		n, err := file.ReadAt(buf, lineStart)
 		if err != nil && err != io.EOF {
-			// Genuine I/O failure (distinct from the too-long-line drop below):
+			// Genuine I/O failure (distinct from the oversized-line skip below):
 			// record it (store-once) so the orchestrator surfaces a non-nil error,
 			// then drop this line. io.EOF is normal end-of-file and excluded above.
 			errCap.record(fmt.Errorf("recoverLongLine: ReadAt %q offset %d: %w", errCap.name, lineStart, err))
@@ -936,39 +1074,34 @@ func (pp *Parser) recoverLongLine(file io.ReaderAt, lineStart, fileSize int64, e
 		}
 		buf = buf[:n]
 
+		lineData := buf
 		if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
 			// Found the terminating newline: this is the complete owned line.
-			lineData := buf[:idx]
-			if m := len(lineData); m > 0 && lineData[m-1] == '\r' {
-				lineData = lineData[:m-1]
-			}
-			if len(lineData) == 0 {
+			lineData = buf[:idx]
+		} else if !atEOF {
+			if window >= maxWindow {
+				// MaxLineLen+1 bytes without a newline: oversized. Skip just
+				// this line; the chunk that owns the next line picks up after
+				// its newline.
+				pp.compiled.counters.oversizedLines.Add(1)
 				return nil, false
 			}
-			return lineData, true
+			continue // grow the window and re-read
 		}
+		// else: no trailing '\n' before EOF - the file's final line; the whole
+		// remaining tail is the line (matches the EOF handler).
 
-		if atEOF {
-			// No trailing '\n' before EOF: this is the file's final line with no
-			// newline. Emit the whole remaining tail (matches the EOF handler).
-			lineData := buf
-			if m := len(lineData); m > 0 && lineData[m-1] == '\r' {
-				lineData = lineData[:m-1]
-			}
-			if len(lineData) == 0 {
-				return nil, false
-			}
-			return lineData, true
-		}
-
-		if window >= maxRecoverLineLen {
-			// Line exceeds the streaming path's 2MB token cap (no '\n' within the
-			// cap and not at EOF). Drop just this line and keep parsing. This is a
-			// DELIBERATE divergence from streaming, which instead raises
-			// bufio.ErrTooLong and aborts the entire parse - see maxRecoverLineLen.
+		if len(lineData) > MaxLineLen {
+			pp.compiled.counters.oversizedLines.Add(1)
 			return nil, false
 		}
-		// Otherwise grow the window and re-read.
+		if m := len(lineData); m > 0 && lineData[m-1] == '\r' {
+			lineData = lineData[:m-1]
+		}
+		if len(lineData) == 0 {
+			return nil, false
+		}
+		return lineData, true
 	}
 }
 
@@ -992,8 +1125,9 @@ var codeFieldNames = map[byte]string{
 // is configured. It is the SINGLE source of truth referenced by the static
 // analysis entry points (analysis/static.go), the CLI --logFormat flag default,
 // and config.Validate's empty->default fallback, so the three cannot drift.
-// %h is last (the static default convention).
-const DefaultLogFormat = `%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"`
+// %h is last (the static default convention). Every slot that a combined log
+// quotes (request, referer, User-Agent, client IP) is quoted here too.
+const DefaultLogFormat = `%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"`
 
 // ValidateFormat is the exported, side-effect-free precondition check for a log
 // format string. It is a THIN wrapper over the unexported validateFormat, which
@@ -1014,6 +1148,15 @@ func validateFormat(format string) error {
 	for i := 0; i < len(format); i++ {
 		if format[i] == '%' && i+1 < len(format) {
 			field := format[i+1]
+
+			// A quote that closes a GROUP of fields ("%^ %r %^") is consumed by a
+			// bare token scan, which does not also consume a delimiter behind
+			// it. With a space that does not matter; with any other delimiter
+			// every later field would be off by one, so refuse the format.
+			if groupDelimiterAt(format, i) {
+				return fmt.Errorf("the quoted group ending in %%%c\" is followed by %q - a quoted group of several fields must be followed by a space (or quote each field on its own, e.g. \"%%r\"%c)",
+					field, format[i+3], format[i+3])
+			}
 
 			// Skip validation for skip field (%^)
 			if field == '^' {
@@ -1042,11 +1185,24 @@ func validateFormat(format string) error {
 	return nil
 }
 
+// groupDelimiterAt reports whether the specifier at format[i] is the LAST field
+// of a quoted group (closing quote behind it, no opening quote in front of it)
+// that is directly followed by a literal other than a space.
+func groupDelimiterAt(format string, i int) bool {
+	if format[i] != '%' || i+3 >= len(format) || format[i+2] != '"' {
+		return false
+	}
+	if i > 0 && format[i-1] == '"' {
+		return false // a self-contained quoted slot: "%r"
+	}
+	return format[i+3] != ' ' && format[i+3] != '%'
+}
+
 // compileFormat converts a format string into optimized field extractors
 //
 // Supported format codes:
 //
-//	%h - IP address (required) - maps to Request.IP
+//	%h - IP address (required) - maps to Request.IPUint32
 //	%t - Timestamp in brackets [DD/MMM/YYYY:HH:mm:ss +zone] - maps to Request.Timestamp
 //	%r - Request line "METHOD URI HTTP/VERSION" - extracts Method and URI (ignores HTTP version)
 //	%m - HTTP method standalone - maps to Request.Method
@@ -1068,6 +1224,7 @@ func compileFormat(format string) (*CompiledFormat, error) {
 	}
 
 	var extractors []FieldExtractor
+	var anchors []slotAnchor
 	hasMethodField := false
 
 	for i := 0; i < len(format); i++ {
@@ -1108,10 +1265,44 @@ func compileFormat(format string) (*CompiledFormat, error) {
 				if nextChar == '"' {
 					extractor.Quoted = true
 				}
+				if nextChar == 0 {
+					// A NUL after the specifier never worked as a delimiter (the
+					// scan fell back to space); normalise here so the hot loop
+					// does not have to.
+					extractor.Delimiter = ' '
+				}
 			} else {
 				extractor.Delimiter = ' ' // default
 			}
 
+			// A value that starts with a double quote is a quoted string even when
+			// the format leaves the slot bare (`%^` for a referer): scanning it as
+			// a bare token would split it at the first space and shift every later
+			// field, letting a client-controlled Referer or User-Agent supply %h.
+			// The one exception is a format literal quote that opens a group of
+			// fields (`"%^ %r %^"`): there the quote belongs to the format, not to
+			// this field's value.
+			opensGroup := i > 0 && format[i-1] == '"' && extractor.Delimiter != '"'
+			extractor.autoQuote = extractor.Quoted || !opensGroup
+
+			// Separator behind the closing quote/bracket (see FieldExtractor.after).
+			extractor.after = extractor.Delimiter
+			if extractor.Delimiter == '"' || (extractor.Delimiter == ']' && extractor.Brackets) {
+				extractor.after = ' '
+				if i+3 < len(format) {
+					extractor.after = format[i+3]
+				}
+			}
+			if extractor.after == '%' {
+				extractor.after = ' ' // the next specifier follows directly: no separator
+			}
+
+			anchors = append(anchors, slotAnchor{
+				selfQuoted:  i > 0 && format[i-1] == '"' && extractor.Delimiter == '"',
+				bracketed:   i > 0 && format[i-1] == '[' && extractor.Delimiter == ']',
+				spaceBefore: i > 1 && format[i-2] == ' ',
+				specifierOn: extractor.Delimiter == '%' && i+2 < len(format),
+			})
 			extractors = append(extractors, extractor)
 			i++ // Skip format character
 		}
@@ -1122,11 +1313,12 @@ func compileFormat(format string) (*CompiledFormat, error) {
 		pattern:        format,
 		counters:       &parseCounters{}, // never nil: hot path may Add without a nil check
 		hasMethodField: hasMethodField,
+		anchors:        anchors,
 	}, nil
 }
 
 // parseLineReuseOpt parses a log line with optional string field skipping
-func (cf *CompiledFormat) parseLineReuseOpt(line []byte, req *ingestor.Request, skipStrings, skipNonIP bool) error {
+func (cf *CompiledFormat) parseLineReuseOpt(line []byte, req *accesslog.Request, skipStrings, skipNonIP bool) error {
 	// Use compiled format extractors for optimized parsing
 	if len(cf.extractors) > 0 {
 		return cf.parseUsingCompiledFormatOpt(line, req, skipStrings, skipNonIP)
@@ -1138,27 +1330,34 @@ func (cf *CompiledFormat) parseLineReuseOpt(line []byte, req *ingestor.Request, 
 
 // parseUsingCompiledFormatOpt applies extractors with optional string field skipping
 // When skipNonIP is true, only the IP field is extracted (all others are skipped but positions still advance)
-func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor.Request, skipStrings, skipNonIP bool) error {
+func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *accesslog.Request, skipStrings, skipNonIP bool) error {
 	pos := 0
 
 	for _, extractor := range cf.extractors {
+		// Skip whitespace; a line that ends here leaves the remaining fields unset.
+		for pos < len(line) && line[pos] == ' ' {
+			pos++
+		}
 		if pos >= len(line) {
 			break
 		}
 
-		// Skip whitespace
-		for pos < len(line) && line[pos] == ' ' {
-			pos++
-		}
-
 		start := pos
 
-		// Handle quoted/bracketed fields
+		// Scan the field. Each arm leaves pos on the field's exclusive end and
+		// sets next to where the following field starts (past the closing quote,
+		// bracket or delimiter). The first byte is tested before the per-format
+		// flag so a bare token pays two byte compares and nothing else.
 		// bytes.IndexByte uses SIMD (SSE2/AVX2) on amd64 for 8-16x faster scanning
-		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
+		var next int
+		quoted := false
+		if c := line[pos]; c == '"' && extractor.autoQuote {
+			quoted = true
 			pos++ // skip opening quote
 			start = pos
-			if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
+			if pos+1 < len(line) && line[pos] == '-' && line[pos+1] == '"' {
+				pos++ // "-" (absent value): cheaper than the IndexByte call
+			} else if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
 				if idx > 0 && line[pos+idx-1] == '\\' {
 					pos = scanQuotedClose(line, pos, pos+idx) // rare slow path: escaped quote
 				} else {
@@ -1167,8 +1366,14 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 			} else {
 				pos = len(line)
 			}
-			// Don't skip closing quote yet - we'll handle it after field extraction
-		} else if extractor.Brackets && pos < len(line) && line[pos] == '[' {
+			next = pos
+			if pos < len(line) {
+				next++ // closing quote
+				if next < len(line) && line[next] == extractor.after {
+					next++ // and the delimiter behind it
+				}
+			}
+		} else if c == '[' && extractor.Brackets {
 			pos++ // skip opening bracket
 			start = pos
 			if idx := bytes.IndexByte(line[pos:], ']'); idx >= 0 {
@@ -1176,15 +1381,33 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 			} else {
 				pos = len(line)
 			}
-			// Don't skip closing bracket yet
+			next = pos
+			if pos < len(line) {
+				next++ // closing bracket
+				if next < len(line) && line[next] == extractor.after {
+					next++ // and the delimiter behind it
+				}
+			}
 		} else {
 			// Regular field - scan until delimiter or space
 			delimiter := extractor.Delimiter
-			if delimiter == 0 {
-				delimiter = ' ' // default to space
-			}
 			for pos < len(line) && line[pos] != delimiter && line[pos] != ' ' {
 				pos++
+			}
+			next = pos
+			if pos < len(line) {
+				if line[pos] == delimiter {
+					next++ // the delimiter itself
+				} else if extractor.resync != resyncNone {
+					// Slow path (realign.go): the value stopped at a space although
+					// the format ends this slot with something else. A line that
+					// follows its format never gets here.
+					var ts *time.Time
+					if !skipNonIP {
+						ts = &req.Timestamp
+					}
+					start, pos, next = realignBare(line, start, pos, delimiter, extractor.after, extractor.resync, ts)
+				}
 			}
 		}
 
@@ -1192,7 +1415,11 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 		if extractor.FieldType >= 0 && start < pos {
 			// IP is always extracted; other fields are skipped when skipNonIP is true
 			if extractor.FieldType == 0 {
-				req.IPUint32 = parseIPv4ToUint32(line, start, pos)
+				ip := parseIPv4ToUint32(line, start, pos)
+				if ip == 0 {
+					ip = forwardedTailIP(line, start, pos) // slow path: address list
+				}
+				req.IPUint32 = ip
 			} else if !skipNonIP {
 				fieldData := line[start:pos]
 
@@ -1202,7 +1429,7 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 				case 2: // Method (standalone)
 					req.Method = parseMethod(line, start, pos)
 				case 3: // Request line (%r) - extracts METHOD and URI, ignores HTTP version
-					if extractor.Quoted {
+					if extractor.Quoted || quoted {
 						// Parse "METHOD URI HTTP/VERSION" format efficiently
 						methodEnd := start
 						for methodEnd < pos && line[methodEnd] != ' ' {
@@ -1279,13 +1506,7 @@ func (cf *CompiledFormat) parseUsingCompiledFormatOpt(line []byte, req *ingestor
 		}
 
 		// Advance past closing quotes/brackets/delimiters
-		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
-			pos++
-		} else if extractor.Brackets && pos < len(line) && line[pos] == ']' {
-			pos++
-		} else if pos < len(line) && line[pos] == extractor.Delimiter {
-			pos++ // Skip the delimiter
-		}
+		pos = next
 	}
 
 	return nil
@@ -1310,23 +1531,27 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 
 	for ei := range cf.extractors {
 		extractor := &cf.extractors[ei]
+
+		// Skip whitespace; a line that ends here has no IP field.
+		for pos < len(line) && line[pos] == ' ' {
+			pos++
+		}
 		if pos >= len(line) {
 			break
 		}
 
-		// Skip whitespace
-		for pos < len(line) && line[pos] == ' ' {
-			pos++
-		}
-
 		start := pos
 
-		// Handle quoted/bracketed fields - identical boundary logic to
-		// parseUsingCompiledFormatOpt so that pos lands on the same offsets.
-		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
+		// Scan the field - identical boundary logic to
+		// parseUsingCompiledFormatOpt so that pos and next land on the same
+		// offsets.
+		var next int
+		if c := line[pos]; c == '"' && extractor.autoQuote {
 			pos++ // skip opening quote
 			start = pos
-			if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
+			if pos+1 < len(line) && line[pos] == '-' && line[pos+1] == '"' {
+				pos++ // "-" (absent value): cheaper than the IndexByte call
+			} else if idx := bytes.IndexByte(line[pos:], '"'); idx >= 0 {
 				if idx > 0 && line[pos+idx-1] == '\\' {
 					pos = scanQuotedClose(line, pos, pos+idx) // rare slow path: escaped quote
 				} else {
@@ -1335,7 +1560,14 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 			} else {
 				pos = len(line)
 			}
-		} else if extractor.Brackets && pos < len(line) && line[pos] == '[' {
+			next = pos
+			if pos < len(line) {
+				next++ // closing quote
+				if next < len(line) && line[next] == extractor.after {
+					next++ // and the delimiter behind it
+				}
+			}
+		} else if c == '[' && extractor.Brackets {
 			pos++ // skip opening bracket
 			start = pos
 			if idx := bytes.IndexByte(line[pos:], ']'); idx >= 0 {
@@ -1343,13 +1575,26 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 			} else {
 				pos = len(line)
 			}
+			next = pos
+			if pos < len(line) {
+				next++ // closing bracket
+				if next < len(line) && line[next] == extractor.after {
+					next++ // and the delimiter behind it
+				}
+			}
 		} else {
 			delimiter := extractor.Delimiter
-			if delimiter == 0 {
-				delimiter = ' '
-			}
 			for pos < len(line) && line[pos] != delimiter && line[pos] != ' ' {
 				pos++
+			}
+			next = pos
+			if pos < len(line) {
+				if line[pos] == delimiter {
+					next++ // the delimiter itself
+				} else if extractor.resync != resyncNone {
+					// Slow path - see parseUsingCompiledFormatOpt.
+					start, pos, next = extractor.realignIP(line, start, pos)
+				}
 			}
 		}
 
@@ -1359,20 +1604,17 @@ func (cf *CompiledFormat) extractIPOnly(line []byte) uint32 {
 		// exactly what req.IPUint32 would remain (zero value).
 		if extractor.FieldType == 0 {
 			if start < pos {
-				return parseIPv4ToUint32(line, start, pos)
+				if ip := parseIPv4ToUint32(line, start, pos); ip != 0 {
+					return ip
+				}
+				return forwardedTailIP(line, start, pos) // slow path: address list
 			}
 			return 0
 		}
 
 		// Advance past closing quotes/brackets/delimiters - identical to
 		// parseUsingCompiledFormatOpt so subsequent field boundaries align.
-		if extractor.Quoted && pos < len(line) && line[pos] == '"' {
-			pos++
-		} else if extractor.Brackets && pos < len(line) && line[pos] == ']' {
-			pos++
-		} else if pos < len(line) && line[pos] == extractor.Delimiter {
-			pos++
-		}
+		pos = next
 	}
 
 	return 0
@@ -1419,13 +1661,53 @@ func bytesToString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
+// forwardedTailIP is the slow path for a %h value that is not a single IPv4
+// address: when the value is a comma-separated list (an X-Forwarded-For
+// header) it returns the RIGHTMOST element, or 0 when that element is not a
+// valid IPv4 address or there is no comma at all.
+//
+// Rightmost is the only defensible choice: every proxy appends the address it
+// received the connection from, so the last element is the one written by the
+// proxy nearest to the logging server, while everything to its left arrived in
+// the request and is whatever the client chose to send. There is deliberately
+// no fallback to an earlier element when the last one is unusable ("unknown",
+// IPv6, empty) - that would hand the choice back to the client.
+//
+// Callers reach this only after parseIPv4ToUint32 returned 0, so a log of
+// plain addresses never pays for it.
+func forwardedTailIP(line []byte, start, end int) uint32 {
+	if start < 0 || end > len(line) || start >= end {
+		return 0
+	}
+	comma := bytes.LastIndexByte(line[start:end], ',')
+	if comma < 0 {
+		return 0
+	}
+	start += comma + 1
+	for start < end && (line[start] == ' ' || line[start] == '\t') {
+		start++
+	}
+	for end > start && (line[end-1] == ' ' || line[end-1] == '\t') {
+		end--
+	}
+	return parseIPv4ToUint32(line, start, end)
+}
+
 // parseIPv4ToUint32 extracts IPv4 address directly as uint32 - zero allocation
 //
-// Performance optimizations:
-//   - Single-pass parsing with dot counting
-//   - Bit masking for digit extraction: (b & 0x0F) converts ASCII digit to int
-//   - Returns uint32 directly - NO net.IP heap allocation
-//   - Bounds checking for IPv4 format (7-15 characters)
+// Contract:
+//   - exactly 4 octets separated by exactly 3 dots, nothing before or after
+//   - every octet has 1 to 3 ASCII digits: an empty octet ("1.2..34",
+//     "1.2.34.") is malformed, not a zero
+//   - every octet is <= 255
+//   - leading zeros within those 3 digits are accepted ("010" is 10)
+//   - any violation -> 0
+//
+// Performance: the four octets are parsed by one unrolled "digit, optional
+// digit, optional digit" sequence, so the strictness costs no per-byte state
+// (no digit counter, no dot counter). One compare per digit, a constant shift
+// per octet, no heap allocation. Measured faster than the previous lenient
+// single loop on both uniform and mixed-width addresses.
 //
 // Input: line[start:end] should contain IPv4 like "192.168.1.1"
 // Returns: uint32 IP or 0 if invalid format
@@ -1434,64 +1716,70 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 	if n < 7 || n > 15 {
 		return 0
 	}
-	// BCE hint: prove line[start:end] is fully in bounds, eliminating the
-	// per-iteration bounds check in the loop below.
+	// BCE hint: prove line[start:end] is fully in bounds.
 	if start < 0 || end > len(line) {
 		return 0
 	}
 
-	// Single-pass parse. We accumulate each octet into current and commit it on
-	// a dot. The loop is branch-light: the dot test and the digit test are the
-	// only data-dependent branches, and any deviation funnels into a single
-	// `return 0`.
-	//
-	// Correctness contract (identical to the previous implementation):
-	//   - exactly 3 dots, exactly 4 parts
-	//   - every non-dot byte must be an ASCII digit
-	//   - each committed octet (current at a dot, and the final part) must be <=255
-	//   - leading zeros are accepted (current = current*10 + digit, no rejection)
-	//   - any violation -> 0
-	//
-	// We never need partIdx>=3 as a guard the way the old loop did: with the
-	// dots!=3 check at the end, a 4th dot would push dots to 4 and be rejected,
-	// but the old code returned 0 *immediately* on the 4th dot (partIdx>=3).
-	// To preserve that exact early-out semantics for the >255-then-extra-dot
-	// edge, we cap commits at 4 parts via partIdx and reject a 4th dot.
-	current := 0
-	partIdx := 0
-	var result uint32
-	dots := 0
-
 	sub := line[start:end]
-	for i := 0; i < len(sub); i++ {
-		b := sub[i]
-		d := b - '0'
-		if d <= 9 {
-			// ASCII digit fast path (b in '0'..'9' => b-'0' in 0..9, unsigned).
-			current = current*10 + int(d)
-			continue
-		}
-		if b != '.' {
+	var result uint32
+	i := 0
+	for part := 0; part < 4; part++ {
+		// First digit of the octet is mandatory.
+		if i >= len(sub) {
 			return 0
 		}
-		// Dot: commit the current octet. Identical guard order to the original:
-		// reject if the octet overflows 255 or we already have 3 committed parts.
-		if current > 255 || partIdx >= 3 {
+		d := sub[i] - '0' // unsigned: any non-digit wraps above 9
+		if d > 9 {
 			return 0
 		}
-		result |= uint32(current) << (24 - 8*partIdx)
-		partIdx++
-		current = 0
-		dots++
+		v := uint32(d)
+		i++
+		// Second and third digits are optional.
+		if i < len(sub) {
+			if d = sub[i] - '0'; d <= 9 {
+				v = v*10 + uint32(d)
+				i++
+				if i < len(sub) {
+					if d = sub[i] - '0'; d <= 9 {
+						v = v*10 + uint32(d)
+						i++
+					}
+				}
+			}
+		}
+		if v > 255 {
+			return 0
+		}
+		result = result<<8 | v
+		// Octets 0..2 must be followed by a dot; a 4th digit lands here and is
+		// rejected because it is not one.
+		if part < 3 {
+			if i >= len(sub) || sub[i] != '.' {
+				return 0
+			}
+			i++
+		}
 	}
-
-	if dots != 3 || current > 255 || partIdx != 3 {
-		return 0
+	if i != len(sub) {
+		return 0 // trailing bytes after the 4th octet
 	}
-	result |= uint32(current)
 
 	return result
 }
+
+// notDigitBits returns a value with a bit set in its high nibble iff d, a byte
+// minus '0', is NOT in 0..9. For a digit both d and d+6 stay below 16; any
+// other value has a high-nibble bit in d itself (16..255) or in d+6 (10..15).
+// OR-ing the results of several bytes and testing & 0xF0 once validates them
+// all with a single branch.
+func notDigitBits(d byte) byte {
+	return d | (d + 6)
+}
+
+// daysInMonth is indexed by time.Month; February holds 29 and the leap-year
+// rule is applied separately.
+var daysInMonth = [13]uint8{0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 // parseTimestamp extracts timestamp from Apache Common Log format with maximum performance
 //
@@ -1501,13 +1789,19 @@ func parseIPv4ToUint32(line []byte, start, end int) uint32 {
 // "+HHMM"/"-HHMM" zone offset is present (end-start >= 26), that offset is
 // RETAINED on the returned time: the wall-clock digits are unchanged (06:00
 // stays 06:00) but the location reflects the log's real offset instead of being
-// mislabeled UTC. This is URGENT-09 live<->static timestamp parity: the live
-// ingestor already parses offset-aware, so the static parser must too. When no
-// offset is present (the 20-byte EOL forms), the wall-clock is returned as UTC
+// mislabeled UTC (URGENT-09). Live mode parses its lines with this same
+// function, so both modes agree on the instant by construction. When no offset
+// is present (the 20-byte EOL forms), the wall-clock is returned as UTC
 // (unchanged behavior).
 //
+// Validation: the 12 digit positions must hold ASCII digits and the values must
+// be in range (day valid for the month and year, hour <= 23, minute and second
+// <= 59), which is what time.Parse accepts for the same text. Anything else
+// yields the zero time instead of being masked or normalised into some other
+// instant. The separators between the fields are not inspected.
+//
 // Performance optimizations:
-//   - Direct byte-to-int conversion using bit masking: (b & 0x0F)
+//   - Digits validated together with one branch (see notDigitBits)
 //   - 3-byte month lookup using bitwise operations
 //   - Hardcoded month codes eliminate string comparisons
 //   - Single bounds check, then direct array access for all fields
@@ -1520,12 +1814,23 @@ func parseTimestamp(line []byte, start, end int) time.Time {
 	}
 
 	// BCE hint: prove all accesses up to line[start+19] are in bounds,
-	// eliminating 14 individual bounds checks in the code below.
+	// eliminating the individual bounds checks in the code below.
 	_ = line[start+19]
 
-	// Parse "06/Jul/2025:19:57:26 +0000" directly from line buffer
-	// Use bit operations for faster digit parsing
-	day := int(line[start]&0x0F)*10 + int(line[start+1]&0x0F)
+	// Parse "06/Jul/2025:19:57:26 +0000" directly from line buffer. Load the 12
+	// digits as byte-'0' and validate all of them with a single branch.
+	d0, d1 := line[start]-'0', line[start+1]-'0'
+	y0, y1, y2, y3 := line[start+7]-'0', line[start+8]-'0', line[start+9]-'0', line[start+10]-'0'
+	h0, h1 := line[start+12]-'0', line[start+13]-'0'
+	n0, n1 := line[start+15]-'0', line[start+16]-'0'
+	s0, s1 := line[start+18]-'0', line[start+19]-'0'
+	if (notDigitBits(d0)|notDigitBits(d1)|
+		notDigitBits(y0)|notDigitBits(y1)|notDigitBits(y2)|notDigitBits(y3)|
+		notDigitBits(h0)|notDigitBits(h1)|
+		notDigitBits(n0)|notDigitBits(n1)|
+		notDigitBits(s0)|notDigitBits(s1))&0xF0 != 0 {
+		return time.Time{}
+	}
 
 	// Month lookup using 3-byte comparison
 	var month time.Month
@@ -1560,11 +1865,19 @@ func parseTimestamp(line []byte, start, end int) time.Time {
 		return time.Time{}
 	}
 
-	// Use bit masking for faster digit extraction
-	year := int(line[start+7]&0x0F)*1000 + int(line[start+8]&0x0F)*100 + int(line[start+9]&0x0F)*10 + int(line[start+10]&0x0F)
-	hour := int(line[start+12]&0x0F)*10 + int(line[start+13]&0x0F)
-	minute := int(line[start+15]&0x0F)*10 + int(line[start+16]&0x0F)
-	second := int(line[start+18]&0x0F)*10 + int(line[start+19]&0x0F)
+	day := int(d0)*10 + int(d1)
+	year := int(y0)*1000 + int(y1)*100 + int(y2)*10 + int(y3)
+	hour := int(h0)*10 + int(h1)
+	minute := int(n0)*10 + int(n1)
+	second := int(s0)*10 + int(s1)
+
+	// Range checks: time.Date would silently normalise 25:00 into the next day.
+	if day == 0 || day > int(daysInMonth[month]) || hour > 23 || minute > 59 || second > 59 {
+		return time.Time{}
+	}
+	if month == 2 && day == 29 && (year%4 != 0 || (year%100 == 0 && year%400 != 0)) {
+		return time.Time{}
+	}
 
 	// Retain the log's timezone offset when present (URGENT-09 parity). The
 	// offset suffix is " +HHMM"/" -HHMM": space at start+20, sign at start+21,
@@ -1625,33 +1938,33 @@ func offsetLocation(b []byte) *time.Location {
 //   - Covers all common HTTP methods: GET, POST, PUT, DELETE, HEAD, OPTIONS
 //
 // Returns: HTTPMethod enum or UNKNOWN for unrecognized methods
-func parseMethod(line []byte, start, end int) ingestor.HTTPMethod {
+func parseMethod(line []byte, start, end int) accesslog.HTTPMethod {
 	if end <= start {
-		return ingestor.UNKNOWN
+		return accesslog.UNKNOWN
 	}
 
 	// Use first byte for lookup
 	switch line[start] {
 	case 'G':
-		return ingestor.GET
+		return accesslog.GET
 	case 'P':
 		if end > start+1 {
 			switch line[start+1] {
 			case 'O':
-				return ingestor.POST
+				return accesslog.POST
 			case 'A':
-				return ingestor.PATCH
+				return accesslog.PATCH
 			}
 		}
-		return ingestor.PUT
+		return accesslog.PUT
 	case 'D':
-		return ingestor.DELETE
+		return accesslog.DELETE
 	case 'H':
-		return ingestor.HEAD
+		return accesslog.HEAD
 	case 'O':
-		return ingestor.OPTIONS
+		return accesslog.OPTIONS
 	default:
-		return ingestor.UNKNOWN
+		return accesslog.UNKNOWN
 	}
 }
 

@@ -153,15 +153,19 @@ func MovePrisonerToNextCell(jail *Jail, cellIndex int, prisonerIndex int) {
 // whose To4() is non-nil but whose mask is still 16 bytes. The mask is 4 bytes
 // only for IPv4-notation CIDRs, so len(n.Mask) != 4 rejects every IPv6 form and
 // keeps binary.BigEndian.Uint32(n.Mask) from misreading a 16-byte mask.
+//
+// The range starts at the NETWORK address (n.IP, already masked by
+// net.ParseCIDR), not at the address as written: "10.0.0.77/24" is the range
+// 10.0.0.0-10.0.0.255, the same as "10.0.0.0/24".
 func cidrBounds(cidr string) (start, end uint32, ok bool) {
-	ip, n, err := net.ParseCIDR(cidr)
+	_, n, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return 0, 0, false
 	}
 	if len(n.Mask) != 4 {
 		return 0, 0, false // IPv6 (incl. IPv4-mapped) not supported
 	}
-	v4 := ip.To4()
+	v4 := n.IP.To4()
 	if v4 == nil {
 		return 0, 0, false // IPv6 not supported
 	}

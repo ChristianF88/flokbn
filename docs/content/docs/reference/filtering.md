@@ -3,7 +3,7 @@ title: "Filtering"
 description: "Whitelist, blacklist, regex, and time-based filtering"
 summary: "Complete reference for all flokbn filtering mechanisms and file formats"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-18T10:00:00+00:00
+lastmod: 2026-11-23T10:00:00+00:00
 draft: false
 weight: 250
 slug: "filtering"
@@ -33,17 +33,19 @@ In the ban pipeline, after clustering:
 
 CIDR ranges (`cidrRanges` / `--rangesCidr`) are **not** a filter in either layer - they only add [per-range request counts](#cidr-range-reporting) to the report.
 
+The per-request filters read fields of the parsed log line, so the [log format]({{< relref "/docs/reference/log-formats/" >}}) of the mode being run (`[static] logFormat` or `[live] logFormat`) must extract them: the time window (static mode) needs `%t`, the User-Agent regex and both User-Agent lists need `%u`, the endpoint regex needs `%r` or `%U`. A filter whose field is missing from `logFormat` aborts the run at startup; it is never silently ignored.
+
 **The whitelist always wins**: over detections, over active bans, and over the manual blacklist.
 
 ## IP Whitelist
 
 Whitelisted CIDRs can never be banned. The whitelist is applied to detected clusters before the jail update and subtracted from every published ban list - it does not exclude the traffic from analysis or statistics.
 
-All list files (IP and User-Agent, whitelist and blacklist) are loaded **once at startup**. In live mode, restart flokbn to pick up edits; a malformed or unreadable list file fails loudly at startup rather than silently banning protected ranges. This is fatal in every static output mode too - including `--plot` and `--tui`, which take the same full-parse path: a configured-but-unreadable User-Agent whitelist/blacklist aborts the run **before** any clustering or jail/ban-file writes, so a wrong ban file is never produced.
+All list files (IP and User-Agent, whitelist and blacklist) are loaded **once at startup**. In live mode, restart flokbn to pick up edits; a malformed or unreadable list file fails loudly at startup rather than silently banning protected ranges. This is fatal in every static output mode too - including `--plotPath` and `--tui`, which take the same full-parse path: a configured-but-unreadable User-Agent whitelist/blacklist aborts the run **before** any clustering or jail/ban-file writes, so a wrong ban file is never produced.
 
 ### File Format
 
-One CIDR per line. Comments with `#`. Blank lines ignored. **IPv4 CIDRs only** (this applies to both the whitelist and the blacklist): a malformed CIDR or an IPv6 line aborts the run at startup, naming the line number and file (IPv4-only tool).
+One entry per line: an IPv4 CIDR (`192.0.2.0/24`) or a bare IPv4 address (`192.0.2.7`, treated as `192.0.2.7/32`). A `#` starts a comment, at the beginning of a line or after an entry. Blank lines are ignored. **IPv4 only** (this applies to both the whitelist and the blacklist): a malformed entry or an IPv6 line aborts the run at startup, naming the line number and file (IPv4-only tool).
 
 ```
 # /etc/flokbn/whitelist.txt
@@ -60,7 +62,7 @@ One CIDR per line. Comments with `#`. Blank lines ignored. **IPv4 CIDRs only** (
 
 # Monitoring services
 198.51.100.50/32    # uptime checker
-198.51.100.51/32    # status-page probe
+198.51.100.51       # status-page probe (bare address = /32)
 ```
 
 ### Usage
@@ -102,9 +104,19 @@ Whitelist and blacklist can be used together. The whitelist wins: any blacklist 
 
 Requests whose User-Agent is listed are excluded from analysis, and their source IPs are immunized against bans. Matching is a **case-insensitive exact match** of the full User-Agent string (not substring, not regex).
 
+{{< callout context="caution" title="The User-Agent is chosen by the client" icon="outline/alert-triangle" >}}
+A User-Agent is a request header: any client can send any string, including one from your whitelist. A single request carrying a whitelisted User-Agent makes its source IP immune - it is excluded from detection, removed from active bans, **and removed from the manual IP blacklist** for as long as that IP is remembered (the whole run in static mode, the sliding-window lifetime in live mode). An attacker who guesses or reads a listed string (search-engine crawler strings are public) can switch off banning for their own addresses.
+
+Treat the User-Agent whitelist as a convenience against false positives, not as an access control:
+
+- Prefer the [IP whitelist](#ip-whitelist) with the operator's published address ranges for crawlers and monitoring services you must never ban.
+- Keep the list short and specific; do not list common browser strings.
+- Do not rely on it to protect anything an attacker would benefit from being exempt on.
+{{< /callout >}}
+
 ### File Format
 
-One **full User-Agent string** per line (the exact value the client sends). Comments with `#`. Blank lines ignored.
+One **full User-Agent string** per line (the exact value the client sends). Blank lines are ignored. A line whose first non-blank character is `#` is a comment. Unlike in the IP list files, a `#` **inside** a line is part of the entry, not the start of a comment - real User-Agents contain it (`sqlmap/1.7.2#stable (http://sqlmap.org)`) - so do not append comments to an entry.
 
 ```
 # /etc/flokbn/ua_whitelist.txt
@@ -201,22 +213,27 @@ CLI:
 
 Filter requests by timestamp range.
 
-### CLI Format
+The command line and the config file accept the same syntaxes: `YYYY-MM-DD`, `YYYY-MM-DD HH`, `YYYY-MM-DD HH:MM`, each optionally followed by an offset (` +0100`), or RFC3339. A value without an offset is compared with the wall-clock time of each log line; a value with an offset (every RFC3339 value has one) is compared as a true instant. Details in [Time Formats]({{< relref "/docs/reference/config-file/#time-formats" >}}).
 
-Flexible format: `YYYY-MM-DD`, `YYYY-MM-DD HH`, or `YYYY-MM-DD HH:MM`.
+The time window is a static-mode filter and needs `%t` in the log format. Live windows are bounded by `slidingWindowMaxTime`; a `startTime`/`endTime` in a `[live.NAME]` table is ignored with a startup warning.
+
+### CLI Format
 
 ```bash
 --startTime "2025-01-15 14:00" --endTime "2025-01-15 16:00"
 --startTime "2025-01-15"       --endTime "2025-01-15 23:59"
+--startTime "2025-01-15T14:00:00Z" --endTime "2025-01-15T16:00:00Z"
 ```
 
 ### TOML Format
 
-RFC3339:
-
 ```toml
 startTime = "2025-01-15T14:00:00Z"
 endTime = "2025-01-15T16:00:00Z"
+
+# or, compared with each log line's own clock:
+startTime = "2025-01-15 14:00"
+endTime = "2025-01-15 16:00"
 ```
 
 ## CIDR Range Reporting
@@ -228,12 +245,12 @@ TOML:
 cidrRanges = ["203.0.113.0/24", "198.51.100.0/24"]
 ```
 
-CLI:
+CLI (`--cidrRanges` is accepted as an alias):
 ```bash
 --rangesCidr "203.0.113.0/24" --rangesCidr "198.51.100.0/24"
 ```
 
-**IPv4 CIDRs only**: a malformed or IPv6 `cidrRanges` entry aborts the load (IPv4-only tool). In live mode `cidrRanges` is accepted for key-surface parity but **not reported** (the per-range counts only appear in static mode); each entry is still validated, so an IPv6 value fails the load in live mode too.
+**IPv4 only**: an entry is a CIDR or a bare IPv4 address, which is counted as a `/32` (`"203.0.113.7"` equals `"203.0.113.7/32"`). A malformed or IPv6 entry aborts the load (IPv4-only tool). In live mode `cidrRanges` is accepted for key-surface parity but **not reported** (the per-range counts only appear in static mode) and flokbn logs a startup warning saying so; each entry is still validated, so an IPv6 value fails the load in live mode too.
 
 Useful for keeping an eye on known problematic ASNs or following up on previously detected ranges.
 

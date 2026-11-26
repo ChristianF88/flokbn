@@ -16,10 +16,15 @@
 #################################################################################
 
 [global]
-# REQUIRED: Core jail and ban file configuration
+# Core jail and ban file configuration
+# REQUIRED in live mode. OPTIONAL in static mode: leave both out and static mode
+# only reports its detections; set both to also write a jail and a ban file.
 # These files are used by both static and live modes
-jailFile = "/tmp/flokbn_jail.json"        # Jail state persistence file
-banFile = "/tmp/flokbn_ban.txt"           # Output file for banned IPs/CIDRs
+# Keep them in a directory only flokbn can write, never in /tmp or another
+# world-writable location: the ban file feeds your firewall. The directory must
+# exist before the first run (flokbn does not create it).
+jailFile = "/var/lib/flokbn/jail.json"    # Jail state persistence file
+banFile = "/var/lib/flokbn/ban.txt"       # Output file for banned IPs/CIDRs
 
 # OPTIONAL: Whitelist and blacklist files for IP filtering
 # Relative paths are supported and resolved from the current working directory
@@ -28,6 +33,11 @@ blacklist = "config_examples/blacklist.txt"              # Optional: IPs/CIDRs a
 
 # OPTIONAL: User-Agent based filtering
 # These files contain exact User-Agent strings (full-string match, not substrings)
+# SECURITY: the User-Agent is sent by the client and trivially spoofed. ONE request
+# with a whitelisted User-Agent makes its source IP immune: excluded from detection,
+# removed from active bans AND from the manual IP blacklist. Do not treat the
+# User-Agent whitelist as access control; for crawlers and monitoring you must
+# never ban, whitelist their published IP ranges instead.
 userAgentWhitelist = "config_examples/ua_whitelist.txt"  # Optional: exact User-Agent strings that whitelist IPs
 userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-Agent strings that blacklist IPs
 
@@ -40,6 +50,7 @@ userAgentBlacklist = "config_examples/ua_blacklist.txt"  # Optional: exact User-
 # 2. IP Blacklist: IPs matching these CIDRs are always added to ban file
 # 3. User-Agent Whitelist: requests with these exact UA strings are excluded from
 #    every trie (analysis + statistics), and their IPs are shielded from jail/ban
+#    - including from the manual IP blacklist. Client-controlled, see SECURITY above.
 # 4. User-Agent Blacklist: IPs with these exact UA strings are immediately banned
 # 5. Processing order: UA filters → clustering → IP whitelist/blacklist (ban pipeline) → jail → ban file
 
@@ -63,7 +74,9 @@ format = "text"     # text or json (default: "text")
 [static]
 # REQUIRED: Log file and format configuration
 logFile = "/path/to/your/access.log"     # Path to log file to analyze
-plotPath = "/tmp/flokbn_heatmap.html"     # Optional: Generate visual heatmap
+# Optional: generate a visual heatmap (HTML). The directory must exist; keep it
+# out of /tmp and other world-writable locations, like the jail and ban files.
+plotPath = "/var/lib/flokbn/heatmap.html"
 
 # LOG FORMAT CONFIGURATION
 # Define how to parse your log files using format specifiers
@@ -83,8 +96,14 @@ plotPath = "/tmp/flokbn_heatmap.html"     # Optional: Generate visual heatmap
 # VALIDATION RULES:
 #   - Exactly ONE %h field is required
 #   - Other fields can appear at most once (except %^)
-#   - Use %^ to skip unwanted fields
+#   - Use %^ to skip unwanted fields; write \"%^\" when the log quotes that
+#     field (e.g. the Referer). A value that starts with a double quote is
+#     always read up to its closing quote, so a space inside it cannot shift
+#     the fields that follow.
 #   - Supported fields only: %h %t %r %m %U %s %b %u %^
+#   - A filter needs its field: useragentRegex and the User-Agent lists need %u,
+#     endpointRegex needs %r or %U, startTime/endTime need %t. A filter whose
+#     field is missing from logFormat aborts the run at startup.
 #
 # CRITICAL: %r vs %m %U %^ Usage:
 #   - Use %r ONLY for QUOTED request lines: "GET /path HTTP/1.1"
@@ -94,16 +113,16 @@ plotPath = "/tmp/flokbn_heatmap.html"     # Optional: Generate visual heatmap
 # COMMON LOG FORMAT EXAMPLES:
 
 # Apache Combined with X-Forwarded-For (real client IP at end):
-logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 
 # Standard Apache Combined Log:
-# logFormat = "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+# logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # Apache Common Log:
 # logFormat = "%h %^ %^ [%t] \"%r\" %s %b"
 
 # Nginx Default Access Log:
-# logFormat = "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+# logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # Custom Format Examples with %r (quoted request):
 # logFormat = "%h [%t] \"%r\" %s %b"                   # Basic quoted request format
@@ -128,30 +147,44 @@ logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
 # useragentRegex = ".*bot.*"           # Only analyze requests matching this UA regex
 # endpointRegex = "/api/.*"            # Only analyze requests to endpoints matching this regex
 
-# OPTIONAL: Time range filtering
-# startTime = "2024-01-01T00:00:00Z"   # Start time (RFC3339 format)
-# endTime = "2024-12-31T23:59:59Z"     # End time (RFC3339 format)
+# OPTIONAL: Time range filtering (same syntaxes as --startTime/--endTime)
+# RFC3339, or YYYY-MM-DD, "YYYY-MM-DD HH", "YYYY-MM-DD HH:MM", each optionally
+# followed by an offset such as " +0100". A value WITH an offset (every RFC3339
+# value has one) is compared as a true instant; a value WITHOUT one is compared
+# with the wall-clock time of each log line, whatever offset the line carries.
+# startTime = "2024-01-01T00:00:00Z"   # Start time, a true instant
+# endTime = "2024-12-31T23:59:59Z"     # End time, a true instant
+# startTime = "2024-01-01 06:00"       # 06:00 on each log line's own clock
 
 # OPTIONAL: CIDR range analysis
 # Analyze request distribution within specific network ranges.
-# IPv4 CIDRs only - an IPv6 entry aborts the load (IPv4-only tool).
+# IPv4 only: CIDRs or bare addresses ("192.0.2.7" counts as "192.0.2.7/32").
+# An IPv6 entry aborts the load (IPv4-only tool).
 cidrRanges = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
-# REQUIRED: Clustering configuration
+# Clustering configuration
+# OPTIONAL in static mode (without it the trie only reports parse statistics and
+# cidrRanges counts); REQUIRED for every [live.NAME] window.
 # Each array defines one clustering analysis: [minClusterSize, minDepth, maxDepth, meanSubnetDifference]
-# - minClusterSize: Minimum IPs needed to form a cluster
+# - minClusterSize: Minimum number of REQUESTS (log lines) a range must account for
+#   to be reported. It is a request count, NOT a count of distinct IPs: one IP
+#   sending 1000 requests satisfies minClusterSize = 1000.
 # - minDepth: Minimum subnet depth to consider (e.g., 24 for /24 networks)
 # - maxDepth: Maximum subnet depth to consider (e.g., 32 for individual IPs)
 # - meanSubnetDifference: Threshold for grouping similar subnets
+# Validated at load: minClusterSize is a whole number >= 1, the depths are whole
+# numbers with 0 <= minDepth <= maxDepth <= 32, meanSubnetDifference is between
+# 0 and 2. A row that breaks a rule aborts the load.
 clusterArgSets = [
-    [1000, 16, 24, 0.2],    # Large clusters: 1000+ IPs, /16 to /24 networks
-    [500, 20, 28, 0.15],    # Medium clusters: 500+ IPs, /20 to /28 networks
-    [100, 24, 32, 0.1]      # Small clusters: 100+ IPs, /24 to /32 (individual IPs)
+    [1000, 16, 24, 0.2],    # Large clusters: 1000+ requests, /16 to /24 networks
+    [500, 20, 28, 0.15],    # Medium clusters: 500+ requests, /20 to /28 networks
+    [100, 24, 32, 0.1]      # Small clusters: 100+ requests, /24 to /32 (individual IPs)
 ]
 
-# REQUIRED: Jail configuration
-# Specify which clustering results should contribute to the jail
-# Must match the number of clusterArgSets entries
+# OPTIONAL: Jail configuration
+# Specify which clustering results should contribute to the jail.
+# Omit useForJail entirely and every set is detected and reported but never
+# jailed. If present, it must have exactly one entry per clusterArgSets row.
 useForJail = [true, true, false]    # Use first two cluster results for jail
 
 [static.trie_2]
@@ -168,9 +201,9 @@ cidrRanges = ["192.168.0.0/16"]          # Report request volume in the 192.168.
 
 # More aggressive clustering for admin endpoints
 clusterArgSets = [
-    [50, 24, 32, 0.05],     # Very sensitive: 50+ IPs, /24 to /32
-    [20, 28, 32, 0.03],     # Highly sensitive: 20+ IPs, /28 to /32
-    [10, 30, 32, 0.02]      # Extremely sensitive: 10+ IPs, /30 to /32
+    [50, 24, 32, 0.05],     # Very sensitive: 50+ requests, /24 to /32
+    [20, 28, 32, 0.03],     # Highly sensitive: 20+ requests, /28 to /32
+    [10, 30, 32, 0.02]      # Extremely sensitive: 10+ requests, /30 to /32
 ]
 
 # All admin endpoint clusters go to jail
@@ -183,7 +216,7 @@ useForJail = [true, true, true]
 # Filter for potentially malicious user agents
 useragentRegex = ".*(bot|crawler|spider|scraper|scan|hack|exploit|attack|curl|wget|python|php).*"
 
-# Time-based analysis (example: analyze last 24 hours)
+# Time-based analysis (example: one day; RFC3339 or the short forms, see trie_1)
 # startTime = "2024-07-15T00:00:00Z"
 # endTime = "2024-07-16T00:00:00Z"
 
@@ -193,9 +226,9 @@ cidrRanges = ["0.0.0.0/0"]
 
 # Moderate clustering for suspicious UAs
 clusterArgSets = [
-    [200, 20, 28, 0.1],     # Medium clusters: 200+ IPs
-    [100, 24, 32, 0.08],    # Small clusters: 100+ IPs
-    [50, 28, 32, 0.05]      # Very small clusters: 50+ IPs
+    [200, 20, 28, 0.1],     # Medium clusters: 200+ requests
+    [100, 24, 32, 0.08],    # Small clusters: 100+ requests
+    [50, 28, 32, 0.05]      # Very small clusters: 50+ requests
 ]
 
 # Use all suspicious UA clusters for jail
@@ -210,11 +243,51 @@ useForJail = [true, true, true]
 #################################################################################
 
 [live]
+# OPTIONAL: Format of the shipped log lines. Same format strings as the
+# [static] logFormat above, but a DIFFERENT DEFAULT: live mode reads the client
+# IP from the FIRST field (plain combined log - what a web server writes and
+# Filebeat ships unchanged), static mode from the last one. The [static]
+# logFormat has no effect on live ingestion.
+# If your web server logs a proxy address first and the real client in a
+# trailing X-Forwarded-For field, set this to the matching format (for that
+# layout: the [static] example format above), otherwise flokbn clusters and
+# bans your proxy.
+# The format must contain %t. useragentRegex and the User-Agent lists need %u,
+# endpointRegex needs %r or %U; a filter whose field is missing aborts startup.
+# logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
+
 # REQUIRED: Network configuration (global settings only)
 port = "8080"                           # Port to listen for incoming log streams
 
+# OPTIONAL: Address the log-stream (Lumberjack) listener binds. Default 127.0.0.1.
+# The port is unauthenticated: whoever can reach it can inject log events and
+# get ranges banned. Set "0.0.0.0" only when the shipper runs on another host
+# AND the port is firewalled to it, or protect it with client certificates below.
+# listen = "127.0.0.1"
+
+# OPTIONAL: TLS for the listener (PEM files, read at startup).
+# tlsCert + tlsKey encrypt the stream; tlsClientCA additionally requires every
+# shipper to present a certificate signed by that CA (mutual TLS).
+# tlsCert = "/etc/flokbn/tls/server.crt"
+# tlsKey = "/etc/flokbn/tls/server.key"
+# tlsClientCA = "/etc/flokbn/tls/shippers-ca.crt"
+
+# OPTIONAL: TCP read timeout for the log ingestor (duration string, default "5s")
+# readTimeout = "5s"
+
+# OPTIONAL: HTTP endpoints GET /stats (JSON), GET /bans (ban list) and
+# GET /metrics (Prometheus). Off unless set. There is no authentication and
+# /stats returns the whitelist, file paths and detection thresholds, so keep it
+# on loopback or behind an authenticating reverse proxy.
+# statsListen = "127.0.0.1:8666"
+
+# OPTIONAL: include the top-N IPs per window in /stats (default 0 = off)
+# topTalkers = 5
+
 # NOTE: Sliding window parameters are now per-window, not global
-# Each [live.X] section below defines its own sliding window
+# Each [live.X] section below defines its own sliding window.
+# startTime, endTime and cidrRanges are accepted in a [live.X] section but have
+# no effect there (flokbn logs a warning for each at startup).
 
 [live.sliding_trie_1]
 # DESCRIPTION: Real-time general threat detection
@@ -223,7 +296,9 @@ port = "8080"                           # Port to listen for incoming log stream
 # REQUIRED: Sliding window configuration for this window
 slidingWindowMaxTime = "2h"             # How long to retain data in THIS window
 slidingWindowMaxSize = 100000           # Maximum entries in THIS window
-sleepBetweenIterations = 10             # Seconds between analysis iterations
+sleepBetweenIterations = 10             # Seconds between analysis iterations (default 10
+                                        # when omitted; 0 = no pause; the loop uses the
+                                        # LARGEST value across all windows)
 
 # OPTIONAL: Request filtering
 # useragentRegex = ".*scanner.*"        # Only analyze requests matching this UA regex
@@ -236,7 +311,8 @@ clusterArgSets = [
     [100, 24, 32, 0.1]      # Individual IP detection
 ]
 
-# REQUIRED: Real-time jail configuration
+# OPTIONAL: Real-time jail configuration (omit it and nothing from this window
+# is ever jailed; if present, one entry per clusterArgSets row)
 useForJail = [true, true, false]
 
 [live.sliding_trie_2]
@@ -247,7 +323,8 @@ useForJail = [true, true, false]
 # Note: Different time window than sliding_trie_1 for faster threat detection
 slidingWindowMaxTime = "30m"            # Shorter window for rapid detection
 slidingWindowMaxSize = 20000            # Smaller window for faster processing
-sleepBetweenIterations = 5              # More frequent analysis
+sleepBetweenIterations = 5              # Asks for more frequent analysis - but one loop drives
+                                        # all windows at the largest value, here 10
 
 # OPTIONAL: Filter for high-frequency attack patterns
 useragentRegex = ".*(scan|attack|brute|force|exploit).*"
@@ -260,7 +337,7 @@ clusterArgSets = [
     [25, 28, 32, 0.03]      # Very sensitive detection
 ]
 
-# REQUIRED: All rapid threat clusters go to jail
+# OPTIONAL: All rapid threat clusters go to jail
 useForJail = [true, true, true]
 
 #################################################################################
@@ -280,10 +357,23 @@ useForJail = [true, true, true]
 # 3. Monitor jail file size and rotation
 # 4. Use exact User-Agent strings that are specific enough to avoid false positives
 # 5. Regularly review and update filtering rules
+# 6. The User-Agent whitelist is spoofable (client-controlled header): anyone who
+#    sends a listed string is immune to bans. Prefer the IP whitelist.
+# 7. The live ingest port ([live] port) does not authenticate shippers unless
+#    tlsClientCA is set: whoever can reach it can forge log events and get
+#    arbitrary ranges banned. It binds 127.0.0.1 by default; if you set listen to
+#    another address, require client certificates or restrict access to the port.
+# 8. [live] statsListen is unauthenticated and /stats returns the whitelist, file
+#    paths and detection thresholds: keep it on loopback or behind an
+#    authenticating reverse proxy.
+# 9. If the client IP (%h) comes from an X-Forwarded-For header, only the element
+#    appended by YOUR OWN proxy is trustworthy; the rest is client-supplied.
 
 # OPERATIONAL NOTES:
 # 1. The jail file persists banned IPs across restarts
-# 2. The ban file is generated fresh each run
+# 2. Static mode rewrites the ban file on every run. Live mode rewrites it (and
+#    the jail file) only when the content changed, so the timestamp in its
+#    header is the time of the last change
 # 3. Relative paths are resolved from the current working directory you run
 #    flokbn in, NOT from the config file location
 # 4. Log rotation requires restarting the analysis

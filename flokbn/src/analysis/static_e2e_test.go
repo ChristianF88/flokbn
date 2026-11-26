@@ -40,8 +40,10 @@ func TestStaticPipeline_ClusterDetection(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"detect": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 1000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 1000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -111,8 +113,10 @@ func TestStaticPipeline_CIDRRangeAnalysis(t *testing.T) {
 		StaticTries: map[string]*config.TrieConfig{
 			"ranges": {
 				CIDRRanges: []string{"10.0.0.0/8", "192.168.0.0/16"},
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -158,9 +162,11 @@ func TestStaticPipeline_DeterministicResults(t *testing.T) {
 			},
 			StaticTries: map[string]*config.TrieConfig{
 				"trie_1": {
-					ClusterArgSets: []config.ClusterArgSet{
-						{MinClusterSize: 1000, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
-						{MinClusterSize: 2000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+					TrieCommon: config.TrieCommon{
+						ClusterArgSets: []config.ClusterArgSet{
+							{MinClusterSize: 1000, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.1},
+							{MinClusterSize: 2000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+						},
 					},
 					CIDRRanges: []string{"14.160.0.0/12", "77.88.0.0/16"},
 				},
@@ -211,8 +217,10 @@ func TestStaticPipeline_MalformedLines(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"test": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 10, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 10, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -278,10 +286,10 @@ func TestStaticPipeline_UniqueIPsCountsDistinct(t *testing.T) {
 		name string
 		trie *config.TrieConfig
 	}{
-		// Unfiltered: exercises the IP-only fast path (processTrieFromSortedIPs).
+		// Unfiltered: exercises the IP-only parse and the shared sorted IP list.
 		{"unfiltered fast path", &config.TrieConfig{}},
-		// Filtered: a User-Agent regex forces the full path (processTrie).
-		{"filtered full path", &config.TrieConfig{UserAgentRegex: "test"}},
+		// Filtered: a User-Agent regex forces the full parse and the request filter.
+		{"filtered full path", &config.TrieConfig{TrieCommon: config.TrieCommon{UserAgentRegex: "test"}}},
 	}
 
 	for _, tc := range cases {

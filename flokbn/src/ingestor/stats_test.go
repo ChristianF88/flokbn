@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	lj "github.com/elastic/go-lumber/lj"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 func TestParseEvent_CountsMalformedStatusAndBytes(t *testing.T) {
@@ -41,7 +41,7 @@ func TestParseEvent_CountsMalformedStatusAndBytes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			malformed, err := parseEvent(map[string]interface{}{"message": tc.log}, &req)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -60,9 +60,7 @@ func TestParseEvent_CountsMalformedStatusAndBytes(t *testing.T) {
 }
 
 func TestReadBatch_UpdatesStats(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 4),
-	}
+	ing := newQueueIngestor(4)
 
 	if st := ing.Stats(); st != (IngestStats{}) {
 		t.Errorf("fresh ingestor Stats() = %+v, want zero value", st)
@@ -76,7 +74,7 @@ func TestReadBatch_UpdatesStats(t *testing.T) {
 		map[string]interface{}{"message": valid},
 		map[string]interface{}{"message": badStatus},
 		unparseable,
-		"not a map", // ignored entirely, no counter
+		"not a map", // not a JSON object: dropped and counted as a parse error
 	)
 	ing.events <- makeBatch(map[string]interface{}{"message": valid})
 
@@ -95,8 +93,8 @@ func TestReadBatch_UpdatesStats(t *testing.T) {
 	if st.RequestsTotal != 3 {
 		t.Errorf("RequestsTotal = %d, want 3", st.RequestsTotal)
 	}
-	if st.ParseErrorsTotal != 1 {
-		t.Errorf("ParseErrorsTotal = %d, want 1", st.ParseErrorsTotal)
+	if st.ParseErrorsTotal != 2 {
+		t.Errorf("ParseErrorsTotal = %d, want 2 (missing message + non-object event)", st.ParseErrorsTotal)
 	}
 	if st.MalformedFieldsTotal != 1 {
 		t.Errorf("MalformedFieldsTotal = %d, want 1", st.MalformedFieldsTotal)

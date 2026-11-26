@@ -216,16 +216,18 @@ func BenchmarkParseIPAddress(b *testing.B) {
 ```
 flokbn/
 ├── flokbn/src/          # Main Go application
+│   ├── accesslog/      # Request struct shared by the parsers
 │   ├── analysis/       # Analysis orchestration
 │   ├── cidr/           # CIDR parsing utilities
 │   ├── cli/            # CLI commands and API
 │   ├── config/         # Configuration structs and loading
-│   ├── ingestor/       # Static/live mode ingestion
+│   ├── ingestor/       # Live mode ingestion (Lumberjack server)
 │   ├── iputils/        # IP address utilities
 │   ├── jail/           # Ban/jail management
+│   ├── logging/        # Leveled slog setup for live mode
 │   ├── logparser/      # Log parsing
 │   ├── output/         # Output formatting (JSON, plain, etc.)
-│   ├── pools/          # Memory pool management
+│   ├── pools/          # Trie node allocators
 │   ├── sliding/        # Sliding window for live mode
 │   ├── trie/           # IP trie clustering
 │   ├── tui/            # Terminal user interface

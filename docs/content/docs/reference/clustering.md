@@ -3,7 +3,7 @@ title: "Clustering"
 description: "Cluster detection parameters and tuning guide"
 summary: "Complete reference for flokbn cluster detection parameters, CIDR sizes, and tuning guidance"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-11-23T10:00:00+00:00
 draft: false
 weight: 240
 slug: "clustering"
@@ -36,7 +36,9 @@ clusterArgSets = [[minSize, minDepth, maxDepth, threshold]]
 | `minSize` | integer | Minimum requests to flag a cluster | 50-10000 |
 | `minDepth` | integer | Smallest CIDR prefix (widest range) | 12-24 |
 | `maxDepth` | integer | Largest CIDR prefix (narrowest range) | 24-32 |
-| `threshold` | float | Subtree balance threshold (0.0-1.0) | 0.05-0.3 |
+| `threshold` | float | Subtree balance threshold (0.0-2.0) | 0.05-0.3 |
+
+Every set is validated before a run starts, identically for the CLI flags and for TOML: `minSize` must be a whole number of at least 1, `minDepth` and `maxDepth` whole numbers with `0 <= minDepth <= maxDepth <= 32`, and `threshold` a number from 0 to 2. A set that breaks a rule aborts the run with a message naming each problem. On the command line one flag carries exactly one set - repeat `--clusterArgSets` for more (see [below](#multiple-cluster-arg-sets)); live mode's `--clusterArgSet` is the same flag under its other spelling, and both commands accept both spellings.
 
 ## minSize - Minimum Cluster Size
 
@@ -84,7 +86,7 @@ Controls which CIDR prefix lengths the algorithm considers.
 
 ## threshold - Subnet Balance Threshold
 
-Controls where in the trie a cluster boundary is drawn (0.0-1.0).
+Controls where in the trie a cluster boundary is drawn. Accepted values are 0.0-2.0; the useful range is well below 1. At `0` only a subtree whose two halves carry exactly the same number of requests passes the balance test (everything else is reported at maxDepth); `2` is the largest value the left-hand side below can reach, so it accepts any subtree with traffic on both sides.
 
 A trie node between minDepth and maxDepth is reported as a cluster only when **both** of its children carry traffic and the load is balanced between them. With child request counts `a` and `b`, the node qualifies when:
 

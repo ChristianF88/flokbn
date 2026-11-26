@@ -38,7 +38,7 @@ func TestStaticUnreadableUAWhitelistFailsLoud(t *testing.T) {
 	logFile := writeBasicAccessLog(t, tempDir)
 
 	// A UA whitelist file made unreadable forces os.Open to fail inside
-	// CreateUserAgentMatcher -> (nil, err).
+	// loadGlobalLists -> (nil, err).
 	uaWhitelistFile := filepath.Join(tempDir, "ua_whitelist.txt")
 	if err := os.WriteFile(uaWhitelistFile, []byte("Mozilla/5.0\n"), 0644); err != nil {
 		t.Fatalf("failed to write UA whitelist file: %v", err)
@@ -60,8 +60,10 @@ func TestStaticUnreadableUAWhitelistFailsLoud(t *testing.T) {
 			// NO UserAgentRegex / EndpointRegex / StartTime / EndTime: must not
 			// force needsNonIPFields=true, otherwise the full path masks the bug.
 			"t": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -116,8 +118,10 @@ func TestStaticUnreadableUABlacklistFailsLoud(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"t": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -165,7 +169,7 @@ func TestStaticWithRequestsUnreadableUAWhitelistFailsLoud(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(uaWhitelistFile, 0644) })
 
 	// Side-effect targets: must NOT be created if the fail-loud return fires
-	// before ProcessJailWithWhitelist.
+	// before the publish step.
 	jailFile := filepath.Join(tempDir, "jail.json")
 	banFile := filepath.Join(tempDir, "ban.txt")
 
@@ -183,9 +187,11 @@ func TestStaticWithRequestsUnreadableUAWhitelistFailsLoud(t *testing.T) {
 			// reached this through Static()'s dispatch it would pick the full path;
 			// here we call StaticWithRequests directly, which is always the full path.
 			"t": {
-				UserAgentRegex: "Mozilla",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					UserAgentRegex: "Mozilla",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -254,9 +260,11 @@ func TestStaticWithRequestsUnreadableUABlacklistFailsLoud(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"t": {
-				UserAgentRegex: "Mozilla",
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					UserAgentRegex: "Mozilla",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},
@@ -291,8 +299,8 @@ func TestStaticWithRequestsUnreadableUABlacklistFailsLoud(t *testing.T) {
 }
 
 // TestStaticOmittedUAListFastPathIntact is the companion acceptance check:
-// with NO UA list configured (and no per-trie filters), CreateUserAgentMatcher
-// returns (nil, nil), so Static() must NOT error and must still run the IP-only
+// with NO UA list configured (and no per-trie filters), loadGlobalLists
+// yields an empty matcher, so Static() must NOT error and must still run the IP-only
 // fast path to completion, producing trie results.
 func TestStaticOmittedUAListFastPathIntact(t *testing.T) {
 	tempDir := t.TempDir()
@@ -305,8 +313,10 @@ func TestStaticOmittedUAListFastPathIntact(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"t": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 2, MinDepth: 24, MaxDepth: 24, MeanSubnetDifference: 0.5},
+					},
 				},
 			},
 		},

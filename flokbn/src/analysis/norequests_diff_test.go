@@ -93,15 +93,19 @@ func TestNoRequestsMatchesFullPath_Unfiltered(t *testing.T) {
 		StaticTries: map[string]*config.TrieConfig{
 			"trie_a": {
 				CIDRRanges: []string{"192.168.0.0/16", "10.0.0.0/8"},
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 100, MinDepth: 8, MaxDepth: 24, MeanSubnetDifference: 0.1},
-					{MinClusterSize: 500, MinDepth: 12, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 100, MinDepth: 8, MaxDepth: 24, MeanSubnetDifference: 0.1},
+						{MinClusterSize: 500, MinDepth: 12, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 			"trie_b": {
 				CIDRRanges: []string{"172.16.0.0/12"},
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 50, MinDepth: 8, MaxDepth: 16, MeanSubnetDifference: 0.15},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 50, MinDepth: 8, MaxDepth: 16, MeanSubnetDifference: 0.15},
+					},
 				},
 			},
 		},
@@ -140,11 +144,13 @@ func TestNoRequestsMatchesFullPath_Filtered(t *testing.T) {
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"filtered": {
-				EndpointRegex: "api",
-				CIDRRanges:    []string{"192.168.0.0/16"},
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 50, MinDepth: 8, MaxDepth: 24, MeanSubnetDifference: 0.1},
+				TrieCommon: config.TrieCommon{
+					EndpointRegex: "api",
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 50, MinDepth: 8, MaxDepth: 24, MeanSubnetDifference: 0.1},
+					},
 				},
+				CIDRRanges: []string{"192.168.0.0/16"},
 			},
 		},
 	}

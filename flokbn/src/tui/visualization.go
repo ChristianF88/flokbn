@@ -5,7 +5,6 @@ import (
 	"math"
 	"strings"
 
-	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/rivo/tview"
 )
@@ -13,86 +12,39 @@ import (
 // renderKey identifies a cached render text: (trie, cluster set, scale mode).
 type renderKey struct{ trie, set, mode int }
 
-// clusterKey identifies a cached clustered grid: (trie, cluster set).
-type clusterKey struct{ trie, set int }
-
-// VisualizationView represents the 2D heatmap visualization
+// VisualizationView represents the 2D heatmap visualization.
+//
+// The view holds no traffic data of its own: every render reads the grids from
+// the App's TrieCache, which the request precache fills in the background. It
+// is created with the App and only ever touched on the tview UI goroutine.
 type VisualizationView struct {
 	app               *App
 	view              *tview.TextView
-	trafficData       [256][256]uint32
-	clusteredData     [256][256]uint32 // Per-/16 count of requests inside detected cluster ranges (current set)
-	maxTraffic        uint32
-	requests          []ingestor.Request
 	currentClusterSet int
 	totalClusterSets  int
 	blockScale        int // /16 bins per display-cell side (0 → default 8)
 	scaleMode         int // brightness mapping: scaleLinear, scaleSqrt or scaleLog
 
-	// Per-view caching (used in no-config mode)
-	cachedTrafficData map[int][256][256]uint32 // Cache traffic data per trie
-	cachedMaxTraffic  map[int]uint32           // Cache max traffic per trie
-	cachedRenderText  map[renderKey]string     // Cache rendered visualization text per (trie, set, scale mode)
+	// Rendered heatmap text per (trie, cluster set, scale mode). Only finished
+	// heatmaps are stored, never the loading placeholder.
+	cachedRenderText map[renderKey]string
 
-	// Cache of clustered-traffic grids keyed by (trie, cluster set).
-	// trafficData is per-trie (same across cluster sets); clusteredData differs
-	// per cluster set because it depends on that set's detected ranges.
-	cachedClusteredData map[clusterKey][256][256]uint32
-
-	// Render-source override used by PreCacheAllTries so it can render a
-	// non-current trie WITHOUT mutating the UI-owned App.jsonResult/currentTrie.
-	// When renderResult is non-nil, the render chain reads (renderResult,
-	// renderTrie) instead of (app.jsonResult, app.currentTrie). Set/cleared only
-	// on the goroutine doing the precache; never observed cross-goroutine.
-	renderResult *output.JSONOutput
-	renderTrie   int
+	// loading is true while the last generated text is the "Loading traffic
+	// data" placeholder, i.e. the cache did not yet hold the grids of the
+	// current (trie, cluster set).
+	loading bool
 }
 
-// effectiveResult returns the single-trie output the render chain should read:
-// the precache override when set, otherwise the UI-owned App.jsonResult.
-func (v *VisualizationView) effectiveResult() *output.JSONOutput {
-	if v.renderResult != nil {
-		return v.renderResult
-	}
-	if v.app == nil {
-		return nil
-	}
-	return v.app.jsonResult
-}
-
-// effectiveTrie returns the trie index the render chain should key off: the
-// precache override when set, otherwise the UI-owned App.currentTrie.
-func (v *VisualizationView) effectiveTrie() int {
-	if v.renderResult != nil {
-		return v.renderTrie
-	}
-	if v.app == nil {
-		return 0
-	}
-	return v.app.currentTrie
-}
-
-// NewVisualizationView creates a new visualization view, seeding the initial
-// cluster-set count from the UI-owned a.jsonResult. It reads a.jsonResult and so
-// must be called on the UI goroutine (e.g. showVisualization's on-demand path).
-// The background precache path uses newVisualizationViewWith with a locally
-// derived count to avoid reading UI-owned state off-thread.
+// NewVisualizationView creates the visualization view. The cluster-set count is
+// seeded from a.jsonResult when results are already displayed; otherwise
+// updateForCurrentTrie sets it once they are.
 func (a *App) NewVisualizationView() *VisualizationView {
-	return a.newVisualizationViewWith(len(a.jsonResult.Clustering.Data))
-}
-
-// newVisualizationViewWith creates a visualization view with an explicit initial
-// cluster-set count, so callers off the UI goroutine need not read the UI-owned
-// a.jsonResult.
-func (a *App) newVisualizationViewWith(totalClusterSets int) *VisualizationView {
 	v := &VisualizationView{
-		app:                 a,
-		currentClusterSet:   0,
-		totalClusterSets:    totalClusterSets,
-		cachedTrafficData:   make(map[int][256][256]uint32),
-		cachedMaxTraffic:    make(map[int]uint32),
-		cachedRenderText:    make(map[renderKey]string),
-		cachedClusteredData: make(map[clusterKey][256][256]uint32),
+		app:              a,
+		cachedRenderText: make(map[renderKey]string),
+	}
+	if a.jsonResult != nil {
+		v.totalClusterSets = len(a.jsonResult.Clustering.Data)
 	}
 
 	v.view = tview.NewTextView().
@@ -104,95 +56,14 @@ func (a *App) newVisualizationViewWith(totalClusterSets int) *VisualizationView 
 	return v
 }
 
-// PreCacheAllTries processes and caches traffic data for all tries to eliminate
-// switching delays. It restores the view's display state to the App's current
-// trie afterwards, so it must be called on the UI goroutine (its existing
-// callers - trie-switch closures and tests - already are). The background
-// initial-precache path must use PreCacheAllTriesFor, which never reads the
-// UI-owned App.jsonResult/currentTrie.
-func (v *VisualizationView) PreCacheAllTries(requests []ingestor.Request) {
-	v.PreCacheAllTriesFor(requests, v.app.currentTrie)
-}
-
-// PreCacheAllTriesFor caches traffic/render data for all tries and restores the
-// view's display state to restoreTrie, deriving that trie's output locally
-// rather than reading the UI-owned App.jsonResult/currentTrie. This lets the
-// background initial-precache goroutine (which owns the view before it is
-// published to the UI) run with no cross-goroutine reads of UI-owned state.
-func (v *VisualizationView) PreCacheAllTriesFor(requests []ingestor.Request, restoreTrie int) {
-	if v.app.cfg == nil || v.app.multiTrieResult == nil {
-		// No-config mode - cache single trie
-		v.ProcessTrafficData(requests)
-		v.cachedTrafficData[0] = v.trafficData
-		v.cachedMaxTraffic[0] = v.maxTraffic
-
-		// Pre-cache render text for all cluster sets
-		for i := 0; i < v.totalClusterSets; i++ {
-			v.currentClusterSet = i
-			renderText := v.generateRenderText()
-			v.cachedRenderText[v.renderCacheKey(0, i)] = renderText
-		}
-		v.currentClusterSet = 0 // Reset to first
-		return
-	}
-
-	// Multi-trie mode - cache traffic data for each trie. Render each trie from
-	// a locally-derived single-trie output via the renderResult override so the
-	// UI-owned App.jsonResult/currentTrie are never mutated here.
-	originalRequests := v.requests
-	v.requests = requests
-
-	for trieIndex := 0; trieIndex < len(v.app.multiTrieResult.Tries); trieIndex++ {
-		// Point the render chain at this trie's locally-derived output.
-		v.renderResult = v.app.singleTrieOutput(trieIndex)
-		v.renderTrie = trieIndex
-		v.totalClusterSets = len(v.renderResult.Clustering.Data)
-
-		// Process traffic data for this trie
-		v.ProcessTrafficData(requests)
-
-		// Cache the traffic data
-		v.cachedTrafficData[trieIndex] = v.trafficData
-		v.cachedMaxTraffic[trieIndex] = v.maxTraffic
-
-		// Pre-cache render text for all cluster sets in this trie
-		for clusterSet := 0; clusterSet < v.totalClusterSets; clusterSet++ {
-			v.currentClusterSet = clusterSet
-			cacheKey := v.renderCacheKey(trieIndex, clusterSet)
-			renderText := v.generateRenderText()
-			v.cachedRenderText[cacheKey] = renderText
-		}
-	}
-
-	// Restore view state to restoreTrie. Derive its cluster-set count from the
-	// locally-built single-trie output (not v.app.jsonResult) so this remains
-	// safe to run off the UI goroutine before the view is published.
-	if restoreResult := v.app.singleTrieOutput(restoreTrie); restoreResult != nil {
-		v.totalClusterSets = len(restoreResult.Clustering.Data)
-	}
-
-	// Clear the override so the render chain reads the UI-owned App state again.
-	v.renderResult = nil
-	v.renderTrie = 0
-
-	v.currentClusterSet = 0
-	v.requests = originalRequests
-
-	// Load the restore trie's cached data
-	if cachedData, exists := v.cachedTrafficData[restoreTrie]; exists {
-		v.trafficData = cachedData
-		v.maxTraffic = v.cachedMaxTraffic[restoreTrie]
-	}
-}
-
-// getCurrentClusterSet returns the current cluster set based on mode
+// getCurrentClusterSet returns the current cluster set of the App's current
+// trie (the UI-owned jsonResult), or nil when there is none.
 func (v *VisualizationView) getCurrentClusterSet() *output.ClusterResult {
-	// Ensure app and the active result exist. effectiveResult honours the
-	// precache render override; otherwise it returns the UI-owned jsonResult.
-	result := v.effectiveResult()
-	if v.app == nil || result == nil {
+	// Ensure app and the active result exist.
+	if v.app == nil || v.app.jsonResult == nil {
 		return nil
 	}
+	result := v.app.jsonResult
 
 	// Update totalClusterSets from current data
 	actualClusterSets := len(result.Clustering.Data)
@@ -214,86 +85,37 @@ func (v *VisualizationView) getCurrentClusterSet() *output.ClusterResult {
 	return &result.Clustering.Data[v.currentClusterSet]
 }
 
-// updateForCurrentTrie updates the visualization for the current trie
+// updateForCurrentTrie points the visualization at the App's current trie:
+// refreshed cluster-set count, first cluster set, re-rendered from the cache.
 func (v *VisualizationView) updateForCurrentTrie() {
-	// Update cluster set count from current jsonResult
 	if v.app.jsonResult != nil {
 		v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
 		v.currentClusterSet = 0 // Reset to first cluster set
-
-		// Use cached traffic data if available
-		if v.app.cfg != nil && len(v.requests) > 0 {
-			v.updateTrafficDataCached()
-		} else if len(v.requests) > 0 {
-			// No-config mode - no caching
-			v.ProcessTrafficData(v.requests)
-		}
 
 		v.RenderCached()
 	}
 }
 
-// updateMetadataOnly updates only the cluster set metadata without re-processing traffic
-func (v *VisualizationView) updateMetadataOnly() {
-	// Only update cluster set count, don't re-process traffic data
-	if v.app.jsonResult != nil {
-		v.totalClusterSets = len(v.app.jsonResult.Clustering.Data)
-		v.currentClusterSet = 0 // Reset to first cluster set
-		// Don't call ProcessTrafficData or Render - too expensive
+// noClusteredTraffic is the overlay grid of a trie without cluster sets: no
+// request is inside a detected range. Read-only.
+var noClusteredTraffic [256][256]uint32
+
+// heatmapGrids returns the grids the heatmap of the current (trie, cluster set)
+// is drawn from, straight out of the shared TrieCache: traffic[a][b] counts all
+// parsed requests in /16 a.b (ground truth, identical across tries), and
+// clustered[a][b] those inside the set's detected ranges. ready is false until
+// the request precache has published both (and while there is no traffic at
+// all).
+func (v *VisualizationView) heatmapGrids() (traffic, clustered *[256][256]uint32, ready bool) {
+	traffic, maxTraffic, ok := v.app.trieCache.GetTrafficData()
+	if !ok || maxTraffic == 0 {
+		return nil, nil, false
 	}
-}
-
-// updateTrafficDataCached loads traffic data from cache or processes it
-func (v *VisualizationView) updateTrafficDataCached() {
-	currentTrie := v.app.currentTrie
-
-	// Check if we have cached traffic data for this trie
-	if cachedData, exists := v.cachedTrafficData[currentTrie]; exists {
-		// Load from cache
-		v.trafficData = cachedData
-		v.maxTraffic = v.cachedMaxTraffic[currentTrie]
-	} else {
-		// Process and cache traffic data
-		v.ProcessTrafficData(v.requests)
-
-		// Cache the results
-		v.cachedTrafficData[currentTrie] = v.trafficData
-		v.cachedMaxTraffic[currentTrie] = v.maxTraffic
+	if v.getCurrentClusterSet() == nil {
+		return traffic, &noClusteredTraffic, true
 	}
-}
-
-// ProcessTrafficData processes the requests and builds the traffic heatmap
-// matrix. trafficData[a][b] counts all requests in /16 a.b over ALL parsed
-// requests - the matrix is ground truth and identical across tries.
-//
-// The clustered-traffic overlay grid is NOT built here: it is owned by
-// ensureClusteredData, which generateRenderText calls unconditionally before
-// every heatmap render (and which keys the grid per (trie, cluster set)).
-// Building it here too would be a discarded extra binary search per request.
-func (v *VisualizationView) ProcessTrafficData(requests []ingestor.Request) {
-	v.requests = requests
-	v.maxTraffic = 0
-
-	// Reset the traffic grid.
-	for i := range v.trafficData {
-		v.trafficData[i] = [256]uint32{}
-	}
-
-	// Count traffic by /16 ranges (first.second octets) over ALL parsed
-	// requests.
-	for i := range requests {
-		req := &requests[i]
-		ip := req.IPUint32
-		if ip == 0 {
-			continue
-		}
-		a := byte(ip >> 24)
-		b := byte(ip >> 16)
-		v.trafficData[a][b]++
-		if v.trafficData[a][b] > v.maxTraffic {
-			v.maxTraffic = v.trafficData[a][b]
-		}
-	}
+	clustered, ok = v.app.trieCache.GetClusteredData(v.app.currentTrie, v.currentClusterSet)
+	return traffic, clustered, ok
 }
 
 // renderCacheKey returns the render-text cache key for a (trie, cluster set)
@@ -303,76 +125,24 @@ func (v *VisualizationView) renderCacheKey(trie, set int) renderKey {
 	return renderKey{trie: trie, set: set, mode: v.scaleMode}
 }
 
-// clusteredCacheKey returns the composite cache key for the clustered grid of
-// the current (trie, cluster set) pair. Honours the precache render override
-// so each pre-rendered trie keys its own clustered grid correctly.
-func (v *VisualizationView) clusteredCacheKey() clusterKey {
-	return clusterKey{trie: v.effectiveTrie(), set: v.currentClusterSet}
-}
-
-// ensureClusteredData makes v.clusteredData reflect the current (trie, cluster
-// set). It reuses the cached per-(trie,set) clustered grid when available;
-// otherwise it does a single clustered-only pass over the (already filtered)
-// requests and caches the result. trafficData is NOT recomputed here - it is
-// the same for a trie across all cluster sets.
-func (v *VisualizationView) ensureClusteredData() {
-	key := v.clusteredCacheKey()
-	if v.cachedClusteredData != nil {
-		if cached, ok := v.cachedClusteredData[key]; ok {
-			v.clusteredData = cached
-			return
-		}
-	}
-
-	// Reset and rebuild clustered grid for the current cluster set.
-	for i := range v.clusteredData {
-		v.clusteredData[i] = [256]uint32{}
-	}
-
-	intervals := buildClusterIntervals(v.getCurrentClusterSet())
-	if !intervals.empty() {
-		for i := range v.requests {
-			ip := v.requests[i].IPUint32
-			if ip == 0 {
-				continue
-			}
-			if intervals.Contains(ip) {
-				v.clusteredData[byte(ip>>24)][byte(ip>>16)]++
-			}
-		}
-	}
-
-	if v.cachedClusteredData != nil {
-		v.cachedClusteredData[key] = v.clusteredData
-	}
-}
-
-// RenderCached generates the 2D visualization using optimized cache when possible
+// RenderCached shows the heatmap of the current (trie, cluster set, scale
+// mode), from the render-text cache when it was rendered before.
 func (v *VisualizationView) RenderCached() {
-	// Use per-view caching
-	if v.app.cfg != nil {
-		currentTrie := v.app.currentTrie
-		cacheKey := v.renderCacheKey(currentTrie, v.currentClusterSet)
+	cacheKey := v.renderCacheKey(v.app.currentTrie, v.currentClusterSet)
 
-		if cachedText, exists := v.cachedRenderText[cacheKey]; exists {
-			// Use cached render text
-			v.view.SetText(cachedText)
-			return
-		}
-
-		// Generate and cache the render text
-		renderText := v.generateRenderText()
-		v.cachedRenderText[cacheKey] = renderText
-		v.view.SetText(renderText)
-	} else {
-		// No-config mode - no caching
-		v.Render()
+	if cachedText, exists := v.cachedRenderText[cacheKey]; exists {
+		// Use cached render text
+		v.loading = false
+		v.view.SetText(cachedText)
+		return
 	}
-}
 
-// Render generates the 2D visualization
-func (v *VisualizationView) Render() {
+	// Generate the render text and cache it - unless it is the loading
+	// placeholder, which has to give way to the heatmap once the data is in.
 	renderText := v.generateRenderText()
+	if !v.loading {
+		v.cachedRenderText[cacheKey] = renderText
+	}
 	v.view.SetText(renderText)
 }
 
@@ -389,11 +159,8 @@ func (v *VisualizationView) generateRenderText() string {
 		if cluster != nil {
 			content.WriteString(fmt.Sprintf("[white::b]Traffic Heatmap (/16 ranges) - Cluster Set %d/%d - %s[white::-]\n",
 				v.currentClusterSet+1, v.totalClusterSets, trafficScope))
-			content.WriteString(fmt.Sprintf("[dim]Parameters: min_size=%d, depth=%d-%d, mean_diff=%.1f[white]\n",
-				cluster.Parameters.MinClusterSize,
-				cluster.Parameters.MinDepth,
-				cluster.Parameters.MaxDepth,
-				cluster.Parameters.MeanSubnetDifference))
+			content.WriteString(fmt.Sprintf("[dim]Parameters: %s[white]\n",
+				output.FormatClusterParameters(cluster.Parameters)))
 		}
 	} else if v.totalClusterSets > 0 {
 		content.WriteString(fmt.Sprintf("[white::b]Traffic Heatmap (/16 ranges) - %d cluster sets available - %s[white::-]\n",
@@ -408,14 +175,13 @@ func (v *VisualizationView) generateRenderText() string {
 	content.WriteString(fmt.Sprintf("[dim]Legend: cell brightness = requests in cell (%s, 100%% = busiest cell) | [red]Red dot[white] = share of cell's requests inside detected cluster ranges[white]\n", v.scaleName()))
 	content.WriteString("[dim]Navigate: ←→ change cluster set, 'l' linear/sqrt/log scale, ↑↓ scroll, 'r' results, 'q' quit[white]\n\n")
 
-	if v.maxTraffic == 0 {
+	traffic, clustered, ready := v.heatmapGrids()
+	v.loading = !ready
+	if !ready {
 		content.WriteString("[yellow]Loading traffic data...[white]\n")
 		content.WriteString("[dim]Traffic data will appear once analysis is complete.[white]\n")
 	} else {
-		// Ensure the clustered-traffic overlay grid matches the current
-		// (trie, cluster set) before rendering the heatmap.
-		v.ensureClusteredData()
-		v.renderHeatmap(&content)
+		v.renderHeatmap(&content, traffic, clustered)
 	}
 
 	return content.String()
@@ -470,7 +236,7 @@ func writePadded(b *strings.Builder, s string, width int, rightAlign bool) {
 // cell's TOTAL requests (sum of its scale×scale /16 bins), normalized against
 // the busiest cell on the map (= 100% = white); the red dot encodes the share
 // of the cell's requests inside detected cluster ranges.
-func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
+func (v *VisualizationView) renderHeatmap(content *strings.Builder, traffic, clustered *[256][256]uint32) {
 	// Each display cell aggregates a scale×scale block of /16 bins. scale=8
 	// keeps the 32×32 grid compact enough to avoid scrolling.
 	scale := v.effectiveScale()
@@ -479,7 +245,7 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 	var maxCellTraffic uint32
 	for a := 0; a < 256; a += scale {
 		for b := 0; b < 256; b += scale {
-			if cellTraffic, _ := blockStats(&v.trafficData, &v.clusteredData, a, b, scale); cellTraffic > maxCellTraffic {
+			if cellTraffic, _ := blockStats(traffic, clustered, a, b, scale); cellTraffic > maxCellTraffic {
 				maxCellTraffic = cellTraffic
 			}
 		}
@@ -519,7 +285,7 @@ func (v *VisualizationView) renderHeatmap(content *strings.Builder) {
 
 		for a := 0; a < 256; a += scale {
 			// Sum the cell's traffic and clustered requests.
-			cellTraffic, cellClustered := blockStats(&v.trafficData, &v.clusteredData, a, b, scale)
+			cellTraffic, cellClustered := blockStats(traffic, clustered, a, b, scale)
 
 			// Overlay dot encodes the share of THIS cell's requests that fall
 			// inside detected cluster ranges (traffic-capture ratio), not

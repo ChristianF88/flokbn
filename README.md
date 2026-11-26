@@ -102,7 +102,9 @@ flokbn static --logfile /var/log/nginx/access.log \
 
 **`flokbn static`** analyzes historical log files: multi-tier detection in one pass, time-window slices for forensics, and JSON, compact JSON, plain-text, or interactive TUI output.
 
-**`flokbn live`** monitors continuously, ingesting over the Lumberjack protocol (Filebeat-compatible). Sliding windows watch recent traffic; detected ranges go into a persistent jail with escalating ban stages. HTTP endpoints expose `/stats`, `/bans`, and Prometheus `/metrics`. A Docker demo stack wires it into closed-loop deny enforcement with a Grafana dashboard.
+**`flokbn live`** monitors continuously, ingesting over the Lumberjack protocol (Filebeat-compatible). The ingest listener binds `127.0.0.1` unless you set `listen`, and can require TLS client certificates. Sliding windows watch recent traffic; detected ranges go into a persistent jail with escalating ban stages. HTTP endpoints expose `/stats`, `/bans`, and Prometheus `/metrics`. A Docker demo stack wires it into closed-loop deny enforcement with a Grafana dashboard.
+
+> **Static and live mode have different default log formats.** Both take the same `logFormat` strings, but static mode defaults to the client IP in the *last* field (an `X-Forwarded-For` layout) and live mode to the client IP in the *first* field (what a web server writes and Filebeat ships unchanged). If the lines you ship put a proxy address first and the client in `X-Forwarded-For`, set `[live] logFormat` (or `live --logFormat`) to match, or flokbn will ban your proxy.
 
 ## Performance
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/ingestor"
 	"github.com/ChristianF88/flokbn/jail"
@@ -28,7 +29,7 @@ import (
 // watcher goroutine.
 type fakeIngestor struct {
 	mu              sync.Mutex
-	batches         [][]ingestor.Request
+	batches         [][]accesslog.Request
 	closed          bool
 	closeCalls      int
 	acceptCalls     int
@@ -48,7 +49,7 @@ func (f *fakeIngestor) Accept() error {
 	return nil
 }
 
-func (f *fakeIngestor) ReadBatch() ([]ingestor.Request, error) {
+func (f *fakeIngestor) ReadBatch() ([]accesslog.Request, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.readErr != nil {
@@ -82,7 +83,12 @@ func (f *fakeIngestor) Close() error {
 func (f *fakeIngestor) Stats() ingestor.IngestStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return ingestor.IngestStats{QueueDepth: len(f.batches)}
+	st := ingestor.IngestStats{QueueDepth: len(f.batches)}
+	if !f.closed {
+		// The fake stands for one connected shipper until it is closed.
+		st.OpenConnections = 1
+	}
+	return st
 }
 
 func (f *fakeIngestor) closeCallCount() int {
@@ -107,11 +113,11 @@ func (f *fakeIngestor) acceptCallCount() int {
 // Noise: 20 singleton IPs across distinct /8s, pruned by Count < 100.
 // ============================================================================
 
-func mkRequest(o1, o2, o3, o4 byte, ts time.Time, uri string) ingestor.Request {
-	return ingestor.Request{
+func mkRequest(o1, o2, o3, o4 byte, ts time.Time, uri string) accesslog.Request {
+	return accesslog.Request{
 		IPUint32:  uint32(o1)<<24 | uint32(o2)<<16 | uint32(o3)<<8 | uint32(o4),
 		Status:    200,
-		Method:    ingestor.GET,
+		Method:    accesslog.GET,
 		Timestamp: ts,
 		URI:       uri,
 		UserAgent: "TestUA",
@@ -119,8 +125,8 @@ func mkRequest(o1, o2, o3, o4 byte, ts time.Time, uri string) ingestor.Request {
 }
 
 // hotBlock returns one request per IP in o1.o2.o3.0/24 (256 requests).
-func hotBlock(o1, o2, o3 byte, ts time.Time, uri string) []ingestor.Request {
-	reqs := make([]ingestor.Request, 0, 256)
+func hotBlock(o1, o2, o3 byte, ts time.Time, uri string) []accesslog.Request {
+	reqs := make([]accesslog.Request, 0, 256)
 	for i := 0; i < 256; i++ {
 		reqs = append(reqs, mkRequest(o1, o2, o3, byte(i), ts, uri))
 	}
@@ -128,8 +134,8 @@ func hotBlock(o1, o2, o3 byte, ts time.Time, uri string) []ingestor.Request {
 }
 
 // noiseRequests returns 20 singleton IPs spread across distinct /8s.
-func noiseRequests(ts time.Time, uri string) []ingestor.Request {
-	reqs := make([]ingestor.Request, 0, 20)
+func noiseRequests(ts time.Time, uri string) []accesslog.Request {
+	reqs := make([]accesslog.Request, 0, 20)
 	for i := 0; i < 20; i++ {
 		reqs = append(reqs, mkRequest(byte(20+i), byte(i+1), byte(i+2), byte(i+3), ts, uri))
 	}
@@ -148,12 +154,14 @@ func testClusterArgSet() config.ClusterArgSet {
 func newWindowConfigSized(t *testing.T, endpointRegex string, useForJail bool, maxTime time.Duration, maxSize int) *config.SlidingTrieConfig {
 	t.Helper()
 	stc := &config.SlidingTrieConfig{
-		EndpointRegex:          endpointRegex,
+		TrieCommon: config.TrieCommon{
+			EndpointRegex:  endpointRegex,
+			ClusterArgSets: []config.ClusterArgSet{testClusterArgSet()},
+			UseForJail:     []bool{useForJail},
+		},
 		SlidingWindowMaxTime:   maxTime,
 		SlidingWindowMaxSize:   maxSize,
 		SleepBetweenIterations: 0, // keep the loop fast in tests
-		ClusterArgSets:         []config.ClusterArgSet{testClusterArgSet()},
-		UseForJail:             []bool{useForJail},
 	}
 	if err := stc.CompileRegex(); err != nil {
 		t.Fatalf("CompileRegex: %v", err)
@@ -548,7 +556,7 @@ func assertSingleCIDRState(t *testing.T, it iterStats, snap *statsSnapshot, want
 func TestRunLiveLoop_SingleIterationBansCluster(t *testing.T) {
 	now := time.Now()
 	batch := append(hotBlock(10, 5, 5, now, "/api/item"), noiseRequests(now, "/api/item")...)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	})
@@ -584,7 +592,7 @@ func TestRunLiveLoop_SingleIterationBansCluster(t *testing.T) {
 func TestRunLiveLoop_RegexFilterExcludes(t *testing.T) {
 	now := time.Now()
 	batch := append(hotBlock(10, 5, 5, now, "/api/item"), hotBlock(10, 6, 6, now, "/static/img")...)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"api": newWindowConfig(t, "^/api", true),
 	})
@@ -613,7 +621,7 @@ func TestRunLiveLoop_RegexFilterExcludes(t *testing.T) {
 func TestRunLiveLoop_MultiWindowMerge(t *testing.T) {
 	now := time.Now()
 	batch := append(hotBlock(10, 5, 5, now, "/api/item"), hotBlock(10, 6, 6, now, "/static/img")...)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"all": newWindowConfig(t, "", true),
 		"api": newWindowConfig(t, "^/api", true),
@@ -671,7 +679,7 @@ func TestRunLiveLoop_MultiWindowMerge(t *testing.T) {
 func TestRunLiveLoop_UseForJailFalseDetectsButDoesNotBan(t *testing.T) {
 	now := time.Now()
 	batch := append(hotBlock(10, 5, 5, now, "/api/item"), noiseRequests(now, "/api/item")...)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", false),
 	})
@@ -710,7 +718,7 @@ func TestRunLiveLoop_UseForJailFalseDetectsButDoesNotBan(t *testing.T) {
 func TestRunLiveLoop_WindowEvictionByTime(t *testing.T) {
 	now := time.Now()
 	batch := append(hotBlock(10, 5, 5, now.Add(-2*time.Hour), "/api/item"), noiseRequests(now, "/api/item")...)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfigSized(t, "", true, time.Hour, 100000),
 	})
@@ -743,7 +751,7 @@ func TestRunLiveLoop_WindowEvictionByTime(t *testing.T) {
 func TestRunLiveLoop_WindowEvictionByMaxSize(t *testing.T) {
 	now := time.Now()
 	fake := &fakeIngestor{
-		batches: [][]ingestor.Request{
+		batches: [][]accesslog.Request{
 			hotBlock(10, 5, 5, now, "/api/item"),
 			noiseRequests(now, "/api/item"),
 		},
@@ -785,7 +793,7 @@ func TestRunLiveLoop_WindowEvictionByMaxSize(t *testing.T) {
 func TestRunLiveLoop_JailEscalation(t *testing.T) {
 	now := time.Now()
 	batch := append(hotBlock(10, 5, 5, now, "/api/item"), noiseRequests(now, "/api/item")...)
-	fake := &fakeIngestor{batches: [][]ingestor.Request{batch}, closeAfterDrain: true}
+	fake := &fakeIngestor{batches: [][]accesslog.Request{batch}, closeAfterDrain: true}
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{
 		"w": newWindowConfig(t, "", true),
 	})
@@ -831,7 +839,7 @@ func TestRunLiveLoop_ContextCancelClosesIngestorAndReturns(t *testing.T) {
 	})
 
 	h := startLoop(t, fake, cfg)
-	h.awaitMessage("Filebeat connected")
+	h.awaitMessage(liveAcceptingMsg)
 
 	h.cancel()
 	if err := h.wait(2 * time.Second); err != nil {

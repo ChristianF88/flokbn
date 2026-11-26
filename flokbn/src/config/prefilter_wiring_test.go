@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 // referenceShouldInclude mirrors the ORIGINAL semantics of
 // TrieConfig.ShouldIncludeRequest exactly (empty short-circuit + plain regex,
 // no prefilter). It is the source of truth the prefilter-enabled path must
 // match for every request.
-func referenceShouldInclude(uaRE, epRE *regexp.Regexp, req ingestor.Request) bool {
+func referenceShouldInclude(uaRE, epRE *regexp.Regexp, req accesslog.Request) bool {
 	if uaRE != nil {
 		if req.UserAgent == "" || !uaRE.MatchString(req.UserAgent) {
 			return false
@@ -53,11 +53,11 @@ func TestShouldIncludeRequest_PrefilterEqualsPlain(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			tc := &TrieConfig{UserAgentRegex: c.uaPat, EndpointRegex: c.epPat}
+			tc := &TrieConfig{TrieCommon: TrieCommon{UserAgentRegex: c.uaPat, EndpointRegex: c.epPat}}
 			if err := tc.CompileRegex(); err != nil {
 				t.Fatalf("CompileRegex: %v", err)
 			}
-			stc := &SlidingTrieConfig{UserAgentRegex: c.uaPat, EndpointRegex: c.epPat}
+			stc := &SlidingTrieConfig{TrieCommon: TrieCommon{UserAgentRegex: c.uaPat, EndpointRegex: c.epPat}}
 			if err := stc.CompileRegex(); err != nil {
 				t.Fatalf("CompileRegex (sliding): %v", err)
 			}
@@ -85,13 +85,13 @@ func TestShouldIncludeRequest_PrefilterEqualsPlain(t *testing.T) {
 
 // generateRequests builds a varied request set including empty UA / empty URI,
 // matching and non-matching tokens, and mixed case.
-func generateRequests(n int) []ingestor.Request {
+func generateRequests(n int) []accesslog.Request {
 	rng := rand.New(rand.NewSource(99))
 	uaTokens := []string{"bot", "BOT", "crawl", "Spider", "python-requests", "curl", "WGET", "Mobile", "scan", "masscan", ""}
 	uaFill := []string{"Mozilla/5.0", "AppleWebKit/537.36", "Safari", "Chrome/120", "compatible", ""}
 	uris := []string{"/dataset/1", "/API/x", "/Search?q=1", "/admin", "/static/app.js", "/favicon.ico", "/home", ""}
 
-	out := make([]ingestor.Request, n)
+	out := make([]accesslog.Request, n)
 	for i := range out {
 		ua := uaFill[rng.Intn(len(uaFill))]
 		if rng.Intn(2) == 0 {
@@ -107,7 +107,7 @@ func generateRequests(n int) []ingestor.Request {
 			ua = ""
 		}
 		uri := uris[rng.Intn(len(uris))]
-		out[i] = ingestor.Request{UserAgent: strings.TrimSpace(ua), URI: uri}
+		out[i] = accesslog.Request{UserAgent: strings.TrimSpace(ua), URI: uri}
 	}
 	return out
 }

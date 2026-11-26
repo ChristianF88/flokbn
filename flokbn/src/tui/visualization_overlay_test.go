@@ -7,9 +7,11 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
+	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/output"
 	"github.com/rivo/tview"
@@ -25,8 +27,8 @@ func newClusterSet(cidrs ...string) *output.ClusterResult {
 }
 
 // reqFor builds a synthetic request for the given dotted IP.
-func reqFor(ip string) ingestor.Request {
-	return ingestor.Request{IPUint32: iputils.IPToUint32(net.ParseIP(ip))}
+func reqFor(ip string) accesslog.Request {
+	return accesslog.Request{IPUint32: iputils.IPToUint32(net.ParseIP(ip))}
 }
 
 // bruteContains reports membership via net.Contains over the parsed CIDRs -
@@ -42,7 +44,7 @@ func bruteContains(cidrs []*net.IPNet, ipu uint32) bool {
 }
 
 // buildGridReference computes the clustered-traffic grid by brute force.
-func buildGridReference(reqs []ingestor.Request, cidrs []*net.IPNet) [256][256]uint32 {
+func buildGridReference(reqs []accesslog.Request, cidrs []*net.IPNet) [256][256]uint32 {
 	var grid [256][256]uint32
 	for i := range reqs {
 		ip := reqs[i].IPUint32
@@ -69,26 +71,26 @@ func mustCIDRs(t testing.TB, cidrs ...string) []*net.IPNet {
 	return out
 }
 
-// newOverlayView builds a legacy-mode view with a single cluster set made of
-// the given CIDRs and runs ProcessTrafficData over reqs.
-func newOverlayView(reqs []ingestor.Request, cidrs ...string) *VisualizationView {
-	app := &App{}
-	app.jsonResult = &output.JSONOutput{}
-	app.jsonResult.Clustering.Data = []output.ClusterResult{*newClusterSet(cidrs...)}
+// newOverlayView builds a view on a single-trie App whose one cluster set is
+// made of the given CIDRs, with the trie cache precached over reqs.
+func newOverlayView(reqs []accesslog.Request, cidrs ...string) *VisualizationView {
+	return newOverlayViewFor(reqs, *newClusterSet(cidrs...))
+}
 
-	v := &VisualizationView{
-		app:                 app,
-		totalClusterSets:    1,
-		currentClusterSet:   0,
-		cachedClusteredData: make(map[clusterKey][256][256]uint32),
-	}
-	v.ProcessTrafficData(reqs)
-	return v
+// newOverlayViewFor is newOverlayView with explicit cluster sets.
+func newOverlayViewFor(reqs []accesslog.Request, sets ...output.ClusterResult) *VisualizationView {
+	multi := output.NewJSONOutput("static", time.Now())
+	multi.Tries = []output.TrieResult{{Name: "trie", Data: sets}}
+
+	app := &App{cfg: &config.Config{}, multiTrieResult: multi, trieCache: NewTrieCache()}
+	app.jsonResult = app.singleTrieOutput(0)
+	app.trieCache.PreCacheAllTries(app, multi, reqs)
+	return app.NewVisualizationView()
 }
 
 // repeatReq returns n copies of a request for the given dotted IP.
-func repeatReq(ip string, n int) []ingestor.Request {
-	out := make([]ingestor.Request, n)
+func repeatReq(ip string, n int) []accesslog.Request {
+	out := make([]accesslog.Request, n)
 	r := reqFor(ip)
 	for i := range out {
 		out[i] = r
@@ -97,7 +99,7 @@ func repeatReq(ip string, n int) []ingestor.Request {
 }
 
 // TestClusteredTrafficGrid verifies the per-/16 clustered grid built by
-// ProcessTrafficData equals an independent net.Contains reference, covering a
+// clusteredGrids equals an independent net.Contains reference, covering a
 // /32, /24, a shallow /12 spanning many /16 cells, and IPs outside all ranges.
 func TestClusteredTrafficGrid(t *testing.T) {
 	cidrStrs := []string{
@@ -108,7 +110,7 @@ func TestClusteredTrafficGrid(t *testing.T) {
 		"152.88.205.0/24", // another /24
 	}
 
-	reqs := []ingestor.Request{
+	reqs := []accesslog.Request{
 		reqFor("20.171.207.2"),   // in /32
 		reqFor("20.171.207.3"),   // NOT in /32 (adjacent)
 		reqFor("45.40.50.200"),   // in /26
@@ -122,110 +124,80 @@ func TestClusteredTrafficGrid(t *testing.T) {
 		reqFor("203.0.113.5"),    // out of everything
 	}
 
-	v := &VisualizationView{
-		cachedClusteredData: make(map[clusterKey][256][256]uint32),
+	// Build the grid the way the precache does.
+	grids := clusteredGrids(reqs, output.TrieResult{Data: []output.ClusterResult{*newClusterSet(cidrStrs...)}})
+	if len(grids) != 1 {
+		t.Fatalf("clusteredGrids returned %d grids, want 1 (one per cluster set)", len(grids))
 	}
-	v.requests = reqs
-	v.maxTraffic = 0
-	// Build the grid directly via the same intervals the renderer uses.
-	intervals := buildClusterIntervals(newClusterSet(cidrStrs...))
-	for i := range reqs {
-		ip := reqs[i].IPUint32
-		a := byte(ip >> 24)
-		b := byte(ip >> 16)
-		v.trafficData[a][b]++
-		if intervals.Contains(ip) {
-			v.clusteredData[a][b]++
-		}
-	}
+	clusteredData := grids[0]
 
 	want := buildGridReference(reqs, mustCIDRs(t, cidrStrs...))
 
 	for a := 0; a < 256; a++ {
 		for b := 0; b < 256; b++ {
-			if v.clusteredData[a][b] != want[a][b] {
-				t.Errorf("clusteredData[%d][%d] = %d, want %d", a, b, v.clusteredData[a][b], want[a][b])
+			if clusteredData[a][b] != want[a][b] {
+				t.Errorf("clusteredData[%d][%d] = %d, want %d", a, b, clusteredData[a][b], want[a][b])
 			}
 		}
 	}
 
 	// Spot checks for the documented cases.
-	if v.clusteredData[20][171] != 1 {
-		t.Errorf("/32 cell 20.171 = %d, want 1", v.clusteredData[20][171])
+	if clusteredData[20][171] != 1 {
+		t.Errorf("/32 cell 20.171 = %d, want 1", clusteredData[20][171])
 	}
-	if v.clusteredData[45][40] != 2 { // /26 hit + /24 hit both land in 45.40
-		t.Errorf("45.40 cell = %d, want 2", v.clusteredData[45][40])
+	if clusteredData[45][40] != 2 { // /26 hit + /24 hit both land in 45.40
+		t.Errorf("45.40 cell = %d, want 2", clusteredData[45][40])
 	}
 	// /12 spans 14.160..14.175; the two in-range requests are in cells 14.160 and 14.175.
-	if v.clusteredData[14][160] != 1 || v.clusteredData[14][175] != 1 {
-		t.Errorf("/12 cells: 14.160=%d 14.175=%d, want 1 and 1", v.clusteredData[14][160], v.clusteredData[14][175])
+	if clusteredData[14][160] != 1 || clusteredData[14][175] != 1 {
+		t.Errorf("/12 cells: 14.160=%d 14.175=%d, want 1 and 1", clusteredData[14][160], clusteredData[14][175])
 	}
-	if v.clusteredData[14][176] != 0 {
-		t.Errorf("14.176 (past /12) = %d, want 0", v.clusteredData[14][176])
+	if clusteredData[14][176] != 0 {
+		t.Errorf("14.176 (past /12) = %d, want 0", clusteredData[14][176])
 	}
-	if v.clusteredData[8][8] != 0 {
-		t.Errorf("8.8 (outside) = %d, want 0", v.clusteredData[8][8])
+	if clusteredData[8][8] != 0 {
+		t.Errorf("8.8 (outside) = %d, want 0", clusteredData[8][8])
 	}
 }
 
-// TestProcessTrafficDataLegacyMode exercises the public ProcessTrafficData entry
-// point (legacy/no-config). ProcessTrafficData now builds ONLY the traffic
-// matrix; the clustered-overlay grid is owned by ensureClusteredData (run by
-// generateRenderText before every heatmap render). This test documents that new
-// ownership: ProcessTrafficData alone leaves clusteredData zeroed, and the
-// clustered grid only matches the reference after ensureClusteredData runs.
-func TestProcessTrafficDataLegacyMode(t *testing.T) {
+// TestPrecachedGridsMatchReference exercises the precache entry point the view
+// renders from (it replaces the test of the view's own ProcessTrafficData /
+// ensureClusteredData scans, which are gone): the traffic grid totals all
+// requests, and the clustered grid the view is handed matches an independent
+// net.Contains reference.
+func TestPrecachedGridsMatchReference(t *testing.T) {
 	cidrStrs := []string{"45.40.50.192/26", "14.160.0.0/12"}
-	reqs := []ingestor.Request{
+	reqs := []accesslog.Request{
 		reqFor("45.40.50.200"),
 		reqFor("45.40.50.201"),
 		reqFor("14.170.1.1"),
 		reqFor("8.8.8.8"),
 	}
 
-	app := &App{}
-	cs := newClusterSet(cidrStrs...)
-	app.jsonResult = &output.JSONOutput{}
-	app.jsonResult.Clustering.Data = []output.ClusterResult{*cs}
+	v := newOverlayView(reqs, cidrStrs...)
 
-	v := &VisualizationView{
-		app:                 app,
-		totalClusterSets:    1,
-		currentClusterSet:   0,
-		cachedClusteredData: make(map[clusterKey][256][256]uint32),
-	}
-
-	v.ProcessTrafficData(reqs)
-
-	// ProcessTrafficData no longer owns the clustered overlay: it must leave
-	// clusteredData fully zeroed (the discarded per-request build is gone).
-	for a := 0; a < 256; a++ {
-		for b := 0; b < 256; b++ {
-			if v.clusteredData[a][b] != 0 {
-				t.Fatalf("ProcessTrafficData wrote clusteredData[%d][%d]=%d, want 0 (overlay is ensureClusteredData's job)", a, b, v.clusteredData[a][b])
-			}
-		}
+	traffic, clustered, ready := v.heatmapGrids()
+	if !ready {
+		t.Fatal("heatmapGrids not ready after the precache")
 	}
 
 	// Traffic grid totals all requests.
 	var total uint32
 	for a := 0; a < 256; a++ {
 		for b := 0; b < 256; b++ {
-			total += v.trafficData[a][b]
+			total += traffic[a][b]
 		}
 	}
 	if total != uint32(len(reqs)) {
 		t.Errorf("traffic total = %d, want %d", total, len(reqs))
 	}
 
-	// After ensureClusteredData (the single source of the clustered grid), the
-	// overlay must match the independent net.Contains reference.
-	v.ensureClusteredData()
+	// The overlay must match the independent net.Contains reference.
 	wantClustered := buildGridReference(reqs, mustCIDRs(t, cidrStrs...))
 	for a := 0; a < 256; a++ {
 		for b := 0; b < 256; b++ {
-			if v.clusteredData[a][b] != wantClustered[a][b] {
-				t.Fatalf("clusteredData[%d][%d]=%d want %d", a, b, v.clusteredData[a][b], wantClustered[a][b])
+			if clustered[a][b] != wantClustered[a][b] {
+				t.Fatalf("clusteredData[%d][%d]=%d want %d", a, b, clustered[a][b], wantClustered[a][b])
 			}
 		}
 	}
@@ -462,9 +434,9 @@ func TestRenderHeatmapEdges(t *testing.T) {
 	})
 }
 
-// newBenchRenderView builds a fully populated 256x256 view with a ~10-range
-// cluster set and the clustered grid pre-seeded in the cache, so render
-// benchmarks isolate rendering cost.
+// newBenchRenderView builds a view over a fully populated 256x256 traffic grid
+// with a ~10-range cluster set, both grids seeded straight into the trie cache,
+// so render benchmarks isolate rendering cost.
 func newBenchRenderView() *VisualizationView {
 	cidrStrs := []string{
 		"14.169.0.0/16", "14.186.0.0/15", "14.191.0.0/16",
@@ -472,30 +444,26 @@ func newBenchRenderView() *VisualizationView {
 		"20.171.207.2/32", "152.88.205.0/24", "14.160.0.0/12", "10.0.0.0/8",
 	}
 
-	app := &App{}
-	app.jsonResult = &output.JSONOutput{}
-	app.jsonResult.Clustering.Data = []output.ClusterResult{*newClusterSet(cidrStrs...)}
+	v := newOverlayView(nil, cidrStrs...)
 
-	v := &VisualizationView{
-		app:                 app,
-		totalClusterSets:    1,
-		currentClusterSet:   0,
-		cachedClusteredData: make(map[clusterKey][256][256]uint32),
-	}
-
+	trafficData := new([256][256]uint32)
+	clusteredData := new([256][256]uint32)
+	var maxTraffic uint32
 	rng := rand.New(rand.NewSource(7))
 	for a := 0; a < 256; a++ {
 		for bb := 0; bb < 256; bb++ {
 			tr := uint32(rng.Intn(10000))
-			v.trafficData[a][bb] = tr
-			if tr > v.maxTraffic {
-				v.maxTraffic = tr
+			trafficData[a][bb] = tr
+			if tr > maxTraffic {
+				maxTraffic = tr
 			}
-			v.clusteredData[a][bb] = tr / uint32(1+rng.Intn(4))
+			clusteredData[a][bb] = tr / uint32(1+rng.Intn(4))
 		}
 	}
-	// Seed the clustered-grid cache so ensureClusteredData is a cache hit.
-	v.cachedClusteredData[v.clusteredCacheKey()] = v.clusteredData
+	// Seed the cache the view renders from.
+	ftc := v.app.trieCache
+	ftc.globalTraffic, ftc.globalMaxTraffic = trafficData, maxTraffic
+	ftc.clusteredMatrixes[0] = []*[256][256]uint32{clusteredData}
 	return v
 }
 
@@ -542,9 +510,9 @@ func BenchmarkSetRenderText(b *testing.B) {
 // makeClusteredRequests synthesizes n requests with a clustered IP distribution:
 // a configurable fraction lands inside the given cluster CIDRs, the rest is
 // spread across random /16s outside them.
-func makeClusteredRequests(n int, clusteredFrac float64, cidrs []*net.IPNet) []ingestor.Request {
+func makeClusteredRequests(n int, clusteredFrac float64, cidrs []*net.IPNet) []accesslog.Request {
 	rng := rand.New(rand.NewSource(42))
-	reqs := make([]ingestor.Request, n)
+	reqs := make([]accesslog.Request, n)
 	for i := range reqs {
 		var ip uint32
 		if rng.Float64() < clusteredFrac && len(cidrs) > 0 {
@@ -568,59 +536,57 @@ func makeClusteredRequests(n int, clusteredFrac float64, cidrs []*net.IPNet) []i
 	return reqs
 }
 
-// BenchmarkProcessTrafficData measures the single-pass build of the traffic grid
-// PLUS the clustered-overlay grid over 1,000,000 requests with a representative
-// cluster set. The clustered membership test must add only a small constant
-// overhead, not multiply the cost.
+// benchClusterCIDRs is a representative ~10-range cluster set.
+var benchClusterCIDRs = []string{
+	"14.169.0.0/16", "14.186.0.0/15", "14.191.0.0/16",
+	"113.172.0.0/15", "123.20.0.0/16", "45.40.50.192/26",
+	"20.171.207.2/32", "152.88.205.0/24", "14.160.0.0/12", "10.0.0.0/8",
+}
+
+// BenchmarkProcessTrafficData measures the build of the traffic grid over
+// 1,000,000 requests with a clustered IP distribution: the scan trafficGrid
+// runs once per session (it used to be VisualizationView.ProcessTrafficData,
+// run once per trie; the name is kept so results stay comparable).
 func BenchmarkProcessTrafficData(b *testing.B) {
-	cidrStrs := []string{
-		"14.169.0.0/16", "14.186.0.0/15", "14.191.0.0/16",
-		"113.172.0.0/15", "123.20.0.0/16", "45.40.50.192/26",
-		"20.171.207.2/32", "152.88.205.0/24", "14.160.0.0/12", "10.0.0.0/8",
-	}
-	refNets := mustCIDRs(b, cidrStrs...)
-	reqs := makeClusteredRequests(1_000_000, 0.3, refNets)
-
-	app := &App{}
-	cs := newClusterSet(cidrStrs...)
-	app.jsonResult = &output.JSONOutput{}
-	app.jsonResult.Clustering.Data = []output.ClusterResult{*cs}
-
-	v := &VisualizationView{
-		app:                 app,
-		totalClusterSets:    1,
-		currentClusterSet:   0,
-		cachedClusteredData: make(map[clusterKey][256][256]uint32),
-	}
+	reqs := makeClusteredRequests(1_000_000, 0.3, mustCIDRs(b, benchClusterCIDRs...))
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		v.ProcessTrafficData(reqs)
+		trafficGrid(reqs)
 	}
 }
 
-// BenchmarkProcessTrafficDataNoClusters is the baseline: same pass but with an
-// empty cluster set, isolating the membership-test overhead.
+// BenchmarkProcessTrafficDataNoClusters is the same scan over uniformly random
+// IPs.
 func BenchmarkProcessTrafficDataNoClusters(b *testing.B) {
 	reqs := makeClusteredRequests(1_000_000, 0.0, nil)
-
-	app := &App{}
-	cs := newClusterSet()
-	app.jsonResult = &output.JSONOutput{}
-	app.jsonResult.Clustering.Data = []output.ClusterResult{*cs}
-
-	v := &VisualizationView{
-		app:                 app,
-		totalClusterSets:    1,
-		currentClusterSet:   0,
-		cachedClusteredData: make(map[clusterKey][256][256]uint32),
-	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		v.ProcessTrafficData(reqs)
+		trafficGrid(reqs)
+	}
+}
+
+// BenchmarkClusteredGrids measures the clustered-overlay scan of one trie over
+// 1,000,000 requests: one pass, one binary-search membership test per cluster
+// set. The membership test must add only a small constant overhead per set,
+// not multiply the cost of the pass.
+func BenchmarkClusteredGrids(b *testing.B) {
+	reqs := makeClusteredRequests(1_000_000, 0.3, mustCIDRs(b, benchClusterCIDRs...))
+
+	for _, sets := range []int{1, 4} {
+		trie := output.TrieResult{}
+		for s := 0; s < sets; s++ {
+			trie.Data = append(trie.Data, *newClusterSet(benchClusterCIDRs...))
+		}
+		b.Run(fmt.Sprintf("sets_%d", sets), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				clusteredGrids(reqs, trie)
+			}
+		})
 	}
 }
 
@@ -753,13 +719,16 @@ func TestCacheKeysNoCompositeCollision(t *testing.T) {
 		t.Errorf("mode/trie cache keys collide: %v == %v", a, b)
 	}
 
-	cache := make(map[clusterKey][256][256]uint32)
-	v.app.currentTrie, v.currentClusterSet = 1, 1000
-	cache[v.clusteredCacheKey()] = [256][256]uint32{}
-	v.app.currentTrie, v.currentClusterSet = 2, 0
-	cache[v.clusteredCacheKey()] = [256][256]uint32{}
-	if len(cache) != 2 {
-		t.Errorf("clustered cache keys collide: (1,1000) and (2,0) share an entry")
+	// The clustered grids no longer have a composite key that could collide:
+	// the trie cache indexes them by trie, then by cluster set.
+	ftc := NewTrieCache()
+	ftc.clusteredMatrixes[1] = make([]*[256][256]uint32, 1001)
+	ftc.clusteredMatrixes[1][1000] = new([256][256]uint32)
+	ftc.clusteredMatrixes[2] = []*[256][256]uint32{new([256][256]uint32)}
+	g1, ok1 := ftc.GetClusteredData(1, 1000)
+	g2, ok2 := ftc.GetClusteredData(2, 0)
+	if !ok1 || !ok2 || g1 == g2 {
+		t.Errorf("clustered grids collide: (1,1000) and (2,0) share an entry")
 	}
 }
 
@@ -767,7 +736,7 @@ func TestCacheKeysNoCompositeCollision(t *testing.T) {
 // requests and is identical for every trie - only the clustered overlay may
 // differ per trie. Guards against re-introducing per-trie traffic filtering.
 func TestTrafficMatrixIsGroundTruth(t *testing.T) {
-	reqs := []ingestor.Request{
+	reqs := []accesslog.Request{
 		reqFor("14.169.1.1"), reqFor("14.169.1.1"), reqFor("14.169.2.2"),
 		reqFor("45.40.50.200"), reqFor("8.8.8.8"), reqFor("203.0.113.5"),
 	}
@@ -775,17 +744,25 @@ func TestTrafficMatrixIsGroundTruth(t *testing.T) {
 	ftc := NewTrieCache()
 	trieA := output.TrieResult{Name: "a", Data: []output.ClusterResult{*newClusterSet("14.169.0.0/16")}}
 	trieB := output.TrieResult{Name: "b", Data: []output.ClusterResult{*newClusterSet("45.40.0.0/16")}}
-	ftc.cacheTrafficData(0, reqs, trieA)
-	ftc.cacheTrafficData(1, reqs, trieB)
+	multi := output.NewJSONOutput("static", time.Now())
+	multi.Tries = []output.TrieResult{trieA, trieB}
+	app := &App{cfg: &config.Config{}, multiTrieResult: multi, trieCache: ftc}
+	ftc.PreCacheAllTries(app, multi, reqs)
 
-	mA, maxA, okA := ftc.GetTrafficData(0)
-	mB, maxB, okB := ftc.GetTrafficData(1)
+	// One matrix serves every trie: the view of trie A and the view of trie B
+	// are handed the very same grid.
+	app.jsonResult = app.singleTrieOutput(0)
+	v := app.NewVisualizationView()
+	mA, _, okA := v.heatmapGrids()
+	app.currentTrie, app.jsonResult = 1, app.singleTrieOutput(1)
+	mB, _, okB := v.heatmapGrids()
 	if !okA || !okB {
 		t.Fatalf("traffic data missing: A=%v B=%v", okA, okB)
 	}
-	if mA != mB || maxA != maxB {
+	if mA != mB {
 		t.Errorf("traffic matrix differs between tries - must be ground truth")
 	}
+	_, maxA, _ := ftc.GetTrafficData()
 	var total uint32
 	for a := 0; a < 256; a++ {
 		for b := 0; b < 256; b++ {

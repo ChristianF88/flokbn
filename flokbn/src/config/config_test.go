@@ -1,14 +1,13 @@
 package config
 
 import (
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -300,7 +299,9 @@ func TestLiveConfigValidation(t *testing.T) {
 						SleepBetweenIterations: 10,
 						// clusterArgSets is now a per-window required field
 						// (an empty window clusters nothing - a silent no-op).
-						ClusterArgSets: []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
+						TrieCommon: TrieCommon{
+							ClusterArgSets: []ClusterArgSet{{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5}},
+						},
 					},
 				},
 			},
@@ -539,42 +540,38 @@ endpointRegex = "/admin/.*"
 	// Test cases for trie_1
 	testCases := []struct {
 		name     string
-		request  ingestor.Request
+		request  accesslog.Request
 		expected bool
 	}{
 		{
 			name: "bot user agent and api endpoint - should include",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 				URI:       "/api/users",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: true,
 		},
 		{
 			name: "bot user agent but non-api endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
 				URI:       "/home",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
 		{
 			name: "non-bot user agent but api endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/api/users",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
 		{
 			name: "non-bot user agent and non-api endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/home",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
@@ -595,10 +592,9 @@ endpointRegex = "/admin/.*"
 		t.Fatal("Expected trie_3 to exist")
 	}
 
-	testRequest := ingestor.Request{
+	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
-		IP:        net.ParseIP("1.2.3.4"),
 	}
 
 	if !trie3.ShouldIncludeRequest(testRequest) {
@@ -637,33 +633,30 @@ endpointRegex = "/admin/.*"
 
 	testCases := []struct {
 		name     string
-		request  ingestor.Request
+		request  accesslog.Request
 		expected bool
 	}{
 		{
 			name: "scanner user agent and admin endpoint - should include",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "nmap security scanner v7.80",
 				URI:       "/admin/dashboard",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: true,
 		},
 		{
 			name: "scanner user agent but non-admin endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "nmap security scanner v7.80",
 				URI:       "/public/info",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
 		{
 			name: "non-scanner user agent but admin endpoint - should exclude",
-			request: ingestor.Request{
+			request: accesslog.Request{
 				UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 				URI:       "/admin/dashboard",
-				IP:        net.ParseIP("1.2.3.4"),
 			},
 			expected: false,
 		},
@@ -684,10 +677,9 @@ endpointRegex = "/admin/.*"
 		t.Fatal("Expected sliding_trie_2 to exist")
 	}
 
-	testRequest := ingestor.Request{
+	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
-		IP:        net.ParseIP("1.2.3.4"),
 	}
 
 	if !slidingTrie2.ShouldIncludeRequest(testRequest) {
@@ -771,7 +763,7 @@ func TestInvalidTimeFormatStoresRawValue(t *testing.T) {
 	testConfigContent := `
 [static.trie_1]
 startTime = "2025-01-01T00:00:00"
-endTime = "2025-12-31"
+endTime = "2025/12/31"
 cidrRanges = ["192.168.1.0/24"]
 clusterArgSets = [[100, 24, 32, 0.1]]
 useForJail = [true]
@@ -795,7 +787,9 @@ useForJail = [true]
 		t.Fatal("Expected trie_1 to exist")
 	}
 
-	// Both bounds failed RFC3339 parse, so the parsed pointers stay nil and the
+	// Neither bound matches an accepted layout (RFC3339 needs a zone; the short
+	// forms use dashes - "2025-12-31" itself is a valid zone-less date since the
+	// TOML keys accept the flag syntax), so the parsed pointers stay nil and the
 	// raw carriers feed the diagnostics pass (the exported StartTimeRaw/EndTimeRaw
 	// fields are gone - CFG-01 surfaces these through Validate instead).
 	if trie1.StartTime != nil {
@@ -813,7 +807,7 @@ useForJail = [true]
 	if !strings.Contains(report, `[static.trie_1] invalid startTime "2025-01-01T00:00:00"`) {
 		t.Errorf("Expected startTime diagnostic, got:\n%s", report)
 	}
-	if !strings.Contains(report, `[static.trie_1] invalid endTime "2025-12-31"`) {
+	if !strings.Contains(report, `[static.trie_1] invalid endTime "2025/12/31"`) {
 		t.Errorf("Expected endTime diagnostic, got:\n%s", report)
 	}
 }
@@ -895,10 +889,9 @@ endpointRegex = ""
 	}
 
 	// Should accept all requests when no regex filters are compiled
-	testRequest := ingestor.Request{
+	testRequest := accesslog.Request{
 		UserAgent: "Any user agent",
 		URI:       "/any/endpoint",
-		IP:        net.ParseIP("1.2.3.4"),
 	}
 
 	if !trie1.ShouldIncludeRequest(testRequest) {
@@ -909,24 +902,26 @@ endpointRegex = ""
 func TestCompileRegex(t *testing.T) {
 	t.Run("valid regex compiles", func(t *testing.T) {
 		tc := &TrieConfig{
-			UserAgentRegex: ".*bot.*",
-			EndpointRegex:  "/api/.*",
+			TrieCommon: TrieCommon{
+				UserAgentRegex: ".*bot.*",
+				EndpointRegex:  "/api/.*",
+			},
 		}
 		if err := tc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed: %v", err)
 		}
-		req := ingestor.Request{UserAgent: "Googlebot", URI: "/api/users", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "Googlebot", URI: "/api/users"}
 		if !tc.ShouldIncludeRequest(req) {
 			t.Error("Expected matching request to be included")
 		}
-		req2 := ingestor.Request{UserAgent: "Mozilla", URI: "/home", IP: net.ParseIP("1.2.3.4")}
+		req2 := accesslog.Request{UserAgent: "Mozilla", URI: "/home"}
 		if tc.ShouldIncludeRequest(req2) {
 			t.Error("Expected non-matching request to be excluded")
 		}
 	})
 
 	t.Run("invalid regex returns error", func(t *testing.T) {
-		tc := &TrieConfig{UserAgentRegex: "[invalid"}
+		tc := &TrieConfig{TrieCommon: TrieCommon{UserAgentRegex: "[invalid"}}
 		if err := tc.CompileRegex(); err == nil {
 			t.Error("Expected error for invalid regex")
 		}
@@ -937,7 +932,7 @@ func TestCompileRegex(t *testing.T) {
 		if err := tc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed on empty: %v", err)
 		}
-		req := ingestor.Request{UserAgent: "anything", URI: "/any", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "anything", URI: "/any"}
 		if !tc.ShouldIncludeRequest(req) {
 			t.Error("Expected all requests accepted with no regex")
 		}
@@ -945,13 +940,15 @@ func TestCompileRegex(t *testing.T) {
 
 	t.Run("sliding trie config compiles", func(t *testing.T) {
 		stc := &SlidingTrieConfig{
-			UserAgentRegex: ".*scanner.*",
-			EndpointRegex:  "/admin/.*",
+			TrieCommon: TrieCommon{
+				UserAgentRegex: ".*scanner.*",
+				EndpointRegex:  "/admin/.*",
+			},
 		}
 		if err := stc.CompileRegex(); err != nil {
 			t.Fatalf("CompileRegex failed: %v", err)
 		}
-		req := ingestor.Request{UserAgent: "nmap scanner", URI: "/admin/panel", IP: net.ParseIP("1.2.3.4")}
+		req := accesslog.Request{UserAgent: "nmap scanner", URI: "/admin/panel"}
 		if !stc.ShouldIncludeRequest(req) {
 			t.Error("Expected matching request to be included")
 		}

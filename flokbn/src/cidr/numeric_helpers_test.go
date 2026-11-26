@@ -20,24 +20,24 @@ func TestRangeFullyCovered(t *testing.T) {
 	tests := []struct {
 		name       string
 		start, end uint32
-		ranges     []rng32
+		ranges     IntervalSet
 		want       bool
 	}{
 		{"empty ranges", 10, 20, nil, false},
-		{"start below all", 5, 8, []rng32{{10, 20}}, false},
-		{"exact single cover", 10, 20, []rng32{{10, 20}}, true},
-		{"interior single cover", 12, 18, []rng32{{10, 20}}, true},
-		{"end beyond entry", 10, 21, []rng32{{10, 20}}, false},
-		{"start before entry", 9, 20, []rng32{{10, 20}}, false},
-		{"end exactly at entry end", 15, 20, []rng32{{10, 20}}, true},
-		{"union-only (no single covers)", 10, 20, []rng32{{10, 15}, {16, 20}}, false},
-		{"query above all", 30, 40, []rng32{{10, 20}}, false},
-		{"second entry covers", 100, 150, []rng32{{10, 20}, {90, 200}}, true},
+		{"start below all", 5, 8, IntervalSet{{10, 20}}, false},
+		{"exact single cover", 10, 20, IntervalSet{{10, 20}}, true},
+		{"interior single cover", 12, 18, IntervalSet{{10, 20}}, true},
+		{"end beyond entry", 10, 21, IntervalSet{{10, 20}}, false},
+		{"start before entry", 9, 20, IntervalSet{{10, 20}}, false},
+		{"end exactly at entry end", 15, 20, IntervalSet{{10, 20}}, true},
+		{"union-only (no single covers)", 10, 20, IntervalSet{{10, 15}, {16, 20}}, false},
+		{"query above all", 30, 40, IntervalSet{{10, 20}}, false},
+		{"second entry covers", 100, 150, IntervalSet{{10, 20}, {90, 200}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := rangeFullyCovered(tt.start, tt.end, tt.ranges); got != tt.want {
-				t.Errorf("rangeFullyCovered(%d,%d,%v) = %v, want %v", tt.start, tt.end, tt.ranges, got, tt.want)
+			if got := tt.ranges.covers(tt.start, tt.end); got != tt.want {
+				t.Errorf("%v.covers(%d,%d) = %v, want %v", tt.ranges, tt.start, tt.end, got, tt.want)
 			}
 		})
 	}
@@ -47,30 +47,30 @@ func TestRangeIntersects(t *testing.T) {
 	tests := []struct {
 		name       string
 		start, end uint32
-		ranges     []rng32
+		ranges     IntervalSet
 		want       bool
 	}{
 		{"empty ranges", 10, 20, nil, false},
-		{"disjoint left", 10, 50, []rng32{{100, 200}}, false},
-		{"disjoint right", 100, 200, []rng32{{10, 50}}, false},
-		{"touching boundary right", 50, 60, []rng32{{10, 50}}, true},
-		{"touching boundary left", 5, 10, []rng32{{10, 50}}, true},
-		{"contained", 40, 50, []rng32{{10, 100}}, true},
-		{"spanning entry", 10, 100, []rng32{{40, 50}}, true},
-		{"hits second range", 150, 160, []rng32{{10, 20}, {100, 200}}, true},
-		{"falls in gap", 50, 60, []rng32{{10, 20}, {100, 200}}, false},
+		{"disjoint left", 10, 50, IntervalSet{{100, 200}}, false},
+		{"disjoint right", 100, 200, IntervalSet{{10, 50}}, false},
+		{"touching boundary right", 50, 60, IntervalSet{{10, 50}}, true},
+		{"touching boundary left", 5, 10, IntervalSet{{10, 50}}, true},
+		{"contained", 40, 50, IntervalSet{{10, 100}}, true},
+		{"spanning entry", 10, 100, IntervalSet{{40, 50}}, true},
+		{"hits second range", 150, 160, IntervalSet{{10, 20}, {100, 200}}, true},
+		{"falls in gap", 50, 60, IntervalSet{{10, 20}, {100, 200}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := rangeIntersects(tt.start, tt.end, tt.ranges); got != tt.want {
-				t.Errorf("rangeIntersects(%d,%d,%v) = %v, want %v", tt.start, tt.end, tt.ranges, got, tt.want)
+			if got := tt.ranges.intersects(tt.start, tt.end); got != tt.want {
+				t.Errorf("%v.intersects(%d,%d) = %v, want %v", tt.ranges, tt.start, tt.end, got, tt.want)
 			}
 		})
 	}
 }
 
 // subtractToStrings runs subtractRanges and renders the result as CIDR strings.
-func subtractToStrings(blackStart, blackEnd uint32, ranges []rng32) []string {
+func subtractToStrings(blackStart, blackEnd uint32, ranges IntervalSet) []string {
 	ncs := subtractRanges(nil, blackStart, blackEnd, ranges)
 	out := make([]string, len(ncs))
 	for i, nc := range ncs {
@@ -84,7 +84,7 @@ func TestSubtractRanges(t *testing.T) {
 		name       string
 		blackStart uint32
 		blackEnd   uint32
-		ranges     []rng32
+		ranges     IntervalSet
 		want       string // joined with ","
 	}{
 		{
@@ -96,31 +96,31 @@ func TestSubtractRanges(t *testing.T) {
 		{
 			name:       "fully covered subtracts to empty",
 			blackStart: mkIP(10, 0, 0, 0), blackEnd: mkIP(10, 0, 0, 255),
-			ranges: []rng32{{mkIP(10, 0, 0, 0), mkIP(10, 0, 0, 255)}},
+			ranges: IntervalSet{{mkIP(10, 0, 0, 0), mkIP(10, 0, 0, 255)}},
 			want:   "",
 		},
 		{
 			name:       "interior hole",
 			blackStart: mkIP(10, 0, 0, 0), blackEnd: mkIP(10, 0, 0, 255),
-			ranges: []rng32{{mkIP(10, 0, 0, 64), mkIP(10, 0, 0, 127)}},
+			ranges: IntervalSet{{mkIP(10, 0, 0, 64), mkIP(10, 0, 0, 127)}},
 			want:   "10.0.0.0/26,10.0.0.128/25",
 		},
 		{
 			name:       "0xFFFFFFFF tail early-return",
 			blackStart: mkIP(255, 255, 255, 0), blackEnd: mkIP(255, 255, 255, 255),
-			ranges: []rng32{{mkIP(255, 255, 255, 128), 0xFFFFFFFF}},
+			ranges: IntervalSet{{mkIP(255, 255, 255, 128), 0xFFFFFFFF}},
 			want:   "255.255.255.0/25",
 		},
 		{
 			name:       "clip-left (whitelist starts before window)",
 			blackStart: mkIP(10, 0, 0, 0), blackEnd: mkIP(10, 0, 0, 255),
-			ranges: []rng32{{mkIP(9, 255, 255, 0), mkIP(10, 0, 0, 63)}},
+			ranges: IntervalSet{{mkIP(9, 255, 255, 0), mkIP(10, 0, 0, 63)}},
 			want:   "10.0.0.64/26,10.0.0.128/25",
 		},
 		{
 			name:       "skip-left then break-right around a single hole",
 			blackStart: mkIP(10, 0, 0, 0), blackEnd: mkIP(10, 0, 0, 255),
-			ranges: []rng32{
+			ranges: IntervalSet{
 				{mkIP(9, 0, 0, 0), mkIP(9, 0, 0, 255)},    // entirely before window -> skip (continue)
 				{mkIP(10, 0, 0, 64), mkIP(10, 0, 0, 127)}, // the hole
 				{mkIP(11, 0, 0, 0), mkIP(11, 0, 0, 255)},  // entirely after window -> break
@@ -174,7 +174,7 @@ func TestIsWhitelistedIPNet_MaskGuard(t *testing.T) {
 }
 
 // TestDropFullyWhitelisted_MappedIPv6Ignored confirms the guard inside
-// IsWhitelistedIPNet protects DropFullyWhitelisted's caller too.
+// Parse (4-byte mask only) protects DropFullyWhitelisted too.
 func TestDropFullyWhitelisted_MappedIPv6Ignored(t *testing.T) {
 	kept, dropped := DropFullyWhitelisted(
 		[]string{"10.0.0.0/24"},

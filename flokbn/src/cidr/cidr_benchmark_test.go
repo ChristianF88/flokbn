@@ -2,7 +2,6 @@ package cidr
 
 import (
 	"fmt"
-	"net"
 	"strconv"
 	"testing"
 )
@@ -11,52 +10,45 @@ import (
 // CIDR MERGING BENCHMARKS (from cidr_merge_benchmark_test.go)
 // ============================================================================
 
-// BenchmarkCIDRMerging benchmarks CIDR merging operations
+// BenchmarkCIDRMerging benchmarks MergeCIDRs on overlapping and adjacent
+// ranges (worst case for merging). The input is parsed outside the timer;
+// MergeCIDRs works in place, so each round first restores it with a copy,
+// which is part of the measurement.
 func BenchmarkCIDRMerging(b *testing.B) {
 	sizes := []int{100, 500, 1000, 2000, 5000}
 
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("Merge_%d_CIDRs", size), func(b *testing.B) {
-			// Generate overlapping and adjacent CIDRs for worst-case merging,
-			// pre-parsed outside the timer so only MergeIPNets is measured.
-			ipNets := mustParseCIDRs(b, generateOverlappingCIDRs(size))
+			input := numericCIDRs(b, generateOverlappingCIDRs(size))
+			work := make([]NumericCIDR, len(input))
 
+			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = MergeIPNets(ipNets)
+				copy(work, input)
+				_ = MergeCIDRs(work)
 			}
 		})
 	}
 }
 
-// BenchmarkRemoveContained benchmarks the removeContained function specifically
-func BenchmarkRemoveContained(b *testing.B) {
+// BenchmarkMergeCIDRs benchmarks MergeCIDRs on nested ranges (worst case for
+// dropping contained ranges). It replaces BenchmarkMergeIPNets and
+// BenchmarkRemoveContained, which measured the *net.IPNet implementation on
+// the same input.
+func BenchmarkMergeCIDRs(b *testing.B) {
 	sizes := []int{100, 500, 1000, 2000, 5000}
 
 	for _, size := range sizes {
-		b.Run(fmt.Sprintf("RemoveContained_%d_CIDRs", size), func(b *testing.B) {
-			// Generate nested CIDRs for worst-case containment checking
-			nets := generateNestedCIDRs(size)
+		b.Run(fmt.Sprintf("Nested_%d", size), func(b *testing.B) {
+			input := generateNestedCIDRs(size)
+			work := make([]NumericCIDR, len(input))
 
+			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = removeContained(nets)
-			}
-		})
-	}
-}
-
-// BenchmarkMergeIPNets benchmarks the lower-level MergeIPNets function
-func BenchmarkMergeIPNets(b *testing.B) {
-	sizes := []int{100, 500, 1000, 2000, 5000}
-
-	for _, size := range sizes {
-		b.Run(fmt.Sprintf("MergeIPNets_%d", size), func(b *testing.B) {
-			nets := generateNestedCIDRs(size)
-
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_ = MergeIPNets(nets)
+				copy(work, input)
+				_ = MergeCIDRs(work)
 			}
 		})
 	}
@@ -354,8 +346,8 @@ func generateOverlappingCIDRs(count int) []string {
 }
 
 // generateNestedCIDRs creates nested CIDRs for testing containment removal
-func generateNestedCIDRs(count int) []*net.IPNet {
-	nets := make([]*net.IPNet, 0, count)
+func generateNestedCIDRs(count int) []NumericCIDR {
+	cidrs := make([]NumericCIDR, 0, count)
 
 	// Create nested networks: /16, /17, /18, /19, etc.
 	for i := 0; i < count; i++ {
@@ -364,13 +356,12 @@ func generateNestedCIDRs(count int) []*net.IPNet {
 		cidr := fmt.Sprintf("%d.%d.%d.0/%d",
 			(base>>16)&0xFF, (base>>8)&0xFF, base&0xFF, prefixLen)
 
-		_, net, err := net.ParseCIDR(cidr)
-		if err == nil {
-			nets = append(nets, net)
+		if nc, ok := Parse(cidr); ok {
+			cidrs = append(cidrs, nc)
 		}
 	}
 
-	return nets
+	return cidrs
 }
 
 // BenchmarkNumericCIDR_String benchmarks the NumericCIDR.String() method

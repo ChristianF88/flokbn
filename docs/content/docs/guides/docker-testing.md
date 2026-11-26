@@ -3,7 +3,7 @@ title: "Docker Test & Demo Stacks"
 description: "Using the flokbn Docker test environment and the closed-loop firewall demo"
 summary: "The Docker-based test stack with simulated traffic, and the demo stack with firewall enforcement, Prometheus, and Grafana"
 date: 2025-10-09T10:00:00+00:00
-lastmod: 2026-06-11T10:00:00+00:00
+lastmod: 2026-11-23T10:00:00+00:00
 draft: false
 weight: 830
 slug: "docker-testing"
@@ -21,7 +21,7 @@ flokbn ships two Docker Compose stacks that simulate attack traffic against a re
 
 Both stacks share the same topology:
 
-- **nginx (proxy)** - web server receiving simulated traffic, logs to `/var/log/nginx/access.log`
+- **nginx (proxy)** - web server receiving simulated traffic, logs to `/var/log/nginx/access.log` in the `nginx_logs` named volume (shared read-only with Filebeat; nothing is written to the host)
 - **Filebeat** - ships logs to flokbn via the Lumberjack protocol
 - **flokbn** - runs in live mode with detection enabled; HTTP endpoints `/stats`, `/bans`, and Prometheus `/metrics` on port 8666
 - **traffic clients** (45 in the test stack, 44 in the demo) - spread across 5 Docker networks: four attack clusters (net1-net4) plus one slow negative-control client (172.30.99.32) that must never be banned
@@ -30,13 +30,15 @@ Both stacks share the same topology:
 
 | Port | Service | Published to host | Purpose |
 |------|---------|-------------------|---------|
-| 9000 | flokbn | yes (`9000:9000`) | Lumberjack ingest (Filebeat connects here) |
-| 8666 | flokbn | yes (`8666:8666`) | HTTP stats: `GET /stats`, `GET /bans`, `GET /metrics` |
-| 80 | proxy (nginx) | container-internal | Target for the simulated clients |
-| 9090 | prometheus | yes (monitoring overlay) | Prometheus UI / API |
-| 3000 | grafana | yes (monitoring overlay) | Grafana dashboard |
+| 9000 | flokbn | loopback only (`127.0.0.1:9000:9000`) | Lumberjack ingest (Filebeat connects here over the compose network) |
+| 8666 | flokbn | loopback only (`127.0.0.1:8666:8666`) | HTTP stats: `GET /stats`, `GET /bans`, `GET /metrics` |
+| 80 | proxy (nginx) | loopback only, random host port | Target for the simulated clients |
+| 9090 | prometheus | loopback only (monitoring overlay) | Prometheus UI / API |
+| 3000 | grafana | loopback only (monitoring overlay) | Grafana dashboard |
 
-The configs bind `statsListen = "0.0.0.0:8666"` so the published port is reachable from the host across the isolated compose network. That `0.0.0.0` bind is a documented demo-only exception - outside Docker, bind the stats server to localhost.
+Every published port is bound to `127.0.0.1` on the host: none of these services is authenticated, so the stacks are reachable from the machine running Docker and nowhere else.
+
+The configs bind `statsListen = "0.0.0.0:8666"` and set `listen = "0.0.0.0"` for the Lumberjack listener (its default is `127.0.0.1`) so Filebeat, the proxy's ban poller and the published ports can reach flokbn across the isolated compose networks. Inside a container that is the only way to be reachable; the exposure is limited by the `127.0.0.1` port mappings instead. It is a demo-only exception - outside Docker, keep both listeners on loopback, because neither is authenticated.
 
 ## Quick Start (test stack)
 
@@ -107,7 +109,7 @@ flokbn live ─── sliding windows → clustering → jail (escalating stages
       Prometheus :9090 ──► Grafana :3000   (monitoring overlay)
 ```
 
-While it runs, watch the loop from the host: `curl localhost:8666/stats` for the JSON snapshot of the last iteration, `curl localhost:8666/bans` for exactly what the poller sees (both return 503 until the first detection iteration completes).
+While it runs, watch the loop from the host: `curl localhost:8666/stats` for the JSON snapshot of the last iteration, `curl localhost:8666/bans` for exactly what the poller sees (both return 503 until the loop has published its first snapshot, after the first iteration or idle heartbeat).
 
 ```bash
 docker compose -f docker-compose.demo.yml \
@@ -117,7 +119,7 @@ docker compose -f docker-compose.demo.yml \
 
 Then open:
 
-- **Grafana dashboard**: <http://localhost:3000/d/flokbn> (anonymous access enabled)
+- **Grafana dashboard**: <http://localhost:3000/d/flokbn> (anonymous read-only access; the login form is disabled)
 - **Prometheus**: <http://localhost:9090>
 - **flokbn stats**: <http://localhost:8666/stats>
 
@@ -157,6 +159,7 @@ banFile = "/data/blocklist.txt"
 
 [live]
 port = "9000"
+listen = "0.0.0.0"              # Filebeat runs in another container
 statsListen = "0.0.0.0:8666"
 
 [live.general_detection]
@@ -197,7 +200,19 @@ From the repository root (the Dockerfile lives in the `flokbn/` subdirectory):
 docker build -t flokbn:latest ./flokbn
 ```
 
-The Dockerfile uses a multi-stage build (Go build, then a small Alpine runtime image).
+The Dockerfile uses a multi-stage build (Go build, then a small Alpine runtime image). It builds for the platform Docker targets (`TARGETARCH`), so the same file works on amd64 and arm64 hosts and with `docker buildx build --platform ...`.
+
+To stamp the binary with a version (shown by `flokbn --version`), pass build args:
+
+```bash
+docker build -t flokbn:1.2.3 \
+  --build-arg VERSION=1.2.3 \
+  --build-arg COMMIT="$(git rev-parse HEAD)" \
+  --build-arg DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  ./flokbn
+```
+
+The image's entrypoint is the `flokbn` binary; with no arguments it runs `live --config /config/flokbn.toml`. Arguments to `docker run` replace that default, which is how the static examples below work.
 
 ## Running Static Mode in Docker
 
@@ -224,10 +239,10 @@ services:
     image: flokbn:latest
     restart: always
     ports:
-      - "8080:8080"            # Lumberjack ingest ([live] port)
+      - "10.0.0.5:8080:8080"   # Lumberjack ingest ([live] port): publish ONLY on the interface your log shippers use - unauthenticated
       - "127.0.0.1:8666:8666"  # HTTP stats (statsListen), host-local only
     volumes:
-      - /etc/flokbn/config.toml:/config/config.toml:ro
+      - /etc/flokbn/flokbn.toml:/config/flokbn.toml:ro  # the path the image's default command reads
       - /var/lib/flokbn:/data
     deploy:
       resources:
@@ -236,7 +251,9 @@ services:
           memory: 2G
 ```
 
-For better performance, use `network_mode: host` to eliminate Docker network overhead.
+Inside the container flokbn must listen on the container's interface for the published ingest port to work, so the mounted config needs `listen = "0.0.0.0"` in `[live]` (the default is `127.0.0.1`). The port mapping above is then what limits who can reach the unauthenticated listener - see [Security Considerations]({{< relref "/docs/guides/live-protection/#security-considerations" >}}).
+
+For better performance, use `network_mode: host` to eliminate Docker network overhead. With host networking there is no port mapping to hide behind: the `listen` and `statsListen` addresses in the config are the real bind addresses.
 
 ## Troubleshooting
 

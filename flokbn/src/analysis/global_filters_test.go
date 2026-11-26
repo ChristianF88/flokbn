@@ -33,8 +33,10 @@ func newGlobalFiltersConfig(whitelistPath, uaWhitelistPath string) *config.Confi
 		},
 		StaticTries: map[string]*config.TrieConfig{
 			"baseline": {
-				ClusterArgSets: []config.ClusterArgSet{
-					{MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2},
+				TrieCommon: config.TrieCommon{
+					ClusterArgSets: []config.ClusterArgSet{
+						{MinClusterSize: 1000, MinDepth: 30, MaxDepth: 32, MeanSubnetDifference: 0.2},
+					},
 				},
 			},
 		},
@@ -112,7 +114,11 @@ func TestStaticWithRequestsGlobalFiltersPopulated(t *testing.T) {
 func TestComputeGlobalFiltersMissingFileTreatedAsZero(t *testing.T) {
 	dir := t.TempDir()
 	cfg := newGlobalFiltersConfig(filepath.Join(dir, "does-not-exist.txt"), "")
-	gf := computeGlobalFilters(cfg)
+	lists, err := loadGlobalLists(cfg)
+	if err != nil {
+		t.Fatalf("loadGlobalLists: %v", err)
+	}
+	gf := lists.globalFilters()
 	if gf.IPWhitelistCIDRs != 0 || gf.UAWhitelistPatterns != 0 {
 		t.Errorf("expected zero counts for missing whitelist, got %+v", gf)
 	}

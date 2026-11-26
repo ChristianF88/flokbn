@@ -22,14 +22,16 @@ Analyze historical log files.
 ```bash
 --config value          # Path to TOML config file (exclusive with other flags)
 --logfile value         # Path to log file (required if not using --config)
---logFormat value       # Log format string (default: "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\"")
+--logFormat value       # Log format string (default: "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\"")
 ```
 
 #### Clustering Options
 
 ```bash
---clusterArgSets value  # Clustering parameters (repeatable)
+--clusterArgSets value  # Clustering parameters (repeatable; alias: --clusterArgSet)
                         # Format: minClusterSize,minDepth,maxDepth,meanSubnetDifference
+                        # Whole numbers with minClusterSize >= 1 and
+                        # 0 <= minDepth <= maxDepth <= 32; threshold in [0, 2]
                         # Example: --clusterArgSets 1000,24,32,0.1
 ```
 
@@ -37,7 +39,8 @@ Analyze historical log files.
 
 ```bash
 --startTime value       # Start time for analysis
-                        # Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM
+                        # Formats: YYYY-MM-DD, YYYY-MM-DD HH, YYYY-MM-DD HH:MM,
+                        # or RFC3339 (2025-01-15T10:00:00Z)
                         # Example: --startTime "2025-01-15 10:00"
                         # Zone-less bounds match a log line's local wall-clock
                         # regardless of its timezone offset. Append an offset
@@ -57,7 +60,8 @@ Analyze historical log files.
 --endpointRegex value   # Filter by endpoint regex
                         # Example: --endpointRegex "/api/.*"
 
---rangesCidr value      # Analyze specific CIDR ranges (repeatable)
+--rangesCidr value      # Analyze specific CIDR ranges (repeatable; alias: --cidrRanges)
+                        # A single IPv4 address is counted as a /32
                         # Example: --rangesCidr "203.0.113.0/24"
 ```
 
@@ -74,10 +78,10 @@ Analyze historical log files.
 
 ```bash
 --jailFile value        # Jail state persistence file
-                        # Example: --jailFile /tmp/jail.json
+                        # Example: --jailFile /var/lib/flokbn/jail.json
 
 --banFile value         # Ban list output file
-                        # Example: --banFile /tmp/ban.txt
+                        # Example: --banFile /var/lib/flokbn/ban.txt
 ```
 
 #### Output Options
@@ -96,7 +100,7 @@ Analyze historical log files.
 ```bash
 ./flokbn static \
   --logfile /var/log/nginx/access.log \
-  --logFormat "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\"" \
+  --logFormat "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\"" \
   --startTime "2025-01-15" \
   --endTime "2025-01-15 23:59" \
   --clusterArgSets 1000,24,32,0.1 \
@@ -110,8 +114,8 @@ Analyze historical log files.
   --blacklist /etc/flokbn/blacklist.txt \
   --userAgentWhitelist /etc/flokbn/ua_whitelist.txt \
   --userAgentBlacklist /etc/flokbn/ua_blacklist.txt \
-  --jailFile /tmp/jail.json \
-  --banFile /tmp/ban.txt \
+  --jailFile /var/lib/flokbn/jail.json \
+  --banFile /var/lib/flokbn/ban.txt \
   --plotPath /tmp/heatmap.html \
   --plain
 ```
@@ -125,6 +129,9 @@ Real-time traffic analysis with automatic banning.
 ```bash
 --config value          # Path to TOML config file (exclusive with other flags)
 --port value            # Port to listen on (required if not using --config)
+--logFormat value       # Log format string of the shipped lines
+                        # (default: "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"" - client IP
+                        # in the FIRST field; not the static default)
 ```
 
 #### Sliding Window Options
@@ -144,7 +151,7 @@ Real-time traffic analysis with automatic banning.
 #### Clustering Options
 
 ```bash
---clusterArgSet value   # Clustering parameters (repeatable)
+--clusterArgSet value   # Clustering parameters (repeatable; alias: --clusterArgSets)
                         # Format: minClusterSize,minDepth,maxDepth,meanSubnetDifference
                         # Example: --clusterArgSet 1000,24,32,0.1
 ```
@@ -186,8 +193,8 @@ Real-time traffic analysis with automatic banning.
   --endpointRegex "/admin.*" \
   --whitelist /etc/flokbn/whitelist.txt \
   --blacklist /etc/flokbn/blacklist.txt \
-  --jailFile /tmp/jail.json \
-  --banFile /tmp/ban.txt
+  --jailFile /var/lib/flokbn/jail.json \
+  --banFile /var/lib/flokbn/ban.txt
 ```
 
 ## TOML Configuration File
@@ -211,8 +218,8 @@ Required for live mode. Optional for static mode.
 ```toml
 [global]
 # Jail and ban file paths (required)
-jailFile = "/tmp/flokbn_jail.json"
-banFile = "/tmp/flokbn_ban.txt"
+jailFile = "/var/lib/flokbn/jail.json"
+banFile = "/var/lib/flokbn/ban.txt"
 
 # Optional whitelist/blacklist files
 whitelist = "/etc/flokbn/whitelist.txt"
@@ -228,7 +235,7 @@ userAgentBlacklist = "/etc/flokbn/ua_blacklist.txt"
 ```toml
 [static]
 logFile = "/var/log/nginx/access.log"
-logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 plotPath = "/tmp/heatmap.html"  # Optional
 ```
 
@@ -238,9 +245,11 @@ Each `[static.NAME]` section creates an independent trie.
 
 ```toml
 [static.trie_name]
-# Optional: Time range filtering. Config bounds are RFC3339 (they carry a zone)
-# and are compared as a true instant against each log line's offset-aware
-# timestamp.
+# Optional: Time range filtering. RFC3339 bounds carry a zone and are compared
+# as a true instant against each log line's offset-aware timestamp. The short
+# forms of --startTime/--endTime work here too ("2025-01-15", "2025-01-15 10:00",
+# optionally with " +0100"); without an offset they match the log line's local
+# wall clock. The log format must contain %t.
 startTime = "2025-01-15T00:00:00Z"
 endTime = "2025-01-15T23:59:59Z"
 
@@ -268,13 +277,13 @@ useForJail = [true, true, false]
 
 ```toml
 [global]
-jailFile = "/tmp/jail.json"
-banFile = "/tmp/ban.txt"
+jailFile = "/var/lib/flokbn/jail.json"
+banFile = "/var/lib/flokbn/ban.txt"
 whitelist = "/etc/flokbn/whitelist.txt"
 
 [static]
 logFile = "/var/log/nginx/access.log"
-logFormat = "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+logFormat = "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 plotPath = "/tmp/heatmap.html"
 
 [static.comprehensive_scan]
@@ -313,7 +322,14 @@ useForJail = [true, false]
 ```toml
 [live]
 port = "8080"        # Required: Port to listen on
+listen = "127.0.0.1" # Optional: address to listen on (default "127.0.0.1"; the port is unauthenticated)
+# Optional: format of the shipped lines. Default as below (client IP first);
+# [static] logFormat does not apply to live mode. Must contain %t.
+logFormat = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 readTimeout = "5s"   # Optional: TCP read timeout (duration string, default "5s")
+tlsCert = "/etc/flokbn/tls/server.crt"          # Optional: with tlsKey, serve TLS
+tlsKey = "/etc/flokbn/tls/server.key"
+tlsClientCA = "/etc/flokbn/tls/shippers-ca.crt" # Optional: require client certificates (mTLS)
 ```
 
 #### Live Sliding Windows
@@ -325,7 +341,7 @@ Each `[live.NAME]` section creates an independent sliding window with its own tr
 # Required: Sliding window parameters
 slidingWindowMaxTime = "2h"      # Duration string: "1h", "30m", "2h30m"
 slidingWindowMaxSize = 100000    # Maximum requests in window
-sleepBetweenIterations = 10      # Seconds between analysis cycles
+sleepBetweenIterations = 10      # Seconds between analysis cycles (default: 10)
 
 # Optional: Pattern filtering
 useragentRegex = ".*bot.*"
@@ -477,7 +493,7 @@ Mozilla/5.00 (Nikto/2.1.6) (Evasions:None) (Test:Port Check)   # web scanner
 Default log format for Apache/Nginx combined logs:
 
 ```
-%^ %^ %^ [%t] "%r" %s %b %^ "%u" "%h"
+%^ %^ %^ [%t] "%r" %s %b "%^" "%u" "%h"
 ```
 
 ### Format Specifiers
@@ -496,13 +512,13 @@ Default log format for Apache/Nginx combined logs:
 
 ```bash
 # Apache Combined with X-Forwarded-For
---logFormat "%^ %^ %^ [%t] \"%r\" %s %b %^ \"%u\" \"%h\""
+--logFormat "%^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" \"%h\""
 
 # Standard Apache Combined
---logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+--logFormat "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # Nginx Access Log
---logFormat "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\""
+--logFormat "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 
 # Custom with standalone method/URI
 --logFormat "%h [%t] %m %U %^ %s %b"
@@ -537,8 +553,8 @@ Default log format for Apache/Nginx combined logs:
   --logfile access.log \
   --useragentRegex ".*scanner.*|.*nikto.*" \
   --clusterArgSets 100,30,32,0.05 \
-  --jailFile /tmp/jail.json \
-  --banFile /tmp/ban.txt \
+  --jailFile /var/lib/flokbn/jail.json \
+  --banFile /var/lib/flokbn/ban.txt \
   --plain
 ```
 

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/testutil"
 )
 
@@ -24,8 +24,8 @@ func ipStringToUint32(s string) uint32 {
 // parseLineForTest parses a single line into a fresh Request via the same
 // compiled-format path the production file workers use (parseLineReuseOpt).
 // It replaces the removed public ParseLine API for test purposes.
-func parseLineForTest(p *Parser, line []byte) (*ingestor.Request, error) {
-	req := &ingestor.Request{}
+func parseLineForTest(p *Parser, line []byte) (*accesslog.Request, error) {
+	req := &accesslog.Request{}
 	if err := p.compiled.parseLineReuseOpt(line, req, p.SkipStringFields, p.SkipNonIPFields); err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func TestParser_BasicParsing(t *testing.T) {
 		t.Error("IP should not be zero")
 	}
 	if req.IPUint32 != ipStringToUint32("14.191.169.89") {
-		t.Errorf("Expected IP 14.191.169.89, got %s", ingestor.Uint32ToIPString(req.IPUint32))
+		t.Errorf("Expected IP 14.191.169.89, got %s", accesslog.Uint32ToIPString(req.IPUint32))
 	}
 
 	if req.Timestamp.IsZero() {
@@ -78,7 +78,7 @@ func TestParser_BasicParsing(t *testing.T) {
 		t.Errorf("Expected timestamp %v, got %v", expectedTime, req.Timestamp)
 	}
 
-	if req.Method != ingestor.GET {
+	if req.Method != accesslog.GET {
 		t.Errorf("Expected GET method, got %v", req.Method)
 	}
 
@@ -111,10 +111,10 @@ func TestParser_CustomFormat(t *testing.T) {
 	}
 
 	if req.IPUint32 != ipStringToUint32("10.0.0.100") {
-		t.Errorf("Expected IP 10.0.0.100, got %s", ingestor.Uint32ToIPString(req.IPUint32))
+		t.Errorf("Expected IP 10.0.0.100, got %s", accesslog.Uint32ToIPString(req.IPUint32))
 	}
 
-	if req.Method != ingestor.GET {
+	if req.Method != accesslog.GET {
 		t.Errorf("Expected method GET, got %v", req.Method)
 	}
 
@@ -147,7 +147,7 @@ func TestParser_DelimiterParsing(t *testing.T) {
 		t.Error("IP should not be zero")
 	}
 	if req.IPUint32 != ipStringToUint32("189.115.84.87") {
-		t.Errorf("Expected IP 189.115.84.87, got %s", ingestor.Uint32ToIPString(req.IPUint32))
+		t.Errorf("Expected IP 189.115.84.87, got %s", accesslog.Uint32ToIPString(req.IPUint32))
 	}
 
 	// Validate timestamp parsing
@@ -192,11 +192,11 @@ func TestParser_StandaloneURI(t *testing.T) {
 		t.Error("IP should not be zero")
 	}
 	if req.IPUint32 != ipStringToUint32("192.168.1.100") {
-		t.Errorf("Expected IP 192.168.1.100, got %s", ingestor.Uint32ToIPString(req.IPUint32))
+		t.Errorf("Expected IP 192.168.1.100, got %s", accesslog.Uint32ToIPString(req.IPUint32))
 	}
 
 	// Validate method parsing
-	if req.Method != ingestor.GET {
+	if req.Method != accesslog.GET {
 		t.Errorf("Expected method GET, got %v", req.Method)
 	}
 
@@ -227,7 +227,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 		format         string
 		logLine        []byte
 		expectedIP     string
-		expectedMethod ingestor.HTTPMethod
+		expectedMethod accesslog.HTTPMethod
 		expectedURI    string
 		expectedStatus uint16
 		expectedBytes  uint32
@@ -238,7 +238,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"",
 			logLine:        []byte(`192.168.1.1 - - [10/Oct/2025:13:55:36 +0200] "POST /api/login HTTP/1.1" 401 2326 "https://example.com/login" "curl/7.68.0"`),
 			expectedIP:     "192.168.1.1",
-			expectedMethod: ingestor.POST,
+			expectedMethod: accesslog.POST,
 			expectedURI:    "/api/login",
 			expectedStatus: 401,
 			expectedBytes:  2326,
@@ -249,7 +249,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\"",
 			logLine:        []byte(`10.0.0.100 - - [15/Nov/2025:08:30:12 +0000] "HEAD /robots.txt HTTP/1.1" 404 0 "-" "Googlebot/2.1"`),
 			expectedIP:     "10.0.0.100",
-			expectedMethod: ingestor.HEAD,
+			expectedMethod: accesslog.HEAD,
 			expectedURI:    "/robots.txt",
 			expectedStatus: 404,
 			expectedBytes:  0,
@@ -260,7 +260,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h, %^ %^ %^ [%t] \"%r\" %s %^ %b %^ %^ %^ \"%^\" \"%u\"",
 			logLine:        []byte(`203.0.113.45, 198.51.10.21 - - [25/Dec/2025:16:45:22 +0000] "GET /search?q=test HTTP/1.1" 200 + 15000 25769 25108 0 "-" "Mozilla/5.0 (Windows NT 10.0)"`),
 			expectedIP:     "203.0.113.45",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/search?q=test",
 			expectedStatus: 200,
 			expectedBytes:  15000,
@@ -271,7 +271,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ [%t] %m %U %^ %s %b %^ \"%u\"",
 			logLine:        []byte(`172.16.0.5 user auth [01/Jan/2025:00:00:00 +0000] PUT /api/users/123 HTTP/1.1 204 0 extra "RestClient/1.0"`),
 			expectedIP:     "172.16.0.5",
-			expectedMethod: ingestor.PUT,
+			expectedMethod: accesslog.PUT,
 			expectedURI:    "/api/users/123",
 			expectedStatus: 204,
 			expectedBytes:  0,
@@ -282,7 +282,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ [%t] %m %U %^ %s %b \"%u\"",
 			logLine:        []byte(`10.1.1.50 admin - [20/Feb/2025:14:22:33 +0100] DELETE /api/cache/clear HTTP/1.1 200 512 "AdminTool/2.0"`),
 			expectedIP:     "10.1.1.50",
-			expectedMethod: ingestor.DELETE,
+			expectedMethod: accesslog.DELETE,
 			expectedURI:    "/api/cache/clear",
 			expectedStatus: 200,
 			expectedBytes:  512,
@@ -293,7 +293,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h [%t] %U %s %b \"%u\" %m",
 			logLine:        []byte(`198.51.100.25 [05/Mar/2025:11:20:45 +0000] /health/check 200 42 "HealthChecker/1.0" GET`),
 			expectedIP:     "198.51.100.25",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/health/check",
 			expectedStatus: 200,
 			expectedBytes:  42,
@@ -304,7 +304,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"",
 			logLine:        []byte(`127.0.0.1 daemon info [10/Apr/2025:09:15:30 +0000] "OPTIONS /api/cors HTTP/1.1" 200 0 local "Mozilla/5.0 (X11; Linux)"`),
 			expectedIP:     "127.0.0.1",
-			expectedMethod: ingestor.OPTIONS,
+			expectedMethod: accesslog.OPTIONS,
 			expectedURI:    "/api/cors",
 			expectedStatus: 200,
 			expectedBytes:  0,
@@ -315,7 +315,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ [%t] %m \"%U\" %^ %s %b %u",
 			logLine:        []byte(`192.0.2.100 - - [18/May/2025:22:10:05 +0000] PUT "/api/users/edit profile" HTTP/1.1 422 1024 APIClient`),
 			expectedIP:     "192.0.2.100",
-			expectedMethod: ingestor.PUT,
+			expectedMethod: accesslog.PUT,
 			expectedURI:    "/api/users/edit profile",
 			expectedStatus: 422,
 			expectedBytes:  1024,
@@ -326,7 +326,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h [%t] %m %U %s",
 			logLine:        []byte(`203.0.113.1 [12/Jun/2025:16:30:00 +0000] GET /favicon.ico 404`),
 			expectedIP:     "203.0.113.1",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/favicon.ico",
 			expectedStatus: 404,
 			expectedBytes:  0,  // Not specified
@@ -337,7 +337,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ [%t] \"%r\" %s %b %^ \"%u\"",
 			logLine:        []byte(`10.10.10.1 proxy cache [30/Jul/2025:08:45:12 +0200] "GET /static/style.css HTTP/1.1" 304 0 hit "Mozilla/5.0 (Safari)"`),
 			expectedIP:     "10.10.10.1",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/static/style.css",
 			expectedStatus: 304,
 			expectedBytes:  0,
@@ -348,7 +348,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\" %^",
 			logLine:        []byte(`198.51.100.10 10.0.0.1 proxy upstream [15/Aug/2025:12:00:00 +0000] "POST /api/webhook HTTP/1.1" 201 256 "https://webhook.site" "GitHub-Hookshot/abc123" 0.125`),
 			expectedIP:     "198.51.100.10",
-			expectedMethod: ingestor.POST,
+			expectedMethod: accesslog.POST,
 			expectedURI:    "/api/webhook",
 			expectedStatus: 201,
 			expectedBytes:  256,
@@ -359,7 +359,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			format:         "%h %^ %^ [%t] %m %U %^ %s %b %^ \"%u\" %^",
 			logLine:        []byte(`172.20.0.5 request_id trace_id [25/Sep/2025:19:30:45 +0000] GET /api/metrics HTTP/2.0 200 4096 duration "Prometheus/2.0" extra`),
 			expectedIP:     "172.20.0.5",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/api/metrics",
 			expectedStatus: 200,
 			expectedBytes:  4096,
@@ -383,7 +383,7 @@ func TestParser_ComprehensiveFormats(t *testing.T) {
 			if req.IPUint32 == 0 {
 				t.Error("IP should not be zero")
 			} else if req.IPUint32 != ipStringToUint32(tt.expectedIP) {
-				t.Errorf("Expected IP %s, got %s", tt.expectedIP, ingestor.Uint32ToIPString(req.IPUint32))
+				t.Errorf("Expected IP %s, got %s", tt.expectedIP, accesslog.Uint32ToIPString(req.IPUint32))
 			}
 
 			// Validate Method
@@ -426,7 +426,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 		format         string
 		logLine        []byte
 		expectedIP     string
-		expectedMethod ingestor.HTTPMethod
+		expectedMethod accesslog.HTTPMethod
 		expectedURI    string
 		expectedStatus uint16
 		shouldWork     bool
@@ -436,7 +436,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 			format:         "%h [%t] \"%r\" %s",
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] "GET /api/users HTTP/1.1" 200`),
 			expectedIP:     "192.168.1.1",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/api/users",
 			expectedStatus: 200,
 			shouldWork:     true,
@@ -446,7 +446,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 			format:         "%h [%t] %r %s",
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] GET /api/users HTTP/1.1 200`),
 			expectedIP:     "192.168.1.1",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/api/users",
 			expectedStatus: 200,
 			shouldWork:     false, // This will NOT work correctly
@@ -456,7 +456,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 			format:         "%h [%t] %m %U %^ %s",
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] GET /api/users HTTP/1.1 200`),
 			expectedIP:     "192.168.1.1",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/api/users",
 			expectedStatus: 200,
 			shouldWork:     true,
@@ -466,7 +466,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 			format:         "%h [%t] \"%m %U %^\" %s",
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] "GET /api/users HTTP/1.1" 200`),
 			expectedIP:     "192.168.1.1",
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/api/users",
 			expectedStatus: 200,
 			shouldWork:     false, // This will NOT work correctly
@@ -476,7 +476,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 			format:         "%h [%t] \"%r\" %s %b",
 			logLine:        []byte(`10.0.0.1 [15/Jul/2025:16:45:30 +0000] "POST /api/login?redirect=/dashboard&secure=true HTTP/1.1" 401 1024`),
 			expectedIP:     "10.0.0.1",
-			expectedMethod: ingestor.POST,
+			expectedMethod: accesslog.POST,
 			expectedURI:    "/api/login?redirect=/dashboard&secure=true",
 			expectedStatus: 401,
 			shouldWork:     true,
@@ -486,7 +486,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 			format:         "%h [%t] %m %U %^ %s %b",
 			logLine:        []byte(`10.0.0.1 [15/Jul/2025:16:45:30 +0000] POST /api/login?redirect=/dashboard&secure=true HTTP/1.1 401 1024`),
 			expectedIP:     "10.0.0.1",
-			expectedMethod: ingestor.POST,
+			expectedMethod: accesslog.POST,
 			expectedURI:    "/api/login?redirect=/dashboard&secure=true",
 			expectedStatus: 401,
 			shouldWork:     true,
@@ -512,7 +512,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 				if req.IPUint32 == 0 {
 					t.Error("IP should not be zero")
 				} else if req.IPUint32 != ipStringToUint32(tt.expectedIP) {
-					t.Errorf("Expected IP %s, got %s", tt.expectedIP, ingestor.Uint32ToIPString(req.IPUint32))
+					t.Errorf("Expected IP %s, got %s", tt.expectedIP, accesslog.Uint32ToIPString(req.IPUint32))
 				}
 
 				// Validate Method
@@ -538,7 +538,7 @@ func TestParser_QuotedVsUnquotedParsing(t *testing.T) {
 				// This test should fail or produce incorrect results
 				if err == nil {
 					t.Logf("Parsing succeeded but results may be incorrect:")
-					t.Logf("  IP: %v", ingestor.Uint32ToIPString(req.IPUint32))
+					t.Logf("  IP: %v", accesslog.Uint32ToIPString(req.IPUint32))
 					t.Logf("  Method: %v", req.Method)
 					t.Logf("  URI: %q", req.URI)
 					t.Logf("  Status: %d", req.Status)
@@ -612,7 +612,7 @@ func TestParser_VariousLogFormats(t *testing.T) {
 		logLine  []byte
 		expected struct {
 			ip       string
-			method   ingestor.HTTPMethod
+			method   accesslog.HTTPMethod
 			uri      string
 			status   uint16
 			bytes    uint32
@@ -625,14 +625,14 @@ func TestParser_VariousLogFormats(t *testing.T) {
 			logLine: nginxLogLine,
 			expected: struct {
 				ip       string
-				method   ingestor.HTTPMethod
+				method   accesslog.HTTPMethod
 				uri      string
 				status   uint16
 				bytes    uint32
 				hasAgent bool
 			}{
 				ip:       "10.0.0.1",
-				method:   ingestor.POST,
+				method:   accesslog.POST,
 				uri:      "/admin/login",
 				status:   401,
 				bytes:    2326,
@@ -645,14 +645,14 @@ func TestParser_VariousLogFormats(t *testing.T) {
 			logLine: minimalLogLine,
 			expected: struct {
 				ip       string
-				method   ingestor.HTTPMethod
+				method   accesslog.HTTPMethod
 				uri      string
 				status   uint16
 				bytes    uint32
 				hasAgent bool
 			}{
 				ip:       "203.0.113.45",
-				method:   ingestor.HEAD,
+				method:   accesslog.HEAD,
 				uri:      "/robots.txt",
 				status:   404,
 				bytes:    0, // Should be 0 for "-"
@@ -665,14 +665,14 @@ func TestParser_VariousLogFormats(t *testing.T) {
 			logLine: errorLogLine,
 			expected: struct {
 				ip       string
-				method   ingestor.HTTPMethod
+				method   accesslog.HTTPMethod
 				uri      string
 				status   uint16
 				bytes    uint32
 				hasAgent bool
 			}{
 				ip:       "172.16.0.100",
-				method:   ingestor.GET,
+				method:   accesslog.GET,
 				uri:      "/admin/dashboard",
 				status:   500,
 				bytes:    1024,
@@ -685,14 +685,14 @@ func TestParser_VariousLogFormats(t *testing.T) {
 			logLine: longUriLogLine,
 			expected: struct {
 				ip       string
-				method   ingestor.HTTPMethod
+				method   accesslog.HTTPMethod
 				uri      string
 				status   uint16
 				bytes    uint32
 				hasAgent bool
 			}{
 				ip:       "192.168.1.50",
-				method:   ingestor.GET,
+				method:   accesslog.GET,
 				uri:      "/api/v1/search",
 				status:   200,
 				bytes:    15000,
@@ -714,7 +714,7 @@ func TestParser_VariousLogFormats(t *testing.T) {
 			}
 
 			if req.IPUint32 == 0 || req.IPUint32 != ipStringToUint32(tt.expected.ip) {
-				t.Errorf("Expected IP %s, got %s", tt.expected.ip, ingestor.Uint32ToIPString(req.IPUint32))
+				t.Errorf("Expected IP %s, got %s", tt.expected.ip, accesslog.Uint32ToIPString(req.IPUint32))
 			}
 
 			if req.Method != tt.expected.method {
@@ -920,7 +920,7 @@ func BenchmarkParser_CustomFormat(b *testing.B) {
 
 func BenchmarkParser_ZeroAlloc(b *testing.B) {
 	parser, _ := NewParser(apacheCombinedFormat)
-	req := &ingestor.Request{}
+	req := &accesslog.Request{}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -943,7 +943,7 @@ func BenchmarkStaticParser_Comparison(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		evt := map[string]interface{}{"message": string(testLogLine)}
-		var req ingestor.Request
+		var req accesslog.Request
 		if err := parseEventStaticMock(evt, &req); err != nil {
 			b.Fatal(err)
 		}
@@ -1082,7 +1082,7 @@ func TestParser_SingleLine(t *testing.T) {
 	req := requests[0]
 
 	if req.IPUint32 != ipStringToUint32("14.191.169.89") {
-		t.Errorf("Expected IP 14.191.169.89, got %s", ingestor.Uint32ToIPString(req.IPUint32))
+		t.Errorf("Expected IP 14.191.169.89, got %s", accesslog.Uint32ToIPString(req.IPUint32))
 	}
 
 	expectedTime := time.Date(2025, 7, 6, 19, 57, 26, 0, time.UTC)
@@ -1090,7 +1090,7 @@ func TestParser_SingleLine(t *testing.T) {
 		t.Errorf("Expected timestamp %v, got %v", expectedTime, req.Timestamp)
 	}
 
-	if req.Method != ingestor.GET {
+	if req.Method != accesslog.GET {
 		t.Errorf("Expected method GET, got %v", req.Method)
 	}
 
@@ -1112,7 +1112,7 @@ func TestParser_SingleLine(t *testing.T) {
 }
 
 // Mock static parser for performance comparison
-func parseEventStaticMock(evt map[string]interface{}, out *ingestor.Request) error {
+func parseEventStaticMock(evt map[string]interface{}, out *accesslog.Request) error {
 	msg, ok := evt["message"].(string)
 	if !ok {
 		return fmt.Errorf("missing message field")
@@ -1140,7 +1140,7 @@ func parseEventStaticMock(evt map[string]interface{}, out *ingestor.Request) err
 		requestLine := quoted[1]
 		parts := strings.Fields(requestLine)
 		if len(parts) >= 2 {
-			out.Method = ingestor.ParseMethod(parts[0])
+			out.Method = accesslog.ParseMethod(parts[0])
 			out.URI = parts[1]
 		}
 
@@ -1174,7 +1174,7 @@ func TestParser_MethodFromRequestLineSentinel(t *testing.T) {
 		name           string
 		format         string
 		logLine        []byte
-		expectedMethod ingestor.HTTPMethod
+		expectedMethod accesslog.HTTPMethod
 		expectedURI    string
 	}{
 		{
@@ -1183,7 +1183,7 @@ func TestParser_MethodFromRequestLineSentinel(t *testing.T) {
 			name:           "m_GET_before_r_POST: %m wins (GET, not overwritten)",
 			format:         `%h [%t] %m "%r" %s`,
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] GET "POST /api/login HTTP/1.1" 200`),
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/api/login",
 		},
 		{
@@ -1192,7 +1192,7 @@ func TestParser_MethodFromRequestLineSentinel(t *testing.T) {
 			name:           "m_POST_before_r_GET: %m wins (POST)",
 			format:         `%h [%t] %m "%r" %s`,
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] POST "GET /home HTTP/1.1" 200`),
-			expectedMethod: ingestor.POST,
+			expectedMethod: accesslog.POST,
 			expectedURI:    "/home",
 		},
 		{
@@ -1203,7 +1203,7 @@ func TestParser_MethodFromRequestLineSentinel(t *testing.T) {
 			name:           "r_POST_before_m_GET: %m wins (GET)",
 			format:         `%h [%t] "%r" %m %s`,
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] "POST /api/login HTTP/1.1" GET 200`),
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/api/login",
 		},
 		{
@@ -1212,7 +1212,7 @@ func TestParser_MethodFromRequestLineSentinel(t *testing.T) {
 			name:           "r_only_GET: fallback writes GET",
 			format:         `%h [%t] "%r" %s`,
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] "GET /index.html HTTP/1.1" 200`),
-			expectedMethod: ingestor.GET,
+			expectedMethod: accesslog.GET,
 			expectedURI:    "/index.html",
 		},
 		{
@@ -1220,7 +1220,7 @@ func TestParser_MethodFromRequestLineSentinel(t *testing.T) {
 			name:           "r_only_POST: fallback writes POST",
 			format:         `%h [%t] "%r" %s`,
 			logLine:        []byte(`192.168.1.1 [10/Jul/2025:14:30:45 +0000] "POST /submit HTTP/1.1" 200`),
-			expectedMethod: ingestor.POST,
+			expectedMethod: accesslog.POST,
 			expectedURI:    "/submit",
 		},
 	}

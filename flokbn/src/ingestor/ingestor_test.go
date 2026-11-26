@@ -1,17 +1,18 @@
 package ingestor
 
 import (
+	"errors"
 	"net"
-	"strings"
 	"testing"
 	"time"
 
-	lj "github.com/elastic/go-lumber/lj"
+	"github.com/ChristianF88/flokbn/accesslog"
+	"github.com/ChristianF88/flokbn/logparser"
 )
 
 func TestParseEvent_MissingMessageField(t *testing.T) {
 	evt := map[string]interface{}{}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err == nil || err.Error() != "missing message field" {
 		t.Errorf("expected missing message field error, got %v", err)
@@ -21,7 +22,7 @@ func TestParseEvent_MissingMessageField(t *testing.T) {
 func TestParseEvent_InvalidIP(t *testing.T) {
 	log := `notanip - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err == nil || err.Error() != "invalid IP" {
 		t.Errorf("expected invalid IP error, got %v", err)
@@ -33,6 +34,11 @@ func TestParseEvent_InvalidIP(t *testing.T) {
 // and be counted as a successful request. It must now be rejected with an error
 // and NEVER stored (no IP, no IPUint32). Covers both a plain IPv6 literal and
 // the IPv4-mapped form, since both must be purged.
+//
+// The error is logparser.ErrInvalidIP, the one fixed value for "not an IPv4
+// address". The hardcoded parser this test was written for returned a text
+// naming the IPv6 token; nothing ever displayed it (ReadBatch only counts), and
+// building it allocated on every IPv6 line.
 func TestParseEvent_RejectsIPv6(t *testing.T) {
 	cases := []struct {
 		name string
@@ -46,21 +52,16 @@ func TestParseEvent_RejectsIPv6(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			log := tc.ip + ` - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
 			evt := map[string]interface{}{"message": log}
-			var req Request
+			var req accesslog.Request
 			_, err := parseEvent(evt, &req)
 			if err == nil {
 				t.Fatalf("expected error for IPv6 %q, got nil", tc.ip)
 			}
-			// MSG-04: the reject message must use the canonical parenthetical and
-			// quote the offending token, matching the config-load IPv6 wording.
-			if !strings.Contains(err.Error(), "(IPv4-only tool)") {
-				t.Errorf("IPv6 reject message missing canonical %q: %v", "(IPv4-only tool)", err)
+			if !errors.Is(err, logparser.ErrInvalidIP) {
+				t.Errorf("IPv6 %q rejected with %v, want %v", tc.ip, err, logparser.ErrInvalidIP)
 			}
-			if !strings.Contains(err.Error(), tc.ip) {
-				t.Errorf("IPv6 reject message does not quote the offending token %q: %v", tc.ip, err)
-			}
-			if req.IP != nil {
-				t.Errorf("IPv6 must not be stored: req.IP = %v", req.IP)
+			if ip := req.GetIPNet(); ip != nil {
+				t.Errorf("IPv6 must not be stored: GetIPNet() = %v", ip)
 			}
 			if req.IPUint32 != 0 {
 				t.Errorf("IPv6 must not set IPUint32: got %d", req.IPUint32)
@@ -73,9 +74,7 @@ func TestParseEvent_RejectsIPv6(t *testing.T) {
 // parse error (the operator-visible reject counter) and never appends it to
 // output or counts it as a successful request.
 func TestReadBatch_RejectsIPv6(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
+	ing := newQueueIngestor(1)
 	ipv6 := `2001:db8::1 - - [12/Mar/2024:15:04:05 -0700] "GET /v6 HTTP/1.1" 200 1 "-" "UA"`
 	valid := `10.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /ok HTTP/1.1" 200 1 "-" "UA"`
 	ing.events <- makeBatch(
@@ -106,7 +105,7 @@ func TestReadBatch_RejectsIPv6(t *testing.T) {
 func TestParseEvent_InvalidTimestamp(t *testing.T) {
 	log := `192.168.1.1 - - [badtime] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err == nil {
 		t.Errorf("expected error for invalid timestamp, got nil")
@@ -132,7 +131,7 @@ func TestParseEvent_RetainsTimezoneOffset(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			if _, err := parseEvent(map[string]interface{}{"message": tc.log}, &req); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -162,7 +161,7 @@ func TestParseEvent_RetainsTimezoneOffset(t *testing.T) {
 // both layouts (see TestParseEvent_InvalidTimestamp).
 func TestParseEvent_AcceptsOffsetlessTimestampAsUTC(t *testing.T) {
 	log := `1.2.3.4 - - [06/Jul/2025:19:57:26] "GET / HTTP/1.1" 200 1 "-" "UA"`
-	var req Request
+	var req accesslog.Request
 	if _, err := parseEvent(map[string]interface{}{"message": log}, &req); err != nil {
 		t.Fatalf("offset-less timestamp must be accepted, got error: %v", err)
 	}
@@ -223,7 +222,7 @@ func TestParseEvent_DashStatusBytesAreZeroNotMalformed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			evt := map[string]interface{}{"message": tc.log}
-			var req Request
+			var req accesslog.Request
 			malformed, err := parseEvent(evt, &req)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -244,7 +243,7 @@ func TestParseEvent_DashStatusBytesAreZeroNotMalformed(t *testing.T) {
 func TestParseEvent_SetsIPUint32(t *testing.T) {
 	log := `192.168.1.100 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -254,20 +253,21 @@ func TestParseEvent_SetsIPUint32(t *testing.T) {
 	if req.IPUint32 != want {
 		t.Errorf("expected IPUint32 %d, got %d", want, req.IPUint32)
 	}
-	if req.IP.String() != "192.168.1.100" {
-		t.Errorf("expected IP 192.168.1.100, got %v", req.IP)
+	// GetIPNet derives the net.IP from IPUint32.
+	if req.GetIPNet().String() != "192.168.1.100" {
+		t.Errorf("expected IP 192.168.1.100, got %v", req.GetIPNet())
 	}
 }
 
 func TestParseEvent_UnknownMethod(t *testing.T) {
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "FOO /foo HTTP/1.1" 404 0 "-" "UA"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if req.Method != UNKNOWN {
+	if req.Method != accesslog.UNKNOWN {
 		t.Errorf("expected UNKNOWN method, got %v", req.Method)
 	}
 	if req.Status != 404 {
@@ -282,7 +282,7 @@ func TestParseEvent_MissingUserAgent(t *testing.T) {
 	// Only 5 quotes, so user agent will be empty
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" `
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	_, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -299,7 +299,7 @@ func TestParseEvent_MissingUserAgent(t *testing.T) {
 func TestParseEvent_TruncatedAtRequestEndQuote(t *testing.T) {
 	log := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1"`
 	evt := map[string]interface{}{"message": log}
-	var req Request
+	var req accesslog.Request
 	malformed, err := parseEvent(evt, &req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -313,7 +313,7 @@ func TestParseEvent_TruncatedAtRequestEndQuote(t *testing.T) {
 	if req.Bytes != 0 {
 		t.Errorf("expected Bytes 0, got %d", req.Bytes)
 	}
-	if req.Method != GET {
+	if req.Method != accesslog.GET {
 		t.Errorf("expected GET method, got %v", req.Method)
 	}
 	if req.URI != "/" {
@@ -327,9 +327,7 @@ func TestParseEvent_TruncatedAtRequestEndQuote(t *testing.T) {
 // without a status/bytes tail), so it IS included in output and is NOT counted
 // as a parse error.
 func TestReadBatch_SurvivesTruncatedEvent(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
+	ing := newQueueIngestor(1)
 	truncated := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1"`
 	valid := `10.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /ok HTTP/1.1" 200 1 "-" "UA"`
 	ing.events <- makeBatch(
@@ -372,59 +370,27 @@ func TestReadBatch_SurvivesTruncatedEvent(t *testing.T) {
 // recover() guard adds no behavior change on the non-panicking path.
 func TestParseEventSafe_Transparent(t *testing.T) {
 	valid := `192.168.1.1 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" "UA"`
-	var a, b Request
+	var a, b accesslog.Request
 	mA, eA := parseEvent(map[string]interface{}{"message": valid}, &a)
 	mB, eB := parseEventSafe(map[string]interface{}{"message": valid}, &b)
 	if mA != mB || (eA == nil) != (eB == nil) {
 		t.Errorf("safe wrapper diverged on valid: (%d,%v) vs (%d,%v)", mA, eA, mB, eB)
 	}
-	// Request contains a net.IP slice, so compare the parsed fields directly.
+	// Compare the parsed fields directly (Timestamp by instant, not by ==).
 	if a.IPUint32 != b.IPUint32 || a.Status != b.Status || a.Bytes != b.Bytes ||
 		a.Method != b.Method || a.URI != b.URI || a.UserAgent != b.UserAgent ||
-		!a.Timestamp.Equal(b.Timestamp) || !a.IP.Equal(b.IP) {
+		!a.Timestamp.Equal(b.Timestamp) {
 		t.Errorf("safe wrapper produced different Request: %+v vs %+v", a, b)
 	}
 
 	// Erroring input: missing message field must still surface as an error
 	// (not a recovered panic) with malformed == 0.
-	m, err := parseEventSafe(map[string]interface{}{}, &Request{})
+	m, err := parseEventSafe(map[string]interface{}{}, &accesslog.Request{})
 	if err == nil {
 		t.Errorf("expected error for missing message field, got nil")
 	}
 	if m != 0 {
 		t.Errorf("expected 0 malformed, got %d", m)
-	}
-}
-
-// TestScanQuotedCloseStr asserts the string-typed escape-aware close scanner is
-// byte-identical to the static parser's scanQuotedClose (mirroring
-// logparser/parser_correctness_test.go:TestScanQuotedClose). These cases are the
-// invariant the cross-package parity test relies on: ingestor cannot import
-// logparser (import cycle), so the duplicated helper must match exactly.
-func TestScanQuotedCloseStr(t *testing.T) {
-	cases := []struct {
-		name         string
-		line         string
-		contentStart int
-		firstQuote   int
-		want         int
-	}{
-		// `\"x"` content starting at 0: quote at 1 escaped, closes at 3.
-		{"single escape", `\"x"`, 0, 1, 3},
-		// `\\"` even parity: quote at 2 is NOT escaped.
-		{"double backslash closes", `\\"`, 0, 2, 2},
-		// `\\\"x"` odd parity: quote at 3 escaped, closes at 5.
-		{"triple backslash escapes", `\\\"x"`, 0, 3, 5},
-		// no later quote -> len(line)
-		{"no closing quote", `\"abc`, 0, 1, 5},
-		// backslashes before contentStart must not count toward parity
-		{"parity stops at contentStart", `\"x`, 1, 1, 1},
-	}
-	for _, tc := range cases {
-		if got := scanQuotedCloseStr(tc.line, tc.contentStart, tc.firstQuote); got != tc.want {
-			t.Errorf("%s: scanQuotedCloseStr(%q, %d, %d) = %d, want %d",
-				tc.name, tc.line, tc.contentStart, tc.firstQuote, got, tc.want)
-		}
 	}
 }
 
@@ -477,10 +443,22 @@ func TestParseEvent_EscapedQuotesUserAgent(t *testing.T) {
 			wantUA:  "RealUA",
 			wantURI: `/a\\\"b`,
 		},
+		{
+			name:    "escaped quote in the request and in the UA",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET /a\"b HTTP/1.1" 200 10 "-" "UA\"X"`,
+			wantUA:  `UA\"X`,
+			wantURI: `/a\"b`,
+		},
+		{
+			name:    "empty UA field",
+			log:     `1.2.3.4 - - [12/Mar/2024:15:04:05 -0700] "GET / HTTP/1.1" 200 10 "-" ""`,
+			wantUA:  "",
+			wantURI: "/",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var req Request
+			var req accesslog.Request
 			if _, err := parseEvent(map[string]interface{}{"message": tc.log}, &req); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -513,7 +491,7 @@ func BenchmarkParseEvent(b *testing.B) {
 		evt := map[string]interface{}{"message": tc.log}
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
-			var req Request
+			var req accesslog.Request
 			for i := 0; i < b.N; i++ {
 				if _, err := parseEvent(evt, &req); err != nil {
 					b.Fatalf("unexpected error: %v", err)
@@ -523,16 +501,8 @@ func BenchmarkParseEvent(b *testing.B) {
 	}
 }
 
-func makeBatch(events ...interface{}) *lj.Batch {
-	return &lj.Batch{
-		Events: events,
-	}
-}
-
 func TestReadBatch_EmptyChannel(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch),
-	}
+	ing := newQueueIngestor(0)
 	// Channel is empty, should return empty slice
 	got, err := ing.ReadBatch()
 	if err != nil {
@@ -544,9 +514,7 @@ func TestReadBatch_EmptyChannel(t *testing.T) {
 }
 
 func TestReadBatch_ClosedChannel(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch),
-	}
+	ing := newQueueIngestor(0)
 	close(ing.events)
 	got, err := ing.ReadBatch()
 	if err != nil {
@@ -558,9 +526,7 @@ func TestReadBatch_ClosedChannel(t *testing.T) {
 }
 
 func TestReadBatch_ValidEvents(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
+	ing := newQueueIngestor(1)
 	log := `127.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /foo HTTP/1.1" 200 123 "-" "TestUA"`
 	evt := map[string]interface{}{"message": log}
 	ing.events <- makeBatch(evt)
@@ -572,10 +538,10 @@ func TestReadBatch_ValidEvents(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(got))
 	}
 	wantIP := net.ParseIP("127.0.0.1")
-	if !got[0].IP.Equal(wantIP) {
-		t.Errorf("expected IP %v, got %v", wantIP, got[0].IP)
+	if !got[0].GetIPNet().Equal(wantIP) {
+		t.Errorf("expected IP %v, got %v", wantIP, got[0].GetIPNet())
 	}
-	if got[0].Method != GET {
+	if got[0].Method != accesslog.GET {
 		t.Errorf("expected GET method, got %v", got[0].Method)
 	}
 	if got[0].URI != "/foo" {
@@ -593,9 +559,7 @@ func TestReadBatch_ValidEvents(t *testing.T) {
 }
 
 func TestReadBatch_MultipleEventsAndBatches(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 2),
-	}
+	ing := newQueueIngestor(2)
 	log1 := `10.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "POST /bar HTTP/1.1" 201 10 "-" "UA1"`
 	log2 := `10.0.0.2 - - [12/Mar/2024:15:05:05 -0700] "GET /baz HTTP/1.1" 404 0 "-" "UA2"`
 	evt1 := map[string]interface{}{"message": log1}
@@ -609,18 +573,16 @@ func TestReadBatch_MultipleEventsAndBatches(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(got))
 	}
-	if got[0].IP.String() != "10.0.0.1" || got[1].IP.String() != "10.0.0.2" {
-		t.Errorf("unexpected IPs: %v, %v", got[0].IP, got[1].IP)
+	if got[0].GetIPNet().String() != "10.0.0.1" || got[1].GetIPNet().String() != "10.0.0.2" {
+		t.Errorf("unexpected IPs: %v, %v", got[0].GetIPNet(), got[1].GetIPNet())
 	}
-	if got[0].Method != POST || got[1].Method != GET {
+	if got[0].Method != accesslog.POST || got[1].Method != accesslog.GET {
 		t.Errorf("unexpected methods: %v, %v", got[0].Method, got[1].Method)
 	}
 }
 
 func TestReadBatch_SkipsInvalidEvents(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
+	ing := newQueueIngestor(1)
 	// First event is invalid (missing message), second is valid
 	evt1 := map[string]interface{}{}
 	log := `127.0.0.1 - - [12/Mar/2024:15:04:05 -0700] "GET /ok HTTP/1.1" 200 1 "-" "UA"`
@@ -638,16 +600,24 @@ func TestReadBatch_SkipsInvalidEvents(t *testing.T) {
 	}
 }
 
-func TestReadBatch_NonMapEventsAreIgnored(t *testing.T) {
-	ing := &TCPIngestor{
-		events: make(chan *lj.Batch, 1),
-	}
-	ing.events <- makeBatch("not a map", 123, nil)
+// Events that are not JSON objects carrying a string "message" never become
+// requests. They used to vanish without a trace; each one now counts as a
+// parse error so a misconfigured shipper is visible in the stats.
+func TestReadBatch_NonMapEventsAreCounted(t *testing.T) {
+	ing := newQueueIngestor(1)
+	ing.events <- makeBatch("not a map", 123, nil, []int{1}, map[string]interface{}{"message": 5})
 	got, err := ing.ReadBatch()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 results, got %d", len(got))
+	}
+	st := ing.Stats()
+	if st.ParseErrorsTotal != 5 {
+		t.Errorf("ParseErrorsTotal = %d, want 5 (one per unusable event)", st.ParseErrorsTotal)
+	}
+	if st.RequestsTotal != 0 {
+		t.Errorf("RequestsTotal = %d, want 0", st.RequestsTotal)
 	}
 }

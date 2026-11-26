@@ -8,7 +8,7 @@ package jail_test
 //	when it is also manually blacklisted, and including across jail reloads on
 //	subsequent runs.
 //
-// The production publish chain (analysis.ProcessJailWithWhitelist and the live
+// The production publish chain (analysis.UpdateBans for static mode and the live
 // cli/api.go loop) is:
 //
 //	allWhitelists := whitelistCIDRs + UA-whitelist IPs as /32

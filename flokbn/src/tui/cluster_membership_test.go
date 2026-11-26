@@ -3,11 +3,13 @@ package tui
 import (
 	"reflect"
 	"testing"
+
+	"github.com/ChristianF88/flokbn/cidr"
 )
 
 // intervalsEqual compares interval slices treating nil and empty as equal,
 // since buildClusterIntervals legitimately returns either for "no ranges".
-func intervalsEqual(got, want []ipInterval) bool {
+func intervalsEqual(got, want cidr.IntervalSet) bool {
 	if len(got) == 0 && len(want) == 0 {
 		return true
 	}
@@ -22,7 +24,7 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 	cases := []struct {
 		name      string
 		cidrs     []string
-		want      []ipInterval
+		want      cidr.IntervalSet
 		probesIn  []uint32
 		probesOut []uint32
 	}{
@@ -35,49 +37,49 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 		{
 			name:      "single",
 			cidrs:     []string{"10.0.0.0/24"},
-			want:      []ipInterval{{0x0A000000, 0x0A0000FF}},
+			want:      cidr.IntervalSet{{Start: 0x0A000000, End: 0x0A0000FF}},
 			probesIn:  []uint32{0x0A000000, 0x0A0000FF},
 			probesOut: []uint32{0x09FFFFFF, 0x0A000100},
 		},
 		{
 			name:      "adjacent_merge",
 			cidrs:     []string{"10.0.0.0/25", "10.0.0.128/25"},
-			want:      []ipInterval{{0x0A000000, 0x0A0000FF}},
+			want:      cidr.IntervalSet{{Start: 0x0A000000, End: 0x0A0000FF}},
 			probesIn:  []uint32{0x0A00007F, 0x0A000080},
 			probesOut: []uint32{0x09FFFFFF, 0x0A000100},
 		},
 		{
 			name:      "overlapping",
 			cidrs:     []string{"10.0.0.0/24", "10.0.0.128/25"},
-			want:      []ipInterval{{0x0A000000, 0x0A0000FF}},
+			want:      cidr.IntervalSet{{Start: 0x0A000000, End: 0x0A0000FF}},
 			probesIn:  []uint32{0x0A000000, 0x0A000080, 0x0A0000FF},
 			probesOut: []uint32{0x0A000100},
 		},
 		{
 			name:      "duplicates",
 			cidrs:     []string{"192.168.1.0/24", "192.168.1.0/24"},
-			want:      []ipInterval{{0xC0A80100, 0xC0A801FF}},
+			want:      cidr.IntervalSet{{Start: 0xC0A80100, End: 0xC0A801FF}},
 			probesIn:  []uint32{0xC0A80100, 0xC0A801FF},
 			probesOut: []uint32{0xC0A800FF, 0xC0A80200},
 		},
 		{
 			name:      "contained",
 			cidrs:     []string{"10.0.0.0/8", "10.20.0.0/16"},
-			want:      []ipInterval{{0x0A000000, 0x0AFFFFFF}},
+			want:      cidr.IntervalSet{{Start: 0x0A000000, End: 0x0AFFFFFF}},
 			probesIn:  []uint32{0x0A000000, 0x0A140000, 0x0AFFFFFF},
 			probesOut: []uint32{0x09FFFFFF, 0x0B000000},
 		},
 		{
 			name:      "adjacent_bottom",
 			cidrs:     []string{"0.0.0.0/31", "0.0.0.2/31"},
-			want:      []ipInterval{{0x00000000, 0x00000003}},
+			want:      cidr.IntervalSet{{Start: 0x00000000, End: 0x00000003}},
 			probesIn:  []uint32{0x00000000},
 			probesOut: []uint32{0x00000004},
 		},
 		{
 			name:      "adjacent_near_top",
 			cidrs:     []string{"255.255.255.252/31", "255.255.255.254/31"},
-			want:      []ipInterval{{0xFFFFFFFC, 0xFFFFFFFF}},
+			want:      cidr.IntervalSet{{Start: 0xFFFFFFFC, End: 0xFFFFFFFF}},
 			probesIn:  []uint32{0xFFFFFFFC, 0xFFFFFFFF},
 			probesOut: []uint32{0xFFFFFFFB},
 		},
@@ -89,24 +91,24 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 			// merge at the top of the space, not that branch.
 			name:      "top_of_space_overlapped",
 			cidrs:     []string{"128.0.0.0/1", "255.255.255.255/32"},
-			want:      []ipInterval{{0x80000000, 0xFFFFFFFF}},
+			want:      cidr.IntervalSet{{Start: 0x80000000, End: 0xFFFFFFFF}},
 			probesIn:  []uint32{0x80000000, 0xFFFFFFFF},
 			probesOut: []uint32{0x7FFFFFFF, 0x00000000},
 		},
 		{
 			name:      "gap_not_merged",
 			cidrs:     []string{"10.0.0.0/25", "10.0.1.0/24"},
-			want:      []ipInterval{{0x0A000000, 0x0A00007F}, {0x0A000100, 0x0A0001FF}},
+			want:      cidr.IntervalSet{{Start: 0x0A000000, End: 0x0A00007F}, {Start: 0x0A000100, End: 0x0A0001FF}},
 			probesIn:  []uint32{0x0A000000, 0x0A00007F, 0x0A000100, 0x0A0001FF},
 			probesOut: []uint32{0x0A000080, 0x0A000200},
 		},
 		{
 			name:  "unsorted",
 			cidrs: []string{"200.0.0.0/8", "10.0.0.0/8", "100.0.0.0/8"},
-			want: []ipInterval{
-				{0x0A000000, 0x0AFFFFFF},
-				{0x64000000, 0x64FFFFFF},
-				{0xC8000000, 0xC8FFFFFF},
+			want: cidr.IntervalSet{
+				{Start: 0x0A000000, End: 0x0AFFFFFF},
+				{Start: 0x64000000, End: 0x64FFFFFF},
+				{Start: 0xC8000000, End: 0xC8FFFFFF},
 			},
 			probesIn:  []uint32{0x0A000000, 0x64FFFFFF, 0xC8000001},
 			probesOut: []uint32{0x0B000000, 0x63FFFFFF, 0xC9000000},
@@ -114,14 +116,14 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 		{
 			name:      "full_space",
 			cidrs:     []string{"0.0.0.0/0"},
-			want:      []ipInterval{{0x00000000, 0xFFFFFFFF}},
+			want:      cidr.IntervalSet{{Start: 0x00000000, End: 0xFFFFFFFF}},
 			probesIn:  []uint32{0x00000000, 0xFFFFFFFF, 0x12345678},
 			probesOut: nil,
 		},
 		{
 			name:      "full_space_plus_subset",
 			cidrs:     []string{"0.0.0.0/0", "10.0.0.0/8"},
-			want:      []ipInterval{{0x00000000, 0xFFFFFFFF}},
+			want:      cidr.IntervalSet{{Start: 0x00000000, End: 0xFFFFFFFF}},
 			probesIn:  []uint32{0x00000000, 0x0A000000, 0xFFFFFFFF},
 			probesOut: nil,
 		},
@@ -134,7 +136,7 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 		{
 			name:      "invalid_skipped_mixed",
 			cidrs:     []string{"garbage", "2001:db8::/32", "10.0.0.0/24"},
-			want:      []ipInterval{{0x0A000000, 0x0A0000FF}},
+			want:      cidr.IntervalSet{{Start: 0x0A000000, End: 0x0A0000FF}},
 			probesIn:  []uint32{0x0A000000, 0x0A0000FF},
 			probesOut: []uint32{0x09FFFFFF, 0x0A000100},
 		},
@@ -143,8 +145,8 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ci := buildClusterIntervals(newClusterSet(tc.cidrs...))
-			if !intervalsEqual(ci.intervals, tc.want) {
-				t.Fatalf("intervals = %v, want %v", ci.intervals, tc.want)
+			if !intervalsEqual(ci, tc.want) {
+				t.Fatalf("intervals = %v, want %v", ci, tc.want)
 			}
 			for _, p := range tc.probesIn {
 				if !ci.Contains(p) {
@@ -161,11 +163,8 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 
 	t.Run("nil_cluster_set", func(t *testing.T) {
 		ci := buildClusterIntervals(nil)
-		if ci == nil {
-			t.Fatal("buildClusterIntervals(nil) returned nil, want empty intervals")
-		}
-		if len(ci.intervals) != 0 {
-			t.Errorf("intervals = %v, want empty", ci.intervals)
+		if len(ci) != 0 {
+			t.Errorf("intervals = %v, want empty", ci)
 		}
 		if ci.Contains(0) || ci.Contains(0xFFFFFFFF) {
 			t.Error("nil cluster set must contain nothing")
@@ -174,27 +173,27 @@ func TestBuildClusterIntervalsCoalesce(t *testing.T) {
 }
 
 // TestClusterIntervalsContainsNilAndEmpty pins the nil/zero-value safety of
-// the clusterIntervals methods (both are documented nil-safe pointer
-// receivers).
+// the interval set behind the cluster overlay: the zero value (what a nil or
+// empty cluster set gives) and an empty non-nil set contain nothing.
 func TestClusterIntervalsContainsNilAndEmpty(t *testing.T) {
-	var zero clusterIntervals
+	var zero cidr.IntervalSet
 	for _, ip := range []uint32{0x00000000, 0x7FFFFFFF, 0xFFFFFFFF} {
 		if zero.Contains(ip) {
 			t.Errorf("zero-value Contains(0x%08X) = true, want false", ip)
 		}
 	}
-	if !zero.empty() {
-		t.Error("zero-value empty() = false, want true")
+	if len(zero) != 0 {
+		t.Error("zero-value set is not empty")
 	}
 
-	var nilCI *clusterIntervals
+	empty := buildClusterIntervals(newClusterSet())
 	for _, ip := range []uint32{0x00000000, 0x7FFFFFFF, 0xFFFFFFFF} {
-		if nilCI.Contains(ip) {
-			t.Errorf("nil receiver Contains(0x%08X) = true, want false", ip)
+		if empty.Contains(ip) {
+			t.Errorf("empty cluster set Contains(0x%08X) = true, want false", ip)
 		}
 	}
-	if !nilCI.empty() {
-		t.Error("nil receiver empty() = false, want true")
+	if len(empty) != 0 {
+		t.Error("empty cluster set gives a non-empty interval set")
 	}
 }
 

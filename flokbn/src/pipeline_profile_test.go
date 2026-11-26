@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/ChristianF88/flokbn/ingestor"
+	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/iputils"
 	"github.com/ChristianF88/flokbn/logparser"
 	"github.com/ChristianF88/flokbn/testutil"
@@ -83,7 +83,7 @@ func BenchmarkIPConversionAndSort(b *testing.B) {
 	for _, size := range sizes {
 		// Pre-generate requests with IPUint32 set directly
 		rng := rand.New(rand.NewSource(42))
-		requests := make([]ingestor.Request, size)
+		requests := make([]accesslog.Request, size)
 		for i := range requests {
 			requests[i].IPUint32 = rng.Uint32()
 		}

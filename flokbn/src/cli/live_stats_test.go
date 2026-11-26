@@ -176,9 +176,11 @@ func BenchmarkBuildSnapshot(b *testing.B) {
 	}
 	w.Update(timed)
 	stc := &config.SlidingTrieConfig{
-		ClusterArgSets: []config.ClusterArgSet{
-			{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5},
-			{MinClusterSize: 1000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+		TrieCommon: config.TrieCommon{
+			ClusterArgSets: []config.ClusterArgSet{
+				{MinClusterSize: 100, MinDepth: 24, MaxDepth: 32, MeanSubnetDifference: 0.5},
+				{MinClusterSize: 1000, MinDepth: 16, MaxDepth: 24, MeanSubnetDifference: 0.2},
+			},
 		},
 	}
 	windows := []slidingWindowInstance{{name: "w", window: w, config: stc}}
