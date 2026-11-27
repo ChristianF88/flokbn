@@ -287,7 +287,7 @@ sudo systemctl start flokbn
 
 ## Logging
 
-Live mode writes leveled, timestamped log lines to **stderr**: one summary line per detection iteration (window size, batch size, detected/merged/jailed counts, whether the ban and jail files were written, timings), shipper connects and disconnects, plus warnings and errors. The fields are listed under [Log Lines]({{< relref "/docs/reference/output-formats/#log-lines" >}}). Configure via the `[log]` section ([Config File]({{< relref "/docs/reference/config-file/" >}})) or override the level with `--logLevel`:
+Live mode writes leveled, timestamped log lines to **stderr**: one summary line per detection iteration (window size, batch size, detected/jailed counts, whether the ban and jail files were written, timings), shipper connects and disconnects, plus warnings and errors. The fields are listed under [Log Lines]({{< relref "/docs/reference/output-formats/#log-lines" >}}). Configure via the `[log]` section ([Config File]({{< relref "/docs/reference/config-file/" >}})) or override the level with `--logLevel`:
 
 ```toml
 [log]
@@ -324,10 +324,10 @@ journalctl -u flokbn -f
 tail -f /var/lib/flokbn/ban.txt
 
 # Check jail state
-cat /var/lib/flokbn/jail.json | jq '.Cells | length'
+jq '.records | length' /var/lib/flokbn/jail.json
 ```
 
-The jail file uses a tiered cell structure with escalating bans (stage 1-5: 10 minutes, 4 hours, 7 days, 30 days, 180 days; re-detection after expiry moves a range to the next stage). See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the jail data model.
+The jail file lists every range that was banned with its stage and the start of its last ban (stage 1-5: 10 minutes, 4 hours, 7 days, 30 days, 180 days; a re-detection after a ban ended moves the range to the next stage). It is more detailed than the ban file: a hot host and the subnet around it have a record each, while the ban file joins nested and neighbouring ranges into the shortest list for the firewall. See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the rules and the file format.
 
 ## Troubleshooting
 

@@ -1,4 +1,4 @@
-package jailv2
+package jail
 
 import (
 	"slices"
@@ -59,10 +59,8 @@ func seed(t testing.TB, j *Jail, now time.Time, entries ...string) {
 		}
 		j.records = append(j.records, Record{IP: nc.IP, PrefixLen: nc.PrefixLen, Stage: uint8(stage), BanStart: start.UnixNano()})
 	}
-	before := len(j.records)
-	j.normalize()
-	if len(j.records) != before {
-		t.Fatalf("seed %q is not a tidy jail", entries)
+	if err := j.normalize(); err != nil {
+		t.Fatalf("seed %q: %v", entries, err)
 	}
 }
 
@@ -146,51 +144,63 @@ func TestRules(t *testing.T) {
 			name:     "half of an ended range: the whole range again, next stage",
 			seed:     []string{"10.0.0.0/16 3 ended"},
 			detected: []string{"10.0.128.0/17"},
-			want:     []string{"10.0.0.0/16 4 active"},
+			want:     []string{"10.0.0.0/16 4 active", "10.0.128.0/17 4 active"},
 		},
 		{
-			name:     "single address in an ended range: only the address, one stage up",
+			name:     "single address in an ended range: a new offender, stage 1",
 			seed:     []string{"10.0.0.0/16 3 ended"},
 			detected: []string{"10.0.5.5/32"},
-			want:     []string{"10.0.0.0/16 3 ended", "10.0.5.5/32 4 active"},
+			want:     []string{"10.0.0.0/16 3 ended", "10.0.5.5/32 1 active"},
 		},
 		{
-			name:     "a quarter of an ended range is below 50%",
+			name:     "single address in an ended range, with a record of its own: its own history",
+			seed:     []string{"10.0.0.0/16 5 ended", "10.0.5.5/32 2 ended"},
+			detected: []string{"10.0.5.5/32"},
+			want:     []string{"10.0.0.0/16 5 ended", "10.0.5.5/32 3 active"},
+		},
+		{
+			name:     "a quarter of an ended range is below 50%: a new offender",
 			seed:     []string{"10.0.0.0/16 3 ended"},
 			detected: []string{"10.0.64.0/18"},
-			want:     []string{"10.0.0.0/16 3 ended", "10.0.64.0/18 4 active"},
+			want:     []string{"10.0.0.0/16 3 ended", "10.0.64.0/18 1 active"},
 		},
 		{
 			name:     "a quarter of an ended range reaches a threshold of 25%",
 			overlap:  25,
 			seed:     []string{"10.0.0.0/16 3 ended"},
 			detected: []string{"10.0.64.0/18"},
-			want:     []string{"10.0.0.0/16 4 active"},
+			want:     []string{"10.0.0.0/16 4 active", "10.0.64.0/18 4 active"},
 		},
 		{
-			name:     "around an ended half: joined, one stage up",
+			name:     "around an ended half: one stage up, and the half with it",
 			seed:     []string{"10.0.0.0/25 2 ended"},
 			detected: []string{"10.0.0.0/24"},
-			want:     []string{"10.0.0.0/24 3 active"},
+			want:     []string{"10.0.0.0/24 3 active", "10.0.0.0/25 3 active"},
 		},
 		{
-			name:     "around an ended address: stage 1, the address keeps its record",
+			name:     "around an ended address: stage 1, the address moves up on its own",
 			seed:     []string{"10.0.5.5/32 4 ended"},
 			detected: []string{"10.0.0.0/16"},
-			want:     []string{"10.0.0.0/16 1 active", "10.0.5.5/32 4 ended"},
+			want:     []string{"10.0.0.0/16 1 active", "10.0.5.5/32 5 active"},
+		},
+		{
+			name:     "around an ended range two bits narrower: stage 1, the range moves up on its own",
+			seed:     []string{"10.0.0.0/24 4 ended"},
+			detected: []string{"10.0.0.0/22"},
+			want:     []string{"10.0.0.0/22 1 active", "10.0.0.0/24 5 active"},
 		},
 		{
 			name:     "around several ended ranges: their sizes add up",
 			seed:     []string{"10.0.0.0/26 2 ended", "10.0.0.128/26 3 ended"},
 			detected: []string{"10.0.0.0/24"},
-			// Half of the /24 reached stage 2, a quarter stage 3.
-			want: []string{"10.0.0.0/24 3 active"},
+			// Half of the /24 has served stage 2, a quarter stage 3.
+			want: []string{"10.0.0.0/24 3 active", "10.0.0.0/26 3 active", "10.0.0.128/26 4 active"},
 		},
 		{
 			name:     "nested records inside count once",
 			seed:     []string{"10.0.0.0/25 2 ended", "10.0.0.0/26 4 ended"},
 			detected: []string{"10.0.0.0/24"},
-			want:     []string{"10.0.0.0/24 3 active", "10.0.0.0/26 4 ended"},
+			want:     []string{"10.0.0.0/24 3 active", "10.0.0.0/25 3 active", "10.0.0.0/26 5 active"},
 		},
 		{
 			name:     "nested records inside count once, just below the threshold",
@@ -199,7 +209,28 @@ func TestRules(t *testing.T) {
 			detected: []string{"10.0.0.0/25"},
 			// A quarter of the /25 has a history; counting the /28 on top of
 			// the /27 around it would make it three eighths.
-			want: []string{"10.0.0.0/25 1 active", "10.0.0.0/27 2 ended", "10.0.0.0/28 3 ended"},
+			want: []string{"10.0.0.0/25 1 active", "10.0.0.0/27 3 active", "10.0.0.0/28 4 active"},
+		},
+		{
+			name:     "banned addresses have served nothing",
+			seed:     []string{"10.0.0.0/25 3 ended", "10.0.0.0/26 1 active"},
+			detected: []string{"10.0.0.0/24"},
+			// Half of the /24 lies in the ended /25, but half of that is
+			// banned now: a quarter is left.
+			want: []string{"10.0.0.0/24 1 active", "10.0.0.0/25 4 active", "10.0.0.0/26 1 active"},
+		},
+		{
+			name:     "an ended record under an active ban is left alone",
+			seed:     []string{"10.0.0.0/24 1 active", "10.0.0.7/32 4 ended"},
+			detected: []string{"10.0.0.0/23"},
+			want:     []string{"10.0.0.0/23 1 active", "10.0.0.0/24 1 active", "10.0.0.7/32 4 ended"},
+		},
+		{
+			name:     "the same range again counts whatever is banned inside it",
+			overlap:  100,
+			seed:     []string{"10.0.0.0/24 3 ended", "10.0.0.0/25 1 active"},
+			detected: []string{"10.0.0.0/24"},
+			want:     []string{"10.0.0.0/24 4 active", "10.0.0.0/25 1 active"},
 		},
 		{
 			name:     "an ignored range does not re-ban the ended range around it",
@@ -217,10 +248,10 @@ func TestRules(t *testing.T) {
 			ignored:  1,
 		},
 		{
-			name:     "around an active half: same stage, the wider range takes over",
+			name:     "around an active half: the wider range starts its own ladder",
 			seed:     []string{"10.0.0.0/25 2 active"},
 			detected: []string{"10.0.0.0/24"},
-			want:     []string{"10.0.0.0/24 2 active"},
+			want:     []string{"10.0.0.0/24 1 active", "10.0.0.0/25 2 active"},
 		},
 		{
 			name:     "around an active address of a high stage: stage 1, the address stays banned",
@@ -229,29 +260,29 @@ func TestRules(t *testing.T) {
 			want:     []string{"10.0.0.0/16 1 active", "10.0.5.5/32 4 active"},
 		},
 		{
-			name:     "old and new both banned: the new range has the deeper history and stays nested",
+			name:     "old and new both banned: each at its own next stage",
 			seed:     []string{"10.0.0.0/16 1 ended", "10.0.0.0/18 4 ended"},
 			detected: []string{"10.0.0.0/17"},
-			want:     []string{"10.0.0.0/16 2 active", "10.0.0.0/17 5 active"},
+			want:     []string{"10.0.0.0/16 2 active", "10.0.0.0/17 5 active", "10.0.0.0/18 5 active"},
 		},
 		{
 			name:     "threshold 100%: only the same range is the same offender",
 			overlap:  100,
 			seed:     []string{"10.0.0.0/25 2 ended", "10.1.0.0/24 2 ended"},
 			detected: []string{"10.0.0.0/24", "10.1.0.0/24"},
-			want:     []string{"10.0.0.0/24 1 active", "10.0.0.0/25 2 ended", "10.1.0.0/24 3 active"},
+			want:     []string{"10.0.0.0/24 1 active", "10.0.0.0/25 3 active", "10.1.0.0/24 3 active"},
 		},
 		{
 			name:     "the whole address space",
 			seed:     []string{"0.0.0.0/1 2 ended"},
 			detected: []string{"0.0.0.0/0"},
-			want:     []string{"0.0.0.0/0 3 active"},
+			want:     []string{"0.0.0.0/0 3 active", "0.0.0.0/1 3 active"},
 		},
 		{
 			name:     "half of the whole address space",
 			seed:     []string{"0.0.0.0/0 1 ended"},
 			detected: []string{"128.0.0.0/1"},
-			want:     []string{"0.0.0.0/0 2 active"},
+			want:     []string{"0.0.0.0/0 2 active", "128.0.0.0/1 2 active"},
 		},
 		{
 			name:     "nested and repeated ranges in one round are judged each on its own",
@@ -263,7 +294,20 @@ func TestRules(t *testing.T) {
 			name:     "two ranges of one round re-ban the same old range",
 			seed:     []string{"10.0.0.0/16 3 ended"},
 			detected: []string{"10.0.0.0/17", "10.0.128.0/17"},
-			want:     []string{"10.0.0.0/16 4 active"},
+			want:     []string{"10.0.0.0/16 4 active", "10.0.0.0/17 4 active", "10.0.128.0/17 4 active"},
+		},
+		{
+			name:     "nested ranges of one round move an old record inside both up once",
+			seed:     []string{"10.0.0.7/32 2 ended"},
+			detected: []string{"10.0.0.0/24", "10.0.0.0/22", "10.0.0.0/23"},
+			want:     []string{"10.0.0.0/22 1 active", "10.0.0.0/23 1 active", "10.0.0.0/24 1 active", "10.0.0.7/32 3 active"},
+		},
+		{
+			name:     "a banned range handed in three times is ignored three times",
+			seed:     []string{"10.0.0.0/24 2 active"},
+			detected: []string{"10.0.0.0/24", "10.0.0.0/25", "10.0.0.0/24", "10.0.0.0/24"},
+			want:     []string{"10.0.0.0/24 2 active"},
+			ignored:  4,
 		},
 		{
 			name:     "host bits are ignored",
@@ -328,8 +372,8 @@ func TestLadder(t *testing.T) {
 }
 
 // TestShapeJitter: the same offender is detected as a /24, a /23 and a /25 in
-// turn. The stage follows it instead of restarting, and no detection bans
-// more than twice its own size.
+// turn. The stage follows it from one shape to the next one prefix bit away
+// instead of restarting.
 func TestShapeJitter(t *testing.T) {
 	j := newJail(t, 50)
 	now := t0
@@ -337,22 +381,155 @@ func TestShapeJitter(t *testing.T) {
 	j.Update(now, ranges(t, "10.0.0.0/24"))
 	wantRecords(t, j, now, "10.0.0.0/24 1 active")
 
+	// One bit wider while the /24 is banned: the /23 starts its own ladder.
 	now = now.Add(time.Minute)
 	j.Update(now, ranges(t, "10.0.0.0/23"))
-	wantRecords(t, j, now, "10.0.0.0/23 1 active")
+	wantRecords(t, j, now, "10.0.0.0/23 1 active", "10.0.0.0/24 1 active")
 
 	now = now.Add(time.Minute)
 	if out := j.Update(now, ranges(t, "10.0.0.0/25")); out.Ignored != 1 {
 		t.Fatalf("a range inside the active /23 was not ignored: %+v", out)
 	}
 
-	now = now.Add(20 * time.Minute) // the /23 ban has ended
+	// Both bans have ended. The /25 is half of the /24, which moves up as a
+	// whole, and a quarter of the /23, which stays as it is.
+	now = now.Add(20 * time.Minute)
 	j.Update(now, ranges(t, "10.0.0.0/25"))
-	wantRecords(t, j, now, "10.0.0.0/23 1 ended", "10.0.0.0/25 2 active")
+	wantRecords(t, j, now, "10.0.0.0/23 1 ended", "10.0.0.0/24 2 active", "10.0.0.0/25 2 active")
 
-	now = now.Add(5 * time.Hour) // the /25 ban has ended
+	// The /24 again, after its ban: it is half of the /23.
+	now = now.Add(5 * time.Hour)
 	j.Update(now, ranges(t, "10.0.0.0/24"))
-	wantRecords(t, j, now, "10.0.0.0/23 2 active", "10.0.0.0/24 3 active")
+	wantRecords(t, j, now, "10.0.0.0/23 2 active", "10.0.0.0/24 3 active", "10.0.0.0/25 3 active")
+}
+
+// TestStageDoesNotClimbRoundByRound: one address at the last stage, and a
+// detection that grows by one prefix bit every ten seconds. While the address
+// is banned nothing above it inherits; after its ban, the range one bit wider
+// does, and that is where it stops.
+func TestStageDoesNotClimbRoundByRound(t *testing.T) {
+	for _, state := range []string{"active", "ended"} {
+		j := newJail(t, 50)
+		seed(t, j, t0, "10.0.0.0/32 5 "+state)
+		now := t0
+		for p := 31; p >= 16; p-- {
+			now = now.Add(10 * time.Second)
+			j.Update(now, []cidr.NumericCIDR{{IP: 10 << 24, PrefixLen: uint8(p)}})
+		}
+		widest := uint8(32)
+		for _, r := range j.Records() {
+			if r.Stage > 1 {
+				widest = min(widest, r.PrefixLen)
+			}
+		}
+		want := uint8(32)
+		if state == "ended" {
+			want = 31
+		}
+		if widest != want {
+			t.Errorf("address at stage 5 %s: the widest range above stage 1 is a /%d, want /%d: %v", state, widest, want, dump(j, now))
+		}
+		if got := j.BanList(now); !slices.Equal(got, []string{"10.0.0.0/16"}) {
+			t.Errorf("ban list %q, want the /16", got)
+		}
+	}
+}
+
+// TestNarrowRecordSurvivesWideBan: an address that reached stage 4 keeps its
+// record when the /24 around it is banned at a higher stage, and is judged by
+// it when it comes back alone. The /24 does not pass its stage down to it.
+func TestNarrowRecordSurvivesWideBan(t *testing.T) {
+	j := newJail(t, 50)
+	seed(t, j, t0, "10.0.0.0/24 4 ended", "10.0.0.7/32 4 ended")
+	now := t0
+	j.Update(now, ranges(t, "10.0.0.0/24"))
+	wantRecords(t, j, now, "10.0.0.0/24 5 active", "10.0.0.7/32 5 active")
+
+	now = now.Add(181 * 24 * time.Hour)
+	j.Update(now, ranges(t, "10.0.0.7/32", "10.0.0.9/32"))
+	wantRecords(t, j, now, "10.0.0.0/24 5 ended", "10.0.0.7/32 5 active", "10.0.0.9/32 1 active")
+}
+
+// TestClockDoesNotGoBack: a time earlier than the latest one an Update has
+// seen is replaced by that one, for banning and for reading.
+func TestClockDoesNotGoBack(t *testing.T) {
+	j := newJail(t, 50)
+	seed(t, j, t0, "10.0.0.0/16 3 ended", "192.0.2.7/32 5 ended")
+	q := ranges(t, "10.9.0.0/24")
+	j.Update(t0, q) // stage 1 until t0 + 10 minutes
+	later := t0.Add(11 * time.Minute)
+	if out := j.Update(later, nil); out.Changed() {
+		t.Fatalf("heartbeat changed the jail: %+v", out)
+	}
+
+	back := t0.Add(-200 * 24 * time.Hour)
+	if got := j.BanList(back); len(got) != 0 {
+		t.Errorf("ban list with the clock 200 days back = %q, want none: every ban has ended", got)
+	}
+	if got := len(j.Active(back)); got != 0 {
+		t.Errorf("%d active bans with the clock 200 days back", got)
+	}
+	out := j.Update(back, q)
+	if out.Repeated != 1 || out.Pruned != 0 {
+		t.Fatalf("round with the clock 200 days back: %+v, want the /24 banned again and nothing forgotten", out)
+	}
+	wantRecords(t, j, later, "10.0.0.0/16 3 ended", "10.9.0.0/24 2 active", "192.0.2.7/32 5 ended")
+	if start := j.Active(back)[0].Start; !start.Equal(later) {
+		t.Errorf("the repeated ban starts %s, want the latest time the jail has seen (%s)", start, later)
+	}
+}
+
+// TestTimeSpan: times the jail cannot compute with are moved to the nearest
+// one it can, so a ban never ends before it starts and nothing is forgotten
+// by an overflow.
+func TestTimeSpan(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Stages = []time.Duration{maxDuration}
+	cfg.Retention = maxDuration
+	q := ranges(t, "10.0.0.0/24")
+
+	late, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2261, 9, 1, 0, 0, 0, 0, time.UTC)
+	late.Update(at, q)
+	if got := late.BanList(at); len(got) != 1 {
+		t.Errorf("ban list right after a ban in 2261 = %q, want the range", got)
+	}
+	if out := late.Update(at.Add(time.Second), q); out.Ignored != 1 || out.Changed() {
+		t.Errorf("one second later: %+v, want the range ignored and nothing forgotten", out)
+	}
+	if year := late.Active(at)[0].Start.Year(); year != 2150 {
+		t.Errorf("ban start in the year %d, want 2150", year)
+	}
+
+	early, _ := New(cfg)
+	early.Update(time.Time{}, q)
+	if year := early.Active(time.Time{})[0].Start.Year(); year != 1970 {
+		t.Errorf("ban start in the year %d, want 1970", year)
+	}
+}
+
+// TestWiderBanHasItsOwnClock: a /25 is 9 minutes into its 10-minute ban when
+// the /24 around it is detected. The /24 is banned for 10 minutes from then;
+// the /25 keeps the end it had.
+func TestWiderBanHasItsOwnClock(t *testing.T) {
+	j := newJail(t, 50)
+	j.Update(t0, ranges(t, "10.0.0.0/25"))
+	now := t0.Add(9 * time.Minute)
+	j.Update(now, ranges(t, "10.0.0.0/24"))
+	wantRecords(t, j, now, "10.0.0.0/24 1 active", "10.0.0.0/25 1 active")
+	active := j.Active(now)
+	if got := active[0].End; !got.Equal(now.Add(10 * time.Minute)) {
+		t.Errorf("the /24 ban ends %s, want 10 minutes after its detection", got)
+	}
+	if got := active[1].End; !got.Equal(t0.Add(10 * time.Minute)) {
+		t.Errorf("the /25 ban ends %s, want 10 minutes after its own start", got)
+	}
+	if got := j.BanList(now); !slices.Equal(got, []string{"10.0.0.0/24"}) {
+		t.Errorf("ban list %q, want the /24 alone: the /25 lies inside it", got)
+	}
 }
 
 // TestHeartbeat: a round with nothing detected changes nothing until a record
@@ -387,8 +564,8 @@ func TestHeartbeat(t *testing.T) {
 	wantRecords(t, j, end.Add(181*24*time.Hour), "10.0.0.0/24 1 active")
 }
 
-// TestActiveBanIsNeverShortened: a record taken over by a wider one is only
-// dropped when the wider ban lasts at least as long.
+// TestActiveBanIsNeverShortened: a ban on a wider range leaves the longer ban
+// of a range inside it in force.
 func TestActiveBanIsNeverShortened(t *testing.T) {
 	j := newJail(t, 50)
 	// A stage 3 ban on one half, far from over, and an ended stage 1 ban on
@@ -396,7 +573,7 @@ func TestActiveBanIsNeverShortened(t *testing.T) {
 	seed(t, j, t0, "10.0.0.0/24 1 ended", "10.0.0.0/25 3 active")
 	// The other half re-bans the /24 at stage 2 (4 hours).
 	j.Update(t0, ranges(t, "10.0.0.128/25"))
-	wantRecords(t, j, t0, "10.0.0.0/24 2 active", "10.0.0.0/25 3 active")
+	wantRecords(t, j, t0, "10.0.0.0/24 2 active", "10.0.0.0/25 3 active", "10.0.0.128/25 2 active")
 
 	after := t0.Add(5 * time.Hour)
 	if got := j.BanList(after); !slices.Equal(got, []string{"10.0.0.0/25"}) {

@@ -18,6 +18,7 @@ import (
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/logging"
 	"github.com/ChristianF88/flokbn/output"
+	"github.com/ChristianF88/flokbn/testutil"
 )
 
 // ============================================================================
@@ -242,7 +243,6 @@ type iterStats struct {
 	Window         int
 	Batch          int
 	Detected       int
-	Merged         int
 	Jailed         int
 	ActiveBans     int
 	BanFileWritten bool
@@ -277,7 +277,6 @@ func parseIteration(t *testing.T, r slog.Record) iterStats {
 		Window:         int(getInt("window")),
 		Batch:          int(getInt("batch")),
 		Detected:       int(getInt("detected")),
-		Merged:         int(getInt("merged")),
 		Jailed:         int(getInt("jailed")),
 		ActiveBans:     int(getInt("active_bans")),
 		BanFileWritten: written.Bool(),
@@ -511,18 +510,22 @@ func banCIDRs(t *testing.T, path string) []string {
 	return cidrs
 }
 
-// findPrisoner loads the jail file and locates a CIDR's prisoner entry.
-func findPrisoner(t *testing.T, jailFile, cidr string) (cellID int, active bool, found bool) {
+// findPrisoner loads the jail file and locates the record of a range: its
+// stage, whether its ban is running now, and whether it is there at all.
+func findPrisoner(t *testing.T, jailFile, cidr string) (stage int, active bool, found bool) {
 	t.Helper()
-	j, err := jail.FileToJail(jailFile)
+	j, err := jail.Load(jailFile, jail.DefaultConfig())
 	if err != nil {
 		t.Fatalf("reading jail file %s: %v", jailFile, err)
 	}
-	for _, cell := range j.Cells {
-		for _, p := range cell.Prisoners {
-			if p.CIDR == cidr {
-				return cell.ID, p.BanActive, true
-			}
+	for _, b := range j.Active(time.Now()) {
+		if b.CIDR.String() == cidr {
+			return b.Stage, true, true
+		}
+	}
+	for _, r := range j.Records() {
+		if r.CIDR().String() == cidr {
+			return int(r.Stage), false, true
 		}
 	}
 	return 0, false, false
@@ -538,8 +541,8 @@ func assertSingleCIDRState(t *testing.T, it iterStats, snap *statsSnapshot, want
 	if len(detected) != 1 || detected[0].CIDR != wantCIDR || detected[0].Count != wantCount {
 		t.Errorf("detected CIDRs = %+v, want [{%s %d}]", detected, wantCIDR, wantCount)
 	}
-	if it.Detected != 1 || it.Merged != 1 {
-		t.Errorf("iteration detected/merged = %d/%d, want 1/1", it.Detected, it.Merged)
+	if it.Detected != 1 || it.Jailed != 1 {
+		t.Errorf("iteration detected/jailed = %d/%d, want 1/1", it.Detected, it.Jailed)
 	}
 	if bans := jailActiveCIDRs(snap); len(bans) != 1 || bans[0] != wantCIDR {
 		t.Errorf("active bans = %v, want [%s]", bans, wantCIDR)
@@ -651,8 +654,13 @@ func TestRunLiveLoop_MultiWindowMerge(t *testing.T) {
 		t.Errorf("iteration detected = %d, want 3", it.Detected)
 	}
 
-	if it.Merged != 2 {
-		t.Errorf("iteration merged = %d, want 2 (both /24s exactly once)", it.Merged)
+	// The ranges reach the jail as each window found them, and the jail
+	// keeps one record per range.
+	if it.Jailed != 3 {
+		t.Errorf("iteration jailed = %d, want 3 (10.5.5.0/24 from both windows, 10.6.6.0/24 from one)", it.Jailed)
+	}
+	if got := len(jailActiveCIDRs(snap)); got != 2 {
+		t.Errorf("%d active bans in the jail, want 2 (both /24s exactly once)", got)
 	}
 	active := map[string]bool{}
 	for _, c := range jailActiveCIDRs(snap) {
@@ -691,8 +699,8 @@ func TestRunLiveLoop_UseForJailFalseDetectsButDoesNotBan(t *testing.T) {
 	if len(detected) != 1 || detected[0].CIDR != "10.5.5.0/24" {
 		t.Errorf("detected CIDRs = %+v, want [{10.5.5.0/24 256}]", detected)
 	}
-	if it.Merged != 0 {
-		t.Errorf("iteration merged = %d, want 0 (useForJail=false)", it.Merged)
+	if it.Jailed != 0 {
+		t.Errorf("iteration jailed = %d, want 0 (useForJail=false)", it.Jailed)
 	}
 	if it.ActiveBans != 0 || len(jailActiveCIDRs(snap)) != 0 {
 		t.Errorf("active bans = %v (count %d), want empty", jailActiveCIDRs(snap), it.ActiveBans)
@@ -798,19 +806,10 @@ func TestRunLiveLoop_JailEscalation(t *testing.T) {
 		"w": newWindowConfig(t, "", true),
 	})
 
-	// Pre-seed the jail: 10.5.5.0/24 sits in cell 1 (10min duration) with a
-	// ban that started 1h ago. UpdateBanActiveStatus will mark it inactive,
-	// and re-detection must escalate it to cell 2 (4h).
-	seeded := jail.NewJail()
-	seeded.Cells[0].Prisoners = append(seeded.Cells[0].Prisoners, jail.Prisoner{
-		CIDR:      "10.5.5.0/24",
-		BanStart:  now.Add(-time.Hour),
-		BanActive: true,
-	})
-	seeded.AllCIDRs = append(seeded.AllCIDRs, "10.5.5.0/24")
-	if err := jail.JailToFile(seeded, cfg.GetJailFile()); err != nil {
-		t.Fatalf("seeding jail file: %v", err)
-	}
+	// Pre-seed the jail: 10.5.5.0/24 at stage 1 (10 minutes) with a ban that
+	// started 1h ago. It has ended, and a re-detection must move it to
+	// stage 2 (4h).
+	testutil.WriteJailFile(t, cfg.GetJailFile(), testutil.JailRecord{CIDR: "10.5.5.0/24", Stage: 1, BanStart: now.Add(-time.Hour)})
 
 	h := startLoop(t, fake, cfg)
 
@@ -933,28 +932,21 @@ func TestRunLiveLoop_HeartbeatExpiresBansWithZeroTraffic(t *testing.T) {
 		"w": newWindowConfig(t, "", true),
 	})
 
-	// Seed the jail: 10.5.5.0/24 in cell 1 (10min duration) with a ban that
-	// started 1h ago - already overdue for expiry.
-	seeded := jail.NewJail()
-	seeded.Cells[0].Prisoners = append(seeded.Cells[0].Prisoners, jail.Prisoner{
-		CIDR:      "10.5.5.0/24",
-		BanStart:  now.Add(-time.Hour),
-		BanActive: true,
-	})
-	seeded.AllCIDRs = append(seeded.AllCIDRs, "10.5.5.0/24")
-	if err := jail.JailToFile(seeded, cfg.GetJailFile()); err != nil {
-		t.Fatalf("seeding jail file: %v", err)
-	}
+	// Seed the jail: 10.5.5.0/24 at stage 1 (10 minutes) with a ban that
+	// started 1h ago, so it has ended.
+	testutil.WriteJailFile(t, cfg.GetJailFile(), testutil.JailRecord{CIDR: "10.5.5.0/24", Stage: 1, BanStart: now.Add(-time.Hour)})
 	// Pre-write a stale ban file still containing the CIDR.
-	if err := jail.WriteBanFile(cfg.GetBanFile(), []string{"10.5.5.0/24"}); err != nil {
+	if err := jail.WriteBanFile(cfg.GetBanFile(), []string{"10.5.5.0/24"}, nil); err != nil {
 		t.Fatalf("seeding ban file: %v", err)
 	}
 
 	h := startLoop(t, fake, cfg)
 
 	hb, snap := h.nextHeartbeat()
-	if hb.Expired != 1 {
-		t.Errorf("heartbeat expired = %d, want 1", hb.Expired)
+	// The ban ran out while flokbn was not running: the first heartbeat
+	// counts it and drops it from the stale ban file.
+	if hb.Expired != 1 || !hb.BanFileWritten {
+		t.Errorf("heartbeat expired/ban_file_written = %d/%v, want 1/true", hb.Expired, hb.BanFileWritten)
 	}
 	if snap.Jail.TotalActive != 0 {
 		t.Errorf("jail.total_active = %d, want 0 (ban expired)", snap.Jail.TotalActive)
@@ -967,7 +959,7 @@ func TestRunLiveLoop_HeartbeatExpiresBansWithZeroTraffic(t *testing.T) {
 		t.Fatal("10.5.5.0/24 not found in jail file")
 	}
 	if active {
-		t.Error("prisoner BanActive = true on disk, want false after heartbeat expiry")
+		t.Error("the ban reads as running from the jail file, want ended")
 	}
 }
 

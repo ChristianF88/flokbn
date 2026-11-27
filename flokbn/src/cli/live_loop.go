@@ -110,7 +110,7 @@ type liveLoop struct {
 	uaWhitelistIPs map[uint32]time.Time
 	uaBlacklistIPs map[uint32]time.Time
 
-	jail jail.Jail
+	jail *jail.Jail
 	// Change detection for jail.json and the ban file, shared by iterations
 	// and heartbeats.
 	jailFile jailFileState
@@ -209,7 +209,7 @@ func newLiveLoop(ing ingestor.Ingestor, cfg *config.Config, logger *slog.Logger,
 	l.uaWhitelistIPs = make(map[uint32]time.Time)
 	l.uaBlacklistIPs = make(map[uint32]time.Time)
 
-	if l.jail, err = jail.FileToJail(cfg.GetJailFile()); err != nil {
+	if l.jail, err = jail.Load(cfg.GetJailFile(), jail.DefaultConfig()); err != nil {
 		return nil, fmt.Errorf("reading jail file: %w", err)
 	}
 
@@ -541,18 +541,18 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 
 	windows := l.updateWindows(batch, loopStart)
 
-	// Merge the ranges collected across windows and cluster sets (in place:
-	// jailCIDRs is a copy made by updateWindows), then to strings for the
-	// jail, which is keyed by them.
-	var mergedCIDRs []string
-	if merged := cidr.MergeCIDRs(windows.jailCIDRs); len(merged) > 0 {
-		mergedCIDRs = make([]string, len(merged))
-		for i, nc := range merged {
-			mergedCIDRs[i] = nc.String()
+	// The ranges of every window and cluster set go to the jail as they were
+	// found, not merged: a hot host and the subnet around it are two
+	// offenders with a record each. The ban file joins them again.
+	var detected []string
+	if len(windows.jailCIDRs) > 0 {
+		detected = make([]string, len(windows.jailCIDRs))
+		for i, nc := range windows.jailCIDRs {
+			detected[i] = nc.String()
 		}
 	}
 
-	bans := l.publishBans(mergedCIDRs, l.forcedBans(), false)
+	bans := l.publishBans(detected, l.forcedBans(), false)
 
 	loopEnd := time.Since(loopStart)
 
@@ -564,9 +564,8 @@ func (l *liveLoop) iterate(ctx context.Context, batch []accesslog.Request, loopS
 		"window", windows.requests,
 		"batch", len(batch),
 		"detected", windows.detected,
-		"merged", len(mergedCIDRs),
 		"jailed", bans.Jailed,
-		"pruned", bans.pruned,
+		"pruned", bans.Pruned,
 		"active_bans", len(bans.Bans),
 		"ban_file_written", bans.banFileWritten,
 		"jail_file_written", bans.jailFileWritten,
@@ -607,7 +606,6 @@ func (l *liveLoop) forcedBans() []string {
 // banRound is the outcome of one round of the ban pipeline in live mode.
 type banRound struct {
 	analysis.BanUpdate
-	pruned          int // prisoners evicted from the jail
 	jailFileWritten bool
 	banFileWritten  bool
 }
@@ -617,20 +615,19 @@ type banRound struct {
 //
 //   - analysis.UpdateBans, shared with static mode, drops the detected ranges
 //     that are fully whitelisted (without fragmenting partial overlaps),
-//     expires the bans that ran out, starts or escalates a ban for every
-//     range handed in, and composes the lists to publish, where the
-//     whitelist wins over the active bans AND the manual blacklist;
-//   - prisoners stale beyond the escalation-memory window are evicted, so
-//     jail.json tracks active+recent bans, not lifetime-distinct CIDRs
-//     (AUDIT-04);
+//     hands the rest to the jail, which starts or repeats bans and forgets
+//     the records past their retention, and composes the lists to publish
+//     from the bans active now, where the whitelist wins over the active
+//     bans AND the manual blacklist;
 //   - jail.json and the ban file are written when their content changed.
 //
-// An iteration hands in the merged ranges it detected and the forced bans. A
-// heartbeat hands in nothing, so it only expires: without traffic no ban is
+// An iteration hands in the ranges it detected and the forced bans. A
+// heartbeat hands in nothing, so bans only run out: without traffic no ban is
 // ever started or escalated, and the IPs of blacklisted User-Agents are not
 // re-jailed, so their bans decay normally.
 func (l *liveLoop) publishBans(detected, forceBan []string, heartbeat bool) banRound {
-	round := banRound{BanUpdate: analysis.UpdateBans(&l.jail, analysis.BanInput{
+	round := banRound{BanUpdate: analysis.UpdateBans(l.jail, analysis.BanInput{
+		Now:      time.Now(),
 		Detected: detected,
 		ForceBan: forceBan,
 		// Whitelists from every source: CIDR list + UA-whitelisted IPs.
@@ -644,15 +641,11 @@ func (l *liveLoop) publishBans(detected, forceBan []string, heartbeat bool) banR
 		l.logger.Warn("some CIDRs failed during jail update", "err", round.UpdateErr)
 	}
 
-	// Pure evictions remove already-inactive prisoners, so they change
-	// neither the active bans nor the lists composed above.
-	round.pruned = l.jail.Prune(l.jail.RetentionHorizon())
-
 	// An iteration compares the serialized jail with the last write every
-	// time: most iterations re-detect ranges that are already banned, and a
-	// jail file that went missing comes back. A heartbeat skips even the
-	// comparison unless a ban ran out or a prisoner was evicted.
-	if !heartbeat || round.JailChanged || round.pruned > 0 {
+	// time, so a jail file that went missing comes back. A heartbeat skips
+	// even the comparison unless a record was forgotten: a ban that ran out
+	// changes the ban file, not the jail.
+	if !heartbeat || round.JailChanged {
 		round.jailFileWritten = l.saveJail()
 	}
 	round.banFileWritten = l.writeBanFile(round.Bans, round.Blacklist)
@@ -665,7 +658,7 @@ func (l *liveLoop) publishBans(detected, forceBan []string, heartbeat bool) banR
 // disk.
 func (l *liveLoop) saveJail() bool {
 	path := l.cfg.GetJailFile()
-	wrote, err := l.jailFile.save(&l.jail, path)
+	wrote, err := l.jailFile.save(l.jail, path)
 	if err != nil {
 		l.logger.Error("failed to save jail", "path", path, "err", err)
 	}
@@ -709,7 +702,7 @@ func (l *liveLoop) publishSnapshot(duration time.Duration, heartbeat bool) {
 	// of the last iteration.
 	l.statsState.uaActiveWhitelistIPs = len(l.uaWhitelistIPs)
 	l.statsState.uaActiveBlacklistIPs = len(l.uaBlacklistIPs)
-	l.stats.publish(buildSnapshot(l.statsState, l.ing, l.cfg, l.windows, l.clusterStats, &l.jail, duration, l.sleepS, heartbeat))
+	l.stats.publish(buildSnapshot(l.statsState, l.ing, l.cfg, l.windows, l.clusterStats, l.jail, duration, l.sleepS, heartbeat))
 }
 
 // expireWindows drops what has left the sliding windows and returns how many
@@ -743,10 +736,10 @@ func (l *liveLoop) expireWindows() int {
 }
 
 // heartbeat keeps live mode honest while no traffic arrives: it expires
-// the sliding windows (refreshing the published detections), expires jail
-// bans, persists the jail when bans flipped inactive, rewrites the ban
-// file only when the published lists changed, and publishes a heartbeat
-// snapshot so /stats keeps advancing.
+// the sliding windows (refreshing the published detections), lets the jail
+// forget the records past their retention and persists it when it did,
+// rewrites the ban file when a ban ran out or the published lists changed
+// otherwise, and publishes a heartbeat snapshot so /stats keeps advancing.
 func (l *liveLoop) heartbeat() {
 	hbStart := time.Now()
 

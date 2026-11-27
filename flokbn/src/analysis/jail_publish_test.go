@@ -10,6 +10,7 @@ import (
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/output"
+	"github.com/ChristianF88/flokbn/testutil"
 )
 
 const (
@@ -18,20 +19,14 @@ const (
 	publishLogFormat   = "%h %^ %^ [%t] \"%r\" %s %b \"%^\" \"%u\""
 )
 
-// seedPublishJail persists a jail holding one ban that has run out (but is
-// still flagged BanActive on disk, as the previous run left it) and one ban
-// that is still running.
+// seedPublishJail persists a jail holding one ban that has run out and one
+// ban that is still running.
 func seedPublishJail(t *testing.T, path string) {
 	t.Helper()
-	j := jail.NewJail()
-	j.Cells[0].Prisoners = []jail.Prisoner{
-		{CIDR: publishExpiredCIDR, BanStart: time.Now().Add(-time.Hour), BanActive: true},
-		{CIDR: publishActiveCIDR, BanStart: time.Now(), BanActive: true},
-	}
-	j.AllCIDRs = []string{publishExpiredCIDR, publishActiveCIDR}
-	if err := jail.JailToFile(j, path); err != nil {
-		t.Fatalf("seeding jail: %v", err)
-	}
+	testutil.WriteJailFile(t, path,
+		testutil.JailRecord{CIDR: publishExpiredCIDR, Stage: 1, BanStart: time.Now().Add(-time.Hour)},
+		testutil.JailRecord{CIDR: publishActiveCIDR, Stage: 1, BanStart: time.Now()},
+	)
 }
 
 func publishCfg(t *testing.T, dir, logContent string) *config.Config {
@@ -76,8 +71,8 @@ func banFileCIDRs(t *testing.T, path string) map[string]bool {
 
 // assertExpiredBanDropped checks the published ban file and the persisted jail
 // after a run that detected nothing: the run-out ban must be gone from the ban
-// file and flagged inactive in the jail (it stays resident as escalation
-// memory), the running ban must be untouched.
+// file and still be in the jail as an ended ban (it is the memory a repeat is
+// judged by), the running ban must be untouched.
 func assertExpiredBanDropped(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	bans := banFileCIDRs(t, cfg.GetBanFile())
@@ -88,26 +83,30 @@ func assertExpiredBanDropped(t *testing.T, cfg *config.Config) {
 		t.Errorf("ban file lost the still-active ban %s: %v", publishActiveCIDR, bans)
 	}
 
-	j, err := jail.FileToJail(cfg.GetJailFile())
+	j, err := jail.Load(cfg.GetJailFile(), jail.DefaultConfig())
 	if err != nil {
 		t.Fatalf("reloading jail: %v", err)
 	}
-	seen := map[string]bool{}
-	for _, p := range j.Cells[0].Prisoners {
-		seen[p.CIDR] = p.BanActive
+	now := time.Now()
+	present := map[string]bool{}
+	for _, r := range j.Records() {
+		present[r.CIDR().String()] = true
 	}
-	if active, ok := seen[publishExpiredCIDR]; !ok || active {
-		t.Errorf("persisted jail: expired ban %s present=%v active=%v, want present and inactive", publishExpiredCIDR, ok, active)
+	active := map[string]bool{}
+	for _, b := range j.Active(now) {
+		active[b.CIDR.String()] = true
 	}
-	if active, ok := seen[publishActiveCIDR]; !ok || !active {
-		t.Errorf("persisted jail: running ban %s present=%v active=%v, want present and active", publishActiveCIDR, ok, active)
+	if !present[publishExpiredCIDR] || active[publishExpiredCIDR] {
+		t.Errorf("persisted jail: expired ban %s present=%v active=%v, want present and ended", publishExpiredCIDR, present[publishExpiredCIDR], active[publishExpiredCIDR])
+	}
+	if !present[publishActiveCIDR] || !active[publishActiveCIDR] {
+		t.Errorf("persisted jail: running ban %s present=%v active=%v, want present and active", publishActiveCIDR, present[publishActiveCIDR], active[publishActiveCIDR])
 	}
 }
 
-// A static run that detects nothing must still expire bans: before the fix the
-// only caller of UpdateBanActiveStatus was jail.Update, which was skipped when
-// there was nothing to add, so the ban file kept republishing run-out bans
-// from the persisted BanActive flags forever.
+// A static run that detects nothing must still drop the bans that ran out
+// from the ban file: whether a ban is active is computed from the time of the
+// run, never read from a flag an earlier run left on disk.
 func TestStaticNoDetectionsExpiresBans(t *testing.T) {
 	// Two requests, far below minClusterSize: no detections.
 	logContent := `192.0.2.1 - - [01/Jan/2023:12:00:00 +0000] "GET / HTTP/1.1" 200 1 "-" "a"
@@ -205,5 +204,48 @@ func TestStaticNoDetectionsLeavesUnchangedJailAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg.GetBanFile()); err != nil {
 		t.Errorf("ban file not written: %v", err)
+	}
+}
+
+// TestStaticBanFileListsRunningBansMerged: the ban file is the short list for
+// a firewall. Of everything the jail holds it lists only the bans that are
+// running, a range inside another one once (as the wider range), and
+// neighbouring ranges joined. The jail file keeps every record.
+func TestStaticBanFileListsRunningBansMerged(t *testing.T) {
+	dir := t.TempDir()
+	cfg := publishCfg(t, dir, "")
+	now := time.Now()
+	running, ended := now.Add(-time.Minute), now.Add(-time.Hour)
+	testutil.WriteJailFile(t, cfg.GetJailFile(),
+		testutil.JailRecord{CIDR: "10.0.0.0/16", Stage: 2, BanStart: running},     // 4 hours
+		testutil.JailRecord{CIDR: "10.0.5.0/24", Stage: 3, BanStart: running},     // inside the /16
+		testutil.JailRecord{CIDR: "10.0.5.7/32", Stage: 5, BanStart: running},     // inside both
+		testutil.JailRecord{CIDR: "10.9.0.0/24", Stage: 1, BanStart: ended},       // ran out
+		testutil.JailRecord{CIDR: "192.0.2.0/25", Stage: 2, BanStart: running},    // two halves ...
+		testutil.JailRecord{CIDR: "192.0.2.128/25", Stage: 3, BanStart: running},  // ... of one /24
+		testutil.JailRecord{CIDR: "198.51.100.0/24", Stage: 1, BanStart: ended},   // ran out, with ...
+		testutil.JailRecord{CIDR: "198.51.100.9/32", Stage: 4, BanStart: running}, // ... a running ban inside
+	)
+	if _, err := Static(cfg); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	got := banFileCIDRs(t, cfg.GetBanFile())
+	want := []string{"10.0.0.0/16", "192.0.2.0/24", "198.51.100.9/32"}
+	if len(got) != len(want) {
+		t.Errorf("ban file lists %d ranges, want %d: %v", len(got), len(want), got)
+	}
+	for _, c := range want {
+		if !got[c] {
+			t.Errorf("ban file lacks %s: %v", c, got)
+		}
+	}
+
+	j, err := jail.Load(cfg.GetJailFile(), jail.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Len() != 8 {
+		t.Errorf("%d records in the jail file, want all 8", j.Len())
 	}
 }

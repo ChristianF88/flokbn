@@ -27,7 +27,7 @@ flokbn/src/          # THE GO MODULE lives here, not at repo root
   cidr/              # NumericCIDR, Parse, IntervalSet, MergeCIDRs, whitelist subtraction (RemoveWhitelisted), UserAgentMatcher
   analysis/          # Static() / StaticWithRequests(): one pipeline (runStatic) parse→filter→trie→cluster→publish; UpdateBans
   sliding/           # time+size bounded window for live mode
-  jail/              # persistent escalating ban state (jail.go, io.go)
+  jail/              # the jail: records and rules (jail.go), jail file (file.go), ban file and atomic writes (banfile.go)
   output/            # JSONOutput, plain text, PlotHeatmap (echarts HTML)
   tui/               # tview dashboard
   pools/             # TrieNode allocators (chunked + lock-free bump)
@@ -69,10 +69,11 @@ cd e2e && bash e2e_static_test.sh        # non-docker e2e scripts
 
 Go 1.23. Tests use the standard library `testing` package (no testify or go-cmp).
 `github.com/elastic/go-lumber` is in go.mod for tests only: its client drives the
-ingestor and live e2e tests, the server side is our own reader. ~148 `_test.go` files including
+ingestor and live e2e tests, the server side is our own reader. ~169 `_test.go` files including
 differential fuzz (`cidr/removewhitelisted_diff_test.go`,
-`ingestor/live_parser_diff_test.go`) and invariant tests
-(`jail/whitelist_invariant_test.go`). Real-world benchmarks are env-gated (run manually).
+`ingestor/live_parser_diff_test.go`), a reference-model test (`jail/reference_test.go`)
+and invariant tests (`analysis/whitelist_invariant_test.go`). Real-world benchmarks
+are env-gated (run manually).
 
 CI (`.github/workflows/ci.yml`): prepare (go mod tidy must be clean) → lint → test
 (race + coverage → Codecov) → cross-platform build matrix. Release on `v*` tag via
@@ -98,19 +99,45 @@ holds a write token, and tests run in the CI job it requires.
   after the walk: count with `Trie.CountInCIDR`, merge with `cidr.MergeCIDRs` (in
   place), and build each string once, for the JSON output, the /stats snapshot and
   the jail (`processClustering` in `analysis/static.go`, `liveLoop.clusterWindow`
-  in `cli/live_loop.go`). The jail and the list files stay string-based.
+  in `cli/live_loop.go`). The ranges are merged within a cluster set only: the jail
+  gets every set's ranges as that set found them (static: `jailCandidates`, live:
+  `liveLoop.iterate`), so a hot host and the subnet around it are two records.
 - **CIDR strings to numbers** (`cidr/numeric.go`): `cidr.Parse` is the one parser
   outside config and jail. It accepts exactly what `net.ParseCIDR` accepts with a
   4-byte mask (canonical spelling without allocating, anything else via
   `net.ParseCIDR`; `FuzzParse` holds it to that). `cidr.IntervalSet` is the one
   sorted, merged `[start,end]` form of a CIDR list: the whitelist in
   `RemoveWhitelisted` and the TUI cluster overlay (`tui/cluster_membership.go`) use
-  it. The jail keeps its own bounds cache. The `*net.IPNet` merge the numeric one
-  replaced (`MergeIPNets`) lives on as test oracle in `cidr/merge_ref_test.go`.
-- **Jail** (`jail/`): persistent escalating ban state for live mode. 5 cells with
-  durations 10m → 4h → 7d → 30d → 180d. A CIDR escalates to the next cell on
-  re-detection after expiry. Parent ranges consolidate contained sub-ranges (prevents
-  fragment explosion). Persisted as JSON; bounds cached as uint32 to avoid re-parsing.
+  it. The `*net.IPNet` merge the numeric one replaced (`MergeIPNets`) lives on as
+  test oracle in `cidr/merge_ref_test.go`.
+- **Jail** (`jail/`): the persistent record of banned ranges, used by both modes.
+  A record is a range, the stage of its last ban and the start of that ban; whether a
+  ban is active is computed from the time handed to each call, nothing is flagged on
+  disk. 5 stages: 10m -> 4h -> 7d -> 30d -> 180d, the last one repeats; a record is
+  forgotten 180d after its ban ended. Two ranges are the same offender when the
+  narrower fills at least `Overlap` percent (50) of the wider. A detected range is
+  judged against the jail as it was before the round: (1) all its addresses banned ->
+  ignored; (2) banned one stage above its history = max(own ended record, ended
+  records around it that it fills >= 50% of, highest stage that >= 50% of its
+  addresses served in ended records inside it); (3) an ended record around it that it
+  fills >= 50% of is banned again as a whole; (4) ended records inside it are banned
+  again, each at its own next stage. An active ban passes no history (a stage cannot
+  climb to wider ranges round by round) and is never replaced. Records are NOT merged
+  or absorbed: the jail keeps every detected range with its own stage (the wider
+  record does not pass its stage down to a range below the threshold, so dropping the
+  narrow one would lose history). Nested and neighbouring bans are joined only in
+  `Jail.BanList`, which is what the ban file is built from: only running bans, a
+  range inside another one listed once, two allocations however long the list. The
+  jail's time never goes back (`Jail.at`): it is the latest time an `Update` saw, and
+  a jail read from a file starts at the latest ban start in the file, so this holds
+  across a restart and the first round counts the bans that ran out meanwhile
+  (`Outcome.Ended`). `Decode` is strict (unknown or repeated keys, missing fields, a
+  range listed twice are errors). The file format of the jail this one replaced
+  (top-level `Cells`) is not read: `Decode` says so and to delete the file. Stages,
+  overlap and retention are `jail.DefaultConfig()`; there are no TOML keys for them
+  yet. Tests: the rule table (`rules_test.go`), an address-by-address reference model
+  that random scripts and `FuzzUpdate` compare against (`reference_test.go`), the
+  file formats (`file_test.go`, `banfile_test.go`), benchmarks (`bench_test.go`).
 - **Whitelist semantics:** the whitelist (CIDR file + User-Agent-whitelisted IPs as
   /32) is applied at two points with different rules.
   *Before the jail* (`cidr.DropFullyWhitelisted`): a detected CIDR is dropped only if
@@ -121,11 +148,12 @@ holds a write token, and tests run in the CI job it requires.
   subtracted exactly from active bans AND the manual blacklist, so anything covered by
   the union of entries is removed and partial overlaps are carved. This is the choke
   point that guarantees a whitelisted address is never published (see
-  `jail/whitelist_invariant_test.go`). `RemoveWhitelisted` parses the whitelist once
+  `analysis/whitelist_invariant_test.go`). `RemoveWhitelisted` parses the whitelist once
   (O(B+W), not O(B*W); `ComposeBanLists` once for both lists) and is byte-identical
   to the old path for IPv4 (proven by differential fuzz).
-  `analysis.UpdateBans(*jail.Jail, BanInput)` runs both points plus ban expiry and the
-  jail update on an in-memory jail, without I/O. Every mode publishes through it:
+  `analysis.UpdateBans(*jail.Jail, BanInput)` runs both points and the jail update
+  on an in-memory jail at `BanInput.Now`, without I/O (invariant:
+  `analysis/whitelist_invariant_test.go`). Every mode publishes through it:
   static in `analysis/publish.go`, live in `liveLoop.publishBans` (`cli/live_loop.go`).
 - **Static pipeline** (`analysis/static.go`): both entrypoints run `runStatic`. The
   parse is IP-only when no trie filters and the caller does not want the requests,
@@ -195,7 +223,8 @@ holds a write token, and tests run in the CI job it requires.
   heartbeat's stats refresh after window expiry).
   `cli/live_ban_characterization_test.go` pins the jail and ban-file outcome of both.
 - Live mode writes jail.json and the ban file only when their content changed
-  (`jailFileState`, `banFileState` in `cli/live_persist.go`).
+  (`jailFileState`, `banFileState` in `cli/live_persist.go`). A ban that runs out
+  changes the ban file, not the jail's records.
 - Live log lines other code or docs rely on are constants: `liveAcceptingMsg`
   ("accepting Lumberjack connections", the listener is up; nothing waits for a
   shipper), `liveTimestampSkewMsg`, `liveRejectedLinesMsg` (more than half of at
@@ -207,4 +236,5 @@ holds a write token, and tests run in the CI job it requires.
   access.log + calibrated TOML + white/blacklist files) with absolute paths rewritten
   into the config. Use it to reproduce behavior locally.
 - When editing CIDR/jail/whitelist logic, the invariant and differential-fuzz tests
-  are the safety net - run `cd flokbn/src && go test ./cidr ./jail` after changes.
+  are the safety net - run `cd flokbn/src && go test ./cidr ./jail ./analysis`
+  after changes.

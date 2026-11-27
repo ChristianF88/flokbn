@@ -465,14 +465,15 @@ func (c *Config) validateListFiles(diags *ConfigDiagnostics) {
 	}
 }
 
-// validateJailFile surfaces an unloadable jail (unreadable / invalid-JSON /
-// zero-cell) at the barrier via the SAME loader the run uses, so it aborts
+// validateJailFile surfaces an unloadable jail (unreadable, invalid JSON, or
+// anything else jail.Decode rejects) at the barrier via the SAME loader the
+// run uses, so it aborts
 // before any work instead of the static path silently swallowing it. A
 // missing/empty jail is a valid fresh start and records nothing. It is a load
 // error to surface (operator-visible on-disk state), not a panic; the loader
 // error already names the path.
 func (c *Config) validateJailFile(diags *ConfigDiagnostics) {
-	if _, err := jail.FileToJail(c.GetJailFile()); err != nil {
+	if _, err := jail.Load(c.GetJailFile(), jail.DefaultConfig()); err != nil {
 		diags.AddRaw(err.Error())
 	}
 }

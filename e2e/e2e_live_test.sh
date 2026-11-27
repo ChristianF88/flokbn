@@ -159,13 +159,12 @@ if [ -n "$JAIL_CONTENT" ]; then
     python3 -c "
 import json, sys
 j = json.load(sys.stdin)
-for cell in j.get('Cells', []):
-    for p in cell.get('Prisoners', []):
-        print(f\"  jail cell {cell['Id']}: {p['Cidr']} active={p['BanActive']}\")
+for r in j.get('records', []):
+    print(f\"  jail stage {r['stage']}: {r['cidr']} since {r['banStart']}\")
 " <<< "$JAIL_CONTENT" 2>/dev/null | while read -r line; do log "$line"; done
 fi
 
-# Verify detections are happening (ban file has entries OR jail has prisoners)
+# Verify detections are happening (ban file has entries OR jail has records)
 BAN_ENTRIES=0
 JAIL_PRISONERS=0
 if [ -n "$BAN_CONTENT" ]; then
@@ -175,13 +174,12 @@ if [ -n "$JAIL_CONTENT" ]; then
     JAIL_PRISONERS=$(echo "$JAIL_CONTENT" | python3 -c "
 import json, sys
 j = json.load(sys.stdin)
-total = sum(len(c.get('Prisoners',[])) for c in j.get('Cells',[]))
-print(total)
+print(len(j.get('records', [])))
 " 2>/dev/null || echo "0")
 fi
 
 if [ "$BAN_ENTRIES" -gt 0 ] || [ "$JAIL_PRISONERS" -gt 0 ]; then
-    pass "Detections found: $BAN_ENTRIES ban entries, $JAIL_PRISONERS jail prisoners"
+    pass "Detections found: $BAN_ENTRIES ban entries, $JAIL_PRISONERS jail records"
 else
     fail "No detections in ban or jail files after 10s"
 fi

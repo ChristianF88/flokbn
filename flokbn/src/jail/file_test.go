@@ -1,4 +1,4 @@
-package jailv2
+package jail
 
 import (
 	"os"
@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ChristianF88/flokbn/jail"
 )
 
 func TestEncodeFormat(t *testing.T) {
@@ -57,17 +55,33 @@ func TestDecodeRejects(t *testing.T) {
 		"null":                   `null`,
 		"empty object":           `{}`,
 		"a list":                 `[]`,
-		"previous format, null":  `{"Cells":null}`,
-		"previous format, empty": `{"Cells":[],"AllCidrs":[]}`,
 		"unknown version":        `{"version":3,"records":[]}`,
 		"both formats":           `{"version":2,"records":[],"Cells":[{"Prisoners":[]}]}`,
+		"earlier format":         `{"Cells":[{"Prisoners":[]}]}`,
 		"not a CIDR":             `{"version":2,"records":[{"cidr":"10.0.0.1","stage":1,"banStart":"2026-01-01T00:00:00Z"}]}`,
 		"IPv6":                   `{"version":2,"records":[{"cidr":"2001:db8::/32","stage":1,"banStart":"2026-01-01T00:00:00Z"}]}`,
 		"IPv4-mapped IPv6":       `{"version":2,"records":[{"cidr":"::ffff:10.0.0.0/120","stage":1,"banStart":"2026-01-01T00:00:00Z"}]}`,
 		"stage 0":                `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":0,"banStart":"2026-01-01T00:00:00Z"}]}`,
-		"stage 6":                `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":6,"banStart":"2026-01-01T00:00:00Z"}]}`,
+		"negative stage":         `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":-1,"banStart":"2026-01-01T00:00:00Z"}]}`,
+		"version only":           `{"version":2}`,
+		"records null":           `{"version":2,"records":null}`,
+		"records not a list":     `{"version":2,"records":{}}`,
+		"version as text":        `{"version":"2","records":[]}`,
+		"unknown key":            `{"version":2,"records":[],"comment":"x"}`,
+		"misspelt records":       `{"version":2,"records":[],"recordz":[{"cidr":"10.0.0.0/24","stage":5,"banStart":"2026-01-01T00:00:00Z"}]}`,
+		"key in upper case":      `{"version":2,"RECORDS":[]}`,
+		"records twice":          `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":3,"banStart":"2026-01-01T00:00:00Z"}],"records":[]}`,
+		"no banStart":            `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":3}]}`,
+		"misspelt banStart":      `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":3,"ban_start":"2026-01-01T00:00:00Z"}]}`,
+		"banStart null":          `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":3,"banStart":null}]}`,
+		"no stage":               `{"version":2,"records":[{"cidr":"10.0.0.0/24","banStart":"2026-01-01T00:00:00Z"}]}`,
+		"no cidr":                `{"version":2,"records":[{"stage":3,"banStart":"2026-01-01T00:00:00Z"}]}`,
+		"record null":            `{"version":2,"records":[null]}`,
+		"range twice":            `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":1,"banStart":"2026-11-26T11:59:00Z"},{"cidr":"10.0.0.0/24","stage":3,"banStart":"2026-06-01T00:00:00Z"}]}`,
+		"range twice, host bits": `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":1,"banStart":"2026-11-26T11:59:00Z"},{"cidr":"10.0.0.77/24","stage":1,"banStart":"2026-11-26T11:59:00Z"}]}`,
+		"second document":        `{"version":2,"records":[]}{"version":2,"records":[]}`,
+		"text after the end":     `{"version":2,"records":[]} x`,
 		"bad time":               `{"version":2,"records":[{"cidr":"10.0.0.0/24","stage":1,"banStart":"yesterday"}]}`,
-		"previous format, IPv6":  `{"Cells":[{"Prisoners":[{"Cidr":"2001:db8::/32","BanStart":"2026-01-01T00:00:00Z","BanActive":true}]}]}`,
 	}
 	for name, data := range tests {
 		if j, err := Decode([]byte(data), DefaultConfig()); err == nil {
@@ -76,115 +90,71 @@ func TestDecodeRejects(t *testing.T) {
 	}
 }
 
-// TestDecodeNormalizes: a file edited by hand may list a range twice or keep
-// records a wider one covers. Decode brings it into the form the jail keeps.
+// TestDecodeNormalizes: a file edited by hand may list its records in any
+// order, with host bits, nested, and with a stage the Config no longer has.
+// Decode keeps every one of them, in the order the jail keeps.
 func TestDecodeNormalizes(t *testing.T) {
 	data := `{"version":2,"records":[
+{"cidr":"192.0.2.77/24","stage":9,"banStart":"2026-11-26T11:59:00Z"},
 {"cidr":"10.0.1.0/24","stage":1,"banStart":"2026-11-26T11:59:00Z"},
-{"cidr":"10.0.0.0/16","stage":2,"banStart":"2026-11-26T11:59:00Z"},
 {"cidr":"10.0.9.9/32","stage":4,"banStart":"2026-11-26T11:59:00Z"},
-{"cidr":"192.0.2.77/24","stage":1,"banStart":"2026-11-26T11:59:00Z"},
-{"cidr":"192.0.2.0/24","stage":3,"banStart":"2026-11-01T00:00:00Z"}
-]}`
+{"cidr":"10.0.0.0/16","stage":2,"banStart":"2026-11-26T11:59:00Z"}
+]}
+`
 	j, err := Decode([]byte(data), DefaultConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantRecords(t, j, t0,
-		"10.0.0.0/16 2 active", // covers the /24 at stage 1
-		"10.0.9.9/32 4 active", // higher stage: stays nested
-		"192.0.2.0/24 3 ended", // listed twice: the higher stage is kept
+		"10.0.0.0/16 2 active",
+		"10.0.1.0/24 1 active", // inside the /16 at a lower stage: kept
+		"10.0.9.9/32 4 active",
+		"192.0.2.0/24 5 active", // stage 9 of 5: the last stage
 	)
+	// The first heartbeat changes nothing.
+	if out := j.Update(t0, nil); out.Changed() || j.Len() != 4 {
+		t.Errorf("first round after loading: %+v, %d records", out, j.Len())
+	}
 }
 
-// TestDecodePreviousFormat takes a file written by package jail and requires
-// the same ranges, stages, ban starts and active bans.
-func TestDecodePreviousFormat(t *testing.T) {
-	now := time.Now()
-	old := jail.NewJail()
-	type entry struct {
-		cidr  string
-		cell  int
-		start time.Time
+// TestDecodeEarlierFormat: a jail file of an earlier flokbn version is not
+// read. The error says so and what to do, rather than "not a jail file".
+func TestDecodeEarlierFormat(t *testing.T) {
+	old := `{"Cells":[{"Id":1,"Description":"Stage 1 Ban","BanDuration":600000000000,"Prisoners":[{"Cidr":"10.0.0.0/24","BanStart":"2026-11-26T11:59:00Z","BanActive":true}]}],"AllCidrs":["10.0.0.0/24"]}`
+	_, err := Decode([]byte(old), DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "earlier flokbn version") || !strings.Contains(err.Error(), "delete it") {
+		t.Errorf("Decode of an earlier format: err %v, want one that names the earlier version and the way out", err)
 	}
-	entries := []entry{
-		{"10.0.0.0/16", 0, now.Add(-5 * time.Minute)},         // stage 1, active
-		{"10.9.0.0/24", 0, now.Add(-15 * time.Minute)},        // stage 1, ended
-		{"172.16.0.0/12", 1, now.Add(-time.Hour)},             // stage 2, active
-		{"192.0.2.7/32", 2, now.Add(-8 * 24 * time.Hour)},     // stage 3, ended
-		{"198.51.100.0/24", 3, now.Add(-24 * time.Hour)},      // stage 4, active
-		{"203.0.113.0/25", 4, now.Add(-100 * 24 * time.Hour)}, // stage 5, active
-	}
-	for _, e := range entries {
-		old.Cells[e.cell].Prisoners = append(old.Cells[e.cell].Prisoners,
-			jail.Prisoner{CIDR: e.cidr, BanStart: e.start, BanActive: true})
-		old.AllCIDRs = append(old.AllCIDRs, e.cidr)
-	}
-	old.UpdateBanActiveStatus()
-	data, err := jail.JailToJSON(old)
-	if err != nil {
-		t.Fatal(err)
-	}
+}
 
+// TestDecodeSetsTheClock: the jail's time starts at the latest ban start in
+// the file. A clock that is behind after a restart does not bring ended bans
+// back, and the first round counts the bans that ran out while flokbn was not
+// running.
+func TestDecodeSetsTheClock(t *testing.T) {
+	data := `{"version":2,"records":[
+{"cidr":"10.0.0.0/24","stage":1,"banStart":"2026-11-26T11:00:00Z"},
+{"cidr":"10.0.1.0/24","stage":1,"banStart":"2026-11-26T11:55:00Z"},
+{"cidr":"10.0.2.0/24","stage":2,"banStart":"2026-11-26T11:58:00Z"}
+]}`
 	j, err := Decode([]byte(data), DefaultConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.Len() != len(entries) {
-		t.Fatalf("%d records, want %d", j.Len(), len(entries))
+	// The clock was reset to 2001: the jail stays at 11:58, where the first
+	// ban has ended and the other two run.
+	wrong := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	if got, want := j.BanList(wrong), []string{"10.0.1.0/24", "10.0.2.0/24"}; !slices.Equal(got, want) {
+		t.Errorf("ban list with the clock in 2001 = %q, want %q", got, want)
 	}
-	for _, e := range entries {
-		nc := mustParse(t, e.cidr)
-		i := j.lowerBound(nc.IP, nc.PrefixLen)
-		if i == j.Len() || j.records[i].CIDR() != nc {
-			t.Errorf("%s is missing", e.cidr)
-			continue
-		}
-		if r := j.records[i]; int(r.Stage) != e.cell+1 || r.BanStart != e.start.UnixNano() {
-			t.Errorf("%s: stage %d, ban start %s; want stage %d, %s", e.cidr, r.Stage, time.Unix(0, r.BanStart), e.cell+1, e.start)
-		}
+	if out := j.Update(wrong, nil); out.Changed() || out.Ended != 0 {
+		t.Errorf("round with the clock in 2001: %+v, want nothing", out)
 	}
-
-	wantActive := old.ListActiveBans()
-	slices.Sort(wantActive)
-	gotActive := j.BanList(now)
-	slices.Sort(gotActive)
-	if !slices.Equal(gotActive, wantActive) {
-		t.Errorf("active bans %q, package jail has %q", gotActive, wantActive)
+	// Back at the right time, ten past twelve: the stage 1 ban from 11:55
+	// ran out in between.
+	if out := j.Update(t0.Add(10*time.Minute), nil); out.Ended != 1 {
+		t.Errorf("Ended = %d, want 1", out.Ended)
 	}
-
-	// A jail that package jail wrote before anything was banned.
-	fresh, err := jail.JailToJSON(jail.NewJail())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if j, err := Decode([]byte(fresh), DefaultConfig()); err != nil || j.Len() != 0 {
-		t.Errorf("fresh jail of the previous format: %v, err %v", j, err)
-	}
-
-	// The next save is in the new format and reads back the same.
-	back, err := Decode(j.Encode(), DefaultConfig())
-	if err != nil || !slices.Equal(back.Records(), j.Records()) {
-		t.Errorf("re-encoded jail differs: err %v", err)
-	}
-}
-
-// TestDecodePreviousFormatFewerStages: a file with more stages than the
-// Config keeps its deepest entries at the last stage.
-func TestDecodePreviousFormatFewerStages(t *testing.T) {
-	old := jail.NewJail()
-	old.Cells[4].Prisoners = append(old.Cells[4].Prisoners, jail.Prisoner{CIDR: "10.0.0.0/24", BanStart: t0})
-	data, err := jail.JailToJSON(old)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := DefaultConfig()
-	cfg.Stages = cfg.Stages[:3]
-	j, err := Decode([]byte(data), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantRecords(t, j, t0, "10.0.0.0/24 3 active")
 }
 
 // TestDecodeClampsBanStart: a ban start too far from the present for an int64
@@ -269,11 +239,7 @@ func FuzzDecode(f *testing.F) {
 	j, _ := New(DefaultConfig())
 	j.Update(t0, ranges(f, "10.0.0.0/16", "10.0.5.5/32", "192.0.2.0/24"))
 	f.Add(j.Encode())
-	old := jail.NewJail()
-	old.Fill("192.168.1.0/24")
-	old.Fill("10.0.0.0/8")
-	legacy, _ := jail.JailToJSON(old)
-	f.Add([]byte(legacy))
+	f.Add([]byte(`{"Cells":[{"Prisoners":[{"Cidr":"192.168.1.0/24","BanStart":"2026-11-26T11:59:00Z","BanActive":true}]}]}`))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`null`))
 	f.Add([]byte(`{invalid`))

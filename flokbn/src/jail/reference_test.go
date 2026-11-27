@@ -1,4 +1,4 @@
-package jailv2
+package jail
 
 // The reference model: the rules of the package comment written out address by
 // address over a plain list, with no sorted slice, no binary search and no
@@ -44,30 +44,39 @@ func (m *refJail) update(now int64, detected []cidr.NumericCIDR) {
 
 	// Judge every detected range against the records as they are now.
 	x := uint64(m.cfg.Overlap)
+	active := func(r Record) bool { return now < m.end(r) }
 	bans := map[cidr.NumericCIDR]uint8{}
+	ban := func(r Record, stage uint8) { bans[r.CIDR()] = max(bans[r.CIDR()], stage) }
 	for _, nc := range detected {
 		q := Record{IP: nc.Interval().Start, PrefixLen: nc.PrefixLen}
+		// sameOffender: r lies around q, and q fills at least x percent of it.
+		sameOffender := func(r Record) bool {
+			return r.PrefixLen < q.PrefixLen && holds(r, q) && size(q)*100 >= x*size(r)
+		}
+		inside := func(r Record) bool { return r.PrefixLen > q.PrefixLen && holds(q, r) }
 
+		// Address by address: is it banned, and which stage has it served in
+		// the records inside the range?
 		allBanned := true
-		reached := make([]uint64, len(m.cfg.Stages)+1) // addresses per level reached
+		served := make([]uint64, len(m.cfg.Stages)+1) // addresses per stage served
 		for a := first(q); a <= final(q); a++ {
-			level, banned := 0, false
+			banned, stage := false, uint8(0)
 			for _, r := range m.recs {
-				if first(r) > a || final(r) < a {
+				if a < first(r) || final(r) < a {
 					continue
 				}
-				l := int(r.Stage)
-				if now < m.end(r) {
+				if active(r) {
 					banned = true
-					l--
+				} else if inside(r) {
+					stage = max(stage, r.Stage)
 				}
-				level = max(level, l)
 			}
-			if !banned {
-				allBanned = false
+			if banned {
+				continue // a banned address has served nothing
 			}
-			for l := 1; l <= level; l++ {
-				reached[l]++
+			allBanned = false
+			for l := 1; l <= int(stage); l++ {
+				served[l]++
 			}
 		}
 		if allBanned {
@@ -75,16 +84,29 @@ func (m *refJail) update(now int64, detected []cidr.NumericCIDR) {
 		}
 
 		history := uint8(0) // rule 2
-		for l := 1; l < len(reached); l++ {
-			if reached[l]*100 >= x*size(q) {
-				history = uint8(l)
+		for _, r := range m.recs {
+			if !active(r) && (r.CIDR() == q.CIDR() || sameOffender(r)) {
+				history = max(history, r.Stage)
 			}
 		}
-		bans[q.CIDR()] = max(bans[q.CIDR()], m.next(history))
+		for l := len(served) - 1; l > int(history); l-- {
+			if served[l]*100 >= x*size(q) {
+				history = uint8(l)
+				break
+			}
+		}
+		ban(q, m.next(history))
 
-		for _, r := range m.recs { // rule 3
-			if holds(r, q) && r.PrefixLen != q.PrefixLen && now >= m.end(r) && size(q)*100 >= x*size(r) {
-				bans[r.CIDR()] = max(bans[r.CIDR()], m.next(r.Stage))
+		for _, r := range m.recs {
+			switch {
+			case active(r):
+			case sameOffender(r): // rule 3
+				ban(r, m.next(r.Stage))
+			case inside(r): // rule 4
+				covered := slices.ContainsFunc(m.recs, func(a Record) bool { return active(a) && holds(a, r) })
+				if !covered {
+					ban(r, m.next(r.Stage))
+				}
 			}
 		}
 	}
@@ -99,18 +121,6 @@ func (m *refJail) update(now int64, detected []cidr.NumericCIDR) {
 			m.recs[i] = banned
 		}
 	}
-
-	// Tidy: every record is compared with every other one as they stand
-	// after the bans.
-	all := slices.Clone(m.recs)
-	m.recs = slices.DeleteFunc(m.recs, func(r Record) bool {
-		for _, a := range all {
-			if a.PrefixLen < r.PrefixLen && holds(a, r) && a.Stage >= r.Stage && m.end(a) >= m.end(r) {
-				return true
-			}
-		}
-		return false
-	})
 
 	slices.SortFunc(m.recs, func(a, b Record) int {
 		if a.IP != b.IP {
@@ -140,6 +150,8 @@ var scriptSteps = []time.Duration{
 	0, time.Second, 9 * time.Minute, 11 * time.Minute, 3 * time.Hour, 5 * time.Hour,
 	6 * 24 * time.Hour, 8 * 24 * time.Hour, 31 * 24 * time.Hour, 90 * 24 * time.Hour,
 	181 * 24 * time.Hour, 400 * 24 * time.Hour,
+	// A clock that steps back: the jail stays at the latest time it has seen.
+	-time.Hour, -200 * 24 * time.Hour,
 }
 
 var scriptConfigs = []Config{
@@ -181,19 +193,8 @@ func (s *script) cidr() cidr.NumericCIDR {
 func cloneJail(j *Jail) *Jail {
 	c := *j
 	c.records = slices.Clone(j.records)
-	c.spare, c.bans = nil, nil
+	c.spare, c.det, c.bans = nil, nil, nil
 	return &c
-}
-
-// coveredUntil reports whether a record of j that is active at time now and
-// stays so until end or later covers the whole of r.
-func coveredUntil(j *Jail, r Record, now, end int64) bool {
-	for _, a := range j.records {
-		if holds(a, r) && now < j.banEnd(&a) && j.banEnd(&a) >= end {
-			return true
-		}
-	}
-	return false
 }
 
 // checkScript runs one script and checks the jail after every round.
@@ -210,9 +211,14 @@ func checkScript(t *testing.T, data []byte) {
 	ref := &refJail{cfg: cfg}
 	shuffle := rand.New(rand.NewSource(int64(len(data))))
 
-	now := t0
+	// clock is what the calls are handed, now the time the jail works with:
+	// the latest one it has seen.
+	clock, now := t0, time.Time{}
 	for round := 0; !s.done() && round < 200; round++ {
-		now = now.Add(scriptSteps[s.next()%len(scriptSteps)])
+		clock = clock.Add(scriptSteps[s.next()%len(scriptSteps)])
+		if round == 0 || clock.After(now) {
+			now = clock
+		}
 		t64 := now.UnixNano()
 		detected := make([]cidr.NumericCIDR, s.next()%5)
 		for i := range detected {
@@ -220,7 +226,7 @@ func checkScript(t *testing.T, data []byte) {
 		}
 
 		before := cloneJail(j)
-		out := j.Update(now, detected)
+		out := j.Update(clock, detected)
 		ref.update(t64, detected)
 		recs := j.Records()
 
@@ -230,7 +236,7 @@ func checkScript(t *testing.T, data []byte) {
 				round, detected, dump(j, now), dump(&Jail{cfg: cfg, durations: j.durations, records: ref.recs}, now), dump(before, now))
 		}
 
-		// Sorted, no range twice, valid entries, tidy.
+		// Sorted, no range twice, valid entries.
 		for i, r := range recs {
 			if r.PrefixLen > 32 || r.IP != r.CIDR().Interval().Start || r.Stage < 1 || int(r.Stage) > len(cfg.Stages) {
 				t.Fatalf("round %d: invalid record %+v", round, r)
@@ -238,15 +244,10 @@ func checkScript(t *testing.T, data []byte) {
 			if i > 0 && !recs[i-1].before(r.IP, r.PrefixLen) {
 				t.Fatalf("round %d: records %d and %d out of order: %v", round, i-1, i, dump(j, now))
 			}
-			for _, a := range recs[:i] {
-				if a.PrefixLen < r.PrefixLen && holds(a, r) && a.Stage >= r.Stage && j.banEnd(&a) >= j.banEnd(&r) {
-					t.Fatalf("round %d: %v is covered by %v and was not absorbed", round, r, a)
-				}
-			}
 		}
 
 		// Every detected range is banned completely.
-		banned := cidr.ParseIntervalSet(j.BanList(now))
+		banned := cidr.ParseIntervalSet(j.BanList(clock))
 		for _, q := range detected {
 			iv := q.Interval()
 			for a := uint64(iv.Start); a <= uint64(iv.End); a++ {
@@ -256,10 +257,31 @@ func checkScript(t *testing.T, data []byte) {
 			}
 		}
 
-		// A ban that was active is still in force for at least as long.
+		// A record is only replaced once its ban has ended, and only
+		// forgotten after its retention.
 		for _, r := range before.records {
-			if end := before.banEnd(&r); t64 < end && !coveredUntil(j, r, t64, end) {
-				t.Fatalf("round %d: active ban %v was dropped or shortened: %v", round, r, dump(j, now))
+			switch end := before.banEnd(&r); {
+			case t64 < end && !slices.Contains(recs, r):
+				t.Fatalf("round %d: the record of the active ban %v changed: %v", round, r, dump(j, now))
+			case t64-end <= int64(cfg.Retention) && !slices.ContainsFunc(recs, func(a Record) bool { return a.CIDR() == r.CIDR() }):
+				t.Fatalf("round %d: %v was forgotten before its retention: %v", round, r, dump(j, now))
+			}
+		}
+
+		// A ban never starts above the stage after the highest one its range
+		// or a record around or inside it had: nothing is invented.
+		for _, r := range recs {
+			if r.BanStart != t64 || slices.Contains(before.records, r) {
+				continue
+			}
+			top := uint8(0)
+			for _, b := range before.records {
+				if (holds(b, r) || holds(r, b)) && t64 >= before.banEnd(&b) {
+					top = max(top, b.Stage)
+				}
+			}
+			if r.Stage > before.nextStage(top) {
+				t.Fatalf("round %d: %v banned at stage %d, the ended records around and inside it reach stage %d", round, r.CIDR(), r.Stage, top)
 			}
 		}
 
@@ -286,13 +308,13 @@ func checkScript(t *testing.T, data []byte) {
 		other := cloneJail(before)
 		shuffled := slices.Clone(detected)
 		shuffle.Shuffle(len(shuffled), func(a, b int) { shuffled[a], shuffled[b] = shuffled[b], shuffled[a] })
-		if other.Update(now, shuffled); !slices.Equal(other.Records(), recs) {
+		if other.Update(clock, shuffled); !slices.Equal(other.Records(), recs) {
 			t.Fatalf("round %d: order of %v changes the result", round, detected)
 		}
 
 		// The same round again changes nothing: everything detected is banned.
 		again := cloneJail(j)
-		if o := again.Update(now, detected); o.Changed() || o.Ignored != len(detected) {
+		if o := again.Update(clock, detected); o.Changed() || o.Ignored != len(detected) {
 			t.Fatalf("round %d: repeating the round: %+v", round, o)
 		}
 
@@ -307,7 +329,7 @@ func checkScript(t *testing.T, data []byte) {
 		for i, q := range detected {
 			widened[i] = widen(q)
 		}
-		wide.Update(now, widened)
+		wide.Update(clock, widened)
 		if len(wide.Records()) != len(recs) {
 			t.Fatalf("round %d: %d records on the whole address space, %d in the arena", round, len(wide.Records()), len(recs))
 		}

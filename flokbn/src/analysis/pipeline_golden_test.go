@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/output"
@@ -329,14 +330,16 @@ func snapshotRun(t *testing.T, cfg *config.Config, out *output.JSONOutput, dir s
 		snap.BanFile = append(snap.BanFile, line)
 	}
 
-	j, err := jail.FileToJail(cfg.GetJailFile())
+	j, err := jail.Load(cfg.GetJailFile(), jail.DefaultConfig())
 	if err != nil {
 		t.Fatalf("reading jail: %v", err)
 	}
-	for _, cell := range j.Cells {
-		for _, p := range cell.Prisoners {
-			snap.Jail = append(snap.Jail, fmt.Sprintf("cell %d: %s active=%v", cell.ID, p.CIDR, p.BanActive))
-		}
+	active := map[cidr.NumericCIDR]bool{}
+	for _, b := range j.Active(time.Now()) {
+		active[b.CIDR] = true
+	}
+	for _, r := range j.Records() {
+		snap.Jail = append(snap.Jail, fmt.Sprintf("stage %d: %s active=%v", r.Stage, r.CIDR(), active[r.CIDR()]))
 	}
 	return snap
 }

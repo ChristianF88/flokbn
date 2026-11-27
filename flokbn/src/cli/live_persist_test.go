@@ -197,56 +197,68 @@ func TestRunLiveLoop_IterationWritesFilesOnlyOnChange(t *testing.T) {
 
 // TestJailFileState_Save covers the change detection on its own: identical
 // content is skipped, changed content and a missing file are written, and the
-// bytes match what jail.JailToFile produces.
+// bytes match what jail.Jail.Save produces.
 func TestJailFileState_Save(t *testing.T) {
 	path := t.TempDir() + "/jail.json"
-	j := jail.NewJail()
-	if err := j.Update([]string{"10.5.5.0/24"}); err != nil {
+	now := time.Now()
+	j, err := jail.New(jail.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.UpdateCIDRs(now, []string{"10.5.5.0/24"}); err != nil {
 		t.Fatalf("jail update: %v", err)
 	}
 
 	var st jailFileState
-	if wrote, err := st.save(&j, path); err != nil || !wrote {
+	if wrote, err := st.save(j, path); err != nil || !wrote {
 		t.Fatalf("first save = %v, %v; want true, nil", wrote, err)
 	}
 	first := statFile(t, path)
 
 	ref := t.TempDir() + "/ref.json"
-	if err := jail.JailToFile(j, ref); err != nil {
-		t.Fatalf("JailToFile: %v", err)
+	if err := j.Save(ref); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 	if want := statFile(t, ref); first.content != want.content || first.info.Mode() != want.info.Mode() {
-		t.Errorf("saved jail differs from jail.JailToFile output (content or mode)")
+		t.Errorf("saved jail differs from the output of Jail.Save (content or mode)")
 	}
 
-	if wrote, err := st.save(&j, path); err != nil || wrote {
+	// A round that only re-detects a banned range, and a ban that ran out,
+	// leave the records as they are: nothing to write.
+	if _, err := j.UpdateCIDRs(now.Add(time.Minute), []string{"10.5.5.0/24"}); err != nil {
+		t.Fatalf("jail update: %v", err)
+	}
+	if _, err := j.UpdateCIDRs(now.Add(11*time.Minute), nil); err != nil {
+		t.Fatalf("jail update: %v", err)
+	}
+	if wrote, err := st.save(j, path); err != nil || wrote {
 		t.Errorf("unchanged save = %v, %v; want false, nil", wrote, err)
 	}
 	if !first.untouched(statFile(t, path)) {
 		t.Errorf("unchanged save touched the file")
 	}
 
-	if err := j.Update([]string{"10.6.6.0/24"}); err != nil {
+	if _, err := j.UpdateCIDRs(now.Add(12*time.Minute), []string{"10.6.6.0/24"}); err != nil {
 		t.Fatalf("jail update: %v", err)
 	}
-	if wrote, err := st.save(&j, path); err != nil || !wrote {
+	if wrote, err := st.save(j, path); err != nil || !wrote {
 		t.Errorf("changed save = %v, %v; want true, nil", wrote, err)
 	}
 
 	if err := os.Remove(path); err != nil {
 		t.Fatalf("removing jail file: %v", err)
 	}
-	if wrote, err := st.save(&j, path); err != nil || !wrote {
+	if wrote, err := st.save(j, path); err != nil || !wrote {
 		t.Errorf("save after the file was removed = %v, %v; want true, nil", wrote, err)
 	}
 
 	// A failed write must not be remembered as saved: the next call retries.
 	bad := t.TempDir() + "/missing-dir/jail.json"
 	var failing jailFileState
-	if wrote, err := failing.save(&j, bad); err == nil || wrote {
+	if wrote, err := failing.save(j, bad); err == nil || wrote {
 		t.Errorf("save into a missing directory = %v, %v; want false, error", wrote, err)
 	}
-	if wrote, err := failing.save(&j, bad); err == nil || wrote {
+	if wrote, err := failing.save(j, bad); err == nil || wrote {
 		t.Errorf("retry into a missing directory = %v, %v; want false, error", wrote, err)
 	}
 }

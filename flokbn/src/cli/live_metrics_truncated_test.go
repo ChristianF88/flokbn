@@ -14,7 +14,7 @@ func metricsFor(t *testing.T, n int) string {
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{})
 	st := newLiveStatsState(cfg, nil, nil)
 	j := jailWithActivePrisoners(n, time.Now())
-	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, 5*time.Millisecond, 0, false)
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, j, 5*time.Millisecond, 0, false)
 	return string(renderMetrics(snap))
 }
 

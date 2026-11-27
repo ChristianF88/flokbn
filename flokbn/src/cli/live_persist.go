@@ -4,7 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"strings"
+	"slices"
 
 	"github.com/ChristianF88/flokbn/jail"
 )
@@ -27,16 +27,13 @@ type jailFileState struct {
 
 // save writes the jail to path unless its serialized form equals the last
 // successful write and the file is still there. It reports whether it wrote.
-// The bytes and file mode are exactly those of jail.JailToFile.
+// The bytes and file mode are exactly those of jail.Jail.Save.
 func (s *jailFileState) save(j *jail.Jail, path string) (bool, error) {
-	data, err := jail.JailToJSON(*j)
-	if err != nil {
-		return false, err
-	}
+	data := string(j.Encode())
 	if s.valid && data == s.saved && !fileMissing(path) {
 		return false, nil
 	}
-	if err := jail.WriteToFile(path, data); err != nil {
+	if err := jail.WriteFile(path, data); err != nil {
 		s.valid = false
 		return false, err
 	}
@@ -48,30 +45,28 @@ func (s *jailFileState) save(j *jail.Jail, path string) (bool, error) {
 // ban file (and its timestamp header) is rewritten only when what it lists
 // changed. Owned by the loop goroutine.
 type banFileState struct {
-	key   string // banListKey of the last successful write
-	valid bool   // false until the first successful write
-}
-
-// banListKey is the change-detection key for the published ban lists. The
-// NUL separator cannot appear in a CIDR string, so distinct list pairs map
-// to distinct keys.
-func banListKey(publishBans, publishBlacklist []string) string {
-	return strings.Join(publishBans, "\n") + "\x00" + strings.Join(publishBlacklist, "\n")
+	// The lists of the last successful write. They are kept as handed in:
+	// the publish step builds new lists every round and never changes one
+	// afterwards.
+	bans, blacklist []string
+	valid           bool // false until the first successful write
 }
 
 // save writes the ban file for the given lists unless they equal the last
 // successful write and the file is still there. It reports whether it wrote,
 // and the content it wrote. Until the first write has succeeded every call
 // writes, which syncs a stale ban file left on disk by an earlier run.
+//
+// A round that changes nothing costs one comparison of the lists and one
+// stat; the file content is only built when it is written.
 func (s *banFileState) save(bans, blacklist []string, path string) (content string, wrote bool, err error) {
-	key := banListKey(bans, blacklist)
-	if s.valid && key == s.key && !fileMissing(path) {
+	if s.valid && slices.Equal(bans, s.bans) && slices.Equal(blacklist, s.blacklist) && !fileMissing(path) {
 		return "", false, nil
 	}
 	content = jail.BuildBanFileContent(bans, blacklist)
-	if err := jail.WriteToFile(path, content); err != nil {
+	if err := jail.WriteFile(path, content); err != nil {
 		return "", false, err
 	}
-	s.key, s.valid = key, true
+	s.bans, s.blacklist, s.valid = bans, blacklist, true
 	return content, true, nil
 }

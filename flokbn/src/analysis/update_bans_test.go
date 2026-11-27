@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ChristianF88/flokbn/jail"
+	"github.com/ChristianF88/flokbn/testutil"
 )
 
 func sortedSet(s []string) []string {
@@ -15,21 +16,38 @@ func sortedSet(s []string) []string {
 	return out
 }
 
-func activeBans(j *jail.Jail) []string {
-	return sortedSet(j.ListActiveBans())
+// activeBans lists the records of the jail whose ban is running at now.
+func activeBans(j *jail.Jail, now time.Time) []string {
+	var out []string
+	for _, b := range j.Active(now) {
+		out = append(out, b.CIDR.String())
+	}
+	return sortedSet(out)
+}
+
+// publishJail returns a jail holding one ban that has run out (stage 1, ten
+// minutes, started an hour before now) and one that started at now.
+func publishJail(t *testing.T, now time.Time) *jail.Jail {
+	t.Helper()
+	j, err := jail.Decode([]byte(testutil.JailJSON(
+		testutil.JailRecord{CIDR: publishExpiredCIDR, Stage: 1, BanStart: now.Add(-time.Hour)},
+		testutil.JailRecord{CIDR: publishActiveCIDR, Stage: 1, BanStart: now},
+	)), jail.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return j
 }
 
 // TestUpdateBansRound walks one round through every rule of the pipeline: the
-// pre-jail whitelist drop, forced bans, expiry, and the publish-time whitelist.
+// pre-jail whitelist drop, forced bans, bans that ran out, and the
+// publish-time whitelist.
 func TestUpdateBansRound(t *testing.T) {
-	j := jail.NewJail()
-	j.Cells[0].Prisoners = []jail.Prisoner{
-		{CIDR: publishExpiredCIDR, BanStart: time.Now().Add(-time.Hour), BanActive: true},
-		{CIDR: publishActiveCIDR, BanStart: time.Now(), BanActive: true},
-	}
-	j.AllCIDRs = []string{publishExpiredCIDR, publishActiveCIDR}
+	now := time.Now()
+	j := publishJail(t, now)
 
 	in := BanInput{
+		Now: now,
 		Detected: []string{
 			"10.1.0.0/16",   // fully inside the whitelisted /8: dropped
 			"172.16.0.0/24", // overlaps a whitelisted /32 only: jailed whole
@@ -41,7 +59,7 @@ func TestUpdateBansRound(t *testing.T) {
 	}
 	detected := append([]string{}, in.Detected...)
 
-	got := UpdateBans(&j, in)
+	got := UpdateBans(j, in)
 
 	if got.WhitelistDropped != 1 {
 		t.Errorf("WhitelistDropped = %d, want 1", got.WhitelistDropped)
@@ -56,22 +74,24 @@ func TestUpdateBansRound(t *testing.T) {
 	if got.UpdateErr != nil {
 		t.Errorf("UpdateErr = %v", got.UpdateErr)
 	}
-	if got.Expired != 1 {
-		t.Errorf("Expired = %d, want 1 (%s ran out)", got.Expired, publishExpiredCIDR)
-	}
 
-	// The jail holds what was handed to it. The forced /32 inside the
-	// whitelisted /8 is jailed too (no pre-jail check); the forced
-	// 192.0.2.200/32 is covered by the detected 192.0.2.0/24.
-	wantJail := []string{"10.2.3.4/32", "100.64.1.1/32", "172.16.0.0/24", "192.0.2.0/24", publishActiveCIDR}
-	if got := activeBans(&j); !reflect.DeepEqual(got, sortedSet(wantJail)) {
+	// The jail holds a record for everything handed to it. The forced /32
+	// inside the whitelisted /8 is jailed too (no pre-jail check), and the
+	// forced 192.0.2.200/32 keeps its own record inside the detected
+	// 192.0.2.0/24.
+	wantJail := []string{"10.2.3.4/32", "100.64.1.1/32", "172.16.0.0/24", "192.0.2.0/24", "192.0.2.200/32", publishActiveCIDR}
+	if got := activeBans(j, now); !reflect.DeepEqual(got, sortedSet(wantJail)) {
 		t.Errorf("active bans in jail = %v, want %v", got, sortedSet(wantJail))
 	}
+	if j.Len() != len(wantJail)+1 {
+		t.Errorf("%d records in the jail, want the %d active ones and the ended %s", j.Len(), len(wantJail), publishExpiredCIDR)
+	}
 
-	// Published: the whitelist is subtracted exactly. The whitelisted forced
-	// ban is gone, 172.16.0.0/24 is carved around .7, the expired ban is out.
+	// Published: nested bans are listed once and the whitelist is subtracted
+	// exactly. The whitelisted forced ban is gone, 172.16.0.0/24 is carved
+	// around .7, the ban that ran out is not listed.
 	for _, banned := range got.Bans {
-		if banned == "10.2.3.4/32" || banned == "172.16.0.0/24" || banned == publishExpiredCIDR {
+		if banned == "10.2.3.4/32" || banned == "172.16.0.0/24" || banned == "192.0.2.200/32" || banned == publishExpiredCIDR {
 			t.Errorf("published bans contain %s: %v", banned, got.Bans)
 		}
 	}
@@ -94,15 +114,39 @@ func TestUpdateBansRound(t *testing.T) {
 	}
 }
 
+// TestUpdateBansNestedAndNeighbouringRanges: the jail keeps one record per
+// detected range, the published list joins what overlaps or touches.
+func TestUpdateBansNestedAndNeighbouringRanges(t *testing.T) {
+	now := time.Now()
+	j, err := jail.New(jail.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := UpdateBans(j, BanInput{Now: now, Detected: []string{
+		"10.0.0.0/25", "10.0.0.128/25", // two halves of a /24
+		"10.0.0.7/32",                  // a host inside the first half
+		"192.0.2.0/24", "192.0.2.0/24", // the same range from two cluster sets
+	}})
+	if j.Len() != 4 {
+		t.Errorf("%d records in the jail, want 4 (one per distinct range)", j.Len())
+	}
+	if want := []string{"10.0.0.0/24", "192.0.2.0/24"}; !reflect.DeepEqual(got.Bans, want) {
+		t.Errorf("published bans = %v, want %v", got.Bans, want)
+	}
+}
+
 // TestUpdateBansLeavesInputAlone: with no whitelist the detected ranges pass
 // through unfiltered, and appending the forced bans must not write into the
 // caller's slice.
 func TestUpdateBansLeavesInputAlone(t *testing.T) {
 	backing := []string{"192.0.2.0/24", "SENTINEL", "SENTINEL"}
-	in := BanInput{Detected: backing[:1], ForceBan: []string{"198.51.100.1/32", "198.51.100.2/32"}}
+	in := BanInput{Now: time.Now(), Detected: backing[:1], ForceBan: []string{"198.51.100.1/32", "198.51.100.2/32"}}
 
-	j := jail.NewJail()
-	got := UpdateBans(&j, in)
+	j, err := jail.New(jail.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := UpdateBans(j, in)
 
 	if got.Jailed != 3 {
 		t.Errorf("Jailed = %d, want 3", got.Jailed)
@@ -112,32 +156,41 @@ func TestUpdateBansLeavesInputAlone(t *testing.T) {
 	}
 }
 
-// TestUpdateBansQuietRound: nothing detected. Bans that ran out are expired
-// and reported as a change; a second quiet round changes nothing.
+// TestUpdateBansQuietRound: nothing detected. A ban that ran out leaves the
+// published list and is counted once; the jail's records do not change, so
+// there is nothing to save.
 func TestUpdateBansQuietRound(t *testing.T) {
-	j := jail.NewJail()
-	j.Cells[0].Prisoners = []jail.Prisoner{
-		{CIDR: publishExpiredCIDR, BanStart: time.Now().Add(-time.Hour), BanActive: true},
-		{CIDR: publishActiveCIDR, BanStart: time.Now(), BanActive: true},
-	}
-	j.AllCIDRs = []string{publishExpiredCIDR, publishActiveCIDR}
+	now := time.Now()
+	j := publishJail(t, now)
 
-	first := UpdateBans(&j, BanInput{})
-	if !first.JailChanged || first.Jailed != 0 || first.Expired != 1 {
-		t.Errorf("first quiet round: JailChanged=%v Jailed=%d Expired=%d, want true/0/1", first.JailChanged, first.Jailed, first.Expired)
+	first := UpdateBans(j, BanInput{Now: now})
+	if first.JailChanged || first.Jailed != 0 {
+		t.Errorf("first quiet round: JailChanged=%v Jailed=%d, want false/0", first.JailChanged, first.Jailed)
 	}
 	if !reflect.DeepEqual(first.Bans, []string{publishActiveCIDR}) {
 		t.Errorf("first quiet round bans = %v, want only %s", first.Bans, publishActiveCIDR)
 	}
 
-	second := UpdateBans(&j, BanInput{})
-	if second.JailChanged || second.Expired != 0 {
-		t.Errorf("second quiet round reports a change: JailChanged=%v Expired=%d", second.JailChanged, second.Expired)
+	// Eleven minutes on, the second ban has run out too.
+	second := UpdateBans(j, BanInput{Now: now.Add(11 * time.Minute)})
+	if second.JailChanged || second.Expired != 1 {
+		t.Errorf("round after the ban ran out: JailChanged=%v Expired=%d, want false/1", second.JailChanged, second.Expired)
 	}
-	if !reflect.DeepEqual(second.Bans, []string{publishActiveCIDR}) {
-		t.Errorf("second quiet round bans = %v, want only %s", second.Bans, publishActiveCIDR)
+	if len(second.Bans) != 0 || len(second.Blacklist) != 0 {
+		t.Errorf("round after the ban ran out publishes %v and %v, want nothing", second.Bans, second.Blacklist)
 	}
-	if len(second.Blacklist) != 0 {
-		t.Errorf("blacklist = %v, want none", second.Blacklist)
+	if j.Len() != 2 {
+		t.Errorf("%d records left, want both: an ended ban is remembered", j.Len())
+	}
+
+	third := UpdateBans(j, BanInput{Now: now.Add(12 * time.Minute)})
+	if third.JailChanged || third.Expired != 0 {
+		t.Errorf("third quiet round reports a change: JailChanged=%v Expired=%d", third.JailChanged, third.Expired)
+	}
+
+	// Past the retention the records are forgotten, and that is a change.
+	last := UpdateBans(j, BanInput{Now: now.Add(181 * 24 * time.Hour)})
+	if !last.JailChanged || last.Pruned != 2 || j.Len() != 0 {
+		t.Errorf("round after the retention: JailChanged=%v Pruned=%d, %d records; want true/2/0", last.JailChanged, last.Pruned, j.Len())
 	}
 }

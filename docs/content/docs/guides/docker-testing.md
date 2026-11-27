@@ -61,7 +61,7 @@ docker compose -f docker-compose.test.yml exec flokbn cat /data/blocklist.txt
 docker compose -f docker-compose.test.yml exec flokbn cat /data/jail.json
 ```
 
-The jail file uses a tiered cell structure. See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the data model.
+The jail file lists one record per banned range with its stage. See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the rules and the file format.
 
 Stop the environment:
 

@@ -249,55 +249,83 @@ For parameter tuning, see [Clustering]({{< relref "/docs/reference/clustering/" 
 
 Each [cluster arg set]({{< relref "/docs/reference/clustering/" >}}) runs against the same trie independently. Results from multiple sets are combined, and the `useForJail` flag controls which sets contribute to the jail:
 
-- Same CIDR from multiple sets = single jail entry
-- Sub-ranges merged when parent range detected
-- Repeat offenders escalate through ban tiers
+- Every set's ranges reach the jail as that set found them, not merged across sets
+- Same CIDR from multiple sets = single jail record
+- A hot host and the subnet around it are two records, each with its own stage
+- The ban file joins nested and neighbouring bans again
 
 ## Jail System
 
-The jail uses a tiered cell system with escalating ban durations:
+The jail is the persistent record of which ranges were banned, at which stage and since when. It is a sorted list of records:
 
 ```go
-type Prisoner struct {
-    CIDR      string    // e.g., "198.51.100.192/26"
-    BanStart  time.Time // When current ban started
-    BanActive bool      // Whether ban is currently active
-}
-
-type Cell struct {
-    ID          int
-    Description string
-    BanDuration time.Duration
-    Prisoners   []Prisoner
-}
-
-type Jail struct {
-    Cells    []Cell
-    AllCIDRs []string  // All ranges currently in jail
+type Record struct {
+    IP        uint32 // network address
+    PrefixLen uint8
+    Stage     uint8 // stage of the last ban, 1-based
+    BanStart  int64 // start of the last ban, Unix nanoseconds
 }
 ```
 
-### Default Cells (5 Escalating Tiers)
+Whether a ban is active is not stored. It is computed from the time of the round: a ban at stage `s` lasts the duration of that stage and has ended afterwards.
 
-| Cell | Description | Duration |
-|------|-------------|----------|
-| 1 | Stage 1 Ban | 10 minutes |
-| 2 | Stage 2 Ban | 4 hours |
-| 3 | Stage 3 Ban | 7 days |
-| 4 | Stage 4 Ban | 30 days |
-| 5 | Stage 5 Ban | 180 days |
+### Stages
 
-### Behavior
+| Stage | Duration |
+|-------|----------|
+| 1 | 10 minutes |
+| 2 | 4 hours |
+| 3 | 7 days |
+| 4 | 30 days |
+| 5 | 180 days |
 
-- **Tiered escalation**: Repeat offenders move to higher cells with longer bans
-- **Ban expiry**: Bans expire after the cell's duration
-- **Re-detection**: If detected again after ban expires, prisoner moves to next cell
-- **Range merging**: If a parent CIDR is detected, sub-ranges are consolidated
-- **Sub-range awareness**: Existing jailed ranges that are sub-ranges of a new detection are merged
+The last stage repeats. A record is forgotten 180 days after its ban ended; until then a new detection counts as a repeat.
+
+### Rules
+
+Two ranges count as the same offender when the narrower one fills at least 50% of the addresses of the wider one, which for CIDR ranges means: the same range, or one prefix bit apart.
+
+Every detected range is judged against the jail as it was before the round:
+
+1. **Already banned**: a range whose addresses are all banned is ignored. Blocked requests can still show up in a log and must not escalate anything.
+2. **Banned one stage above its history**: otherwise the range is banned at the stage after the highest of
+   - its own ended record,
+   - an ended record around it of which it fills at least 50%,
+   - the highest stage that at least 50% of its addresses have served in ended records inside it.
+
+   Without a history it starts at stage 1.
+3. **A wider record is banned again as a whole** when the detected range fills at least 50% of it and its ban has ended.
+4. **Records inside the detected range are banned again**, each at its own next stage, when their ban has ended: all their addresses were detected again.
+
+A new or repeated ban always starts at the time of the round. A ban that is still running passes nothing on: a range around an active ban starts its own ladder, and the narrower record keeps its ban.
+
+Examples:
+
+| In the jail | Detected | Result |
+|-------------|----------|--------|
+| `/24` at stage 2, ended | the same `/24` | `/24` at stage 3 |
+| `/24` at stage 2, active | the same `/24`, or anything inside it | nothing |
+| `/24` at stage 3, ended | one of its `/25` halves | the whole `/24` and the `/25` at stage 4 |
+| `/24` at stage 3, ended | one address in it | the address at stage 1, the `/24` unchanged |
+| `/32` at stage 4, ended | the `/16` around it | the `/16` at stage 1, the `/32` at stage 5 |
+| `/25` at stage 2, active | the `/24` around it | the `/24` at stage 1, the `/25` keeps its ban |
+
+Records are never merged in the jail: it holds every range that was detected, with its own stage. Nested and neighbouring bans are joined in the ban file only.
 
 ### Jail File Format
 
-The jail file (`--jailFile`) persists detection state as JSON. It is read on startup. Static mode writes it at the end of a run that changed the jail; live mode writes it after a detection cycle or idle heartbeat whose jail content differs from what is on disk.
+The jail file (`--jailFile`) holds the records as JSON, one per line, in address order:
+
+```json
+{"version":2,"records":[
+{"cidr":"10.0.0.0/16","stage":3,"banStart":"2026-11-26T16:45:00Z"},
+{"cidr":"10.0.5.5/32","stage":5,"banStart":"2026-11-27T09:12:30Z"}
+]}
+```
+
+It is read on startup. Static mode writes it at the end of a run that changed a record; live mode writes it after a detection cycle or idle heartbeat whose jail content differs from what is on disk. A ban that merely runs out changes the ban file, not the jail file. A file that flokbn cannot take over completely (unknown or repeated keys, a record without its range, stage or ban start, a range listed twice) is rejected at startup rather than read as a smaller jail. A jail file of an earlier flokbn version (top-level key `Cells`) is not read: flokbn stops with a message that says so, and starts with an empty jail once the file is deleted.
+
+The jail does not go back in time. If the system clock steps back, also across a restart, it keeps working with the latest time it has seen, so bans that have ended do not come back.
 
 ## Data Flow
 
@@ -405,7 +433,7 @@ flokbn/src/
 ├── config/              # Configuration structs and loading
 ├── ingestor/            # Live mode ingestion (Lumberjack server)
 ├── iputils/             # IP address utilities
-├── jail/                # Ban/jail management (tiered cells)
+├── jail/                # The jail: records, rules, jail file and ban file
 ├── logging/             # Leveled slog setup for live mode
 ├── logparser/           # Log format parsing
 ├── output/              # Output formatting (JSON, plain text)

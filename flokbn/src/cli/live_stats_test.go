@@ -21,14 +21,24 @@ func cidrList(n int) []string {
 	return cidrs
 }
 
-func jailWithActivePrisoners(n int, banStart time.Time) jail.Jail {
-	j := jail.NewJail()
-	for i := 0; i < n; i++ {
-		j.Cells[0].Prisoners = append(j.Cells[0].Prisoners, jail.Prisoner{
-			CIDR:      fmt.Sprintf("172.%d.%d.0/24", i/256, i%256),
-			BanStart:  banStart,
-			BanActive: true,
-		})
+// emptyJail returns a jail without records.
+func emptyJail() *jail.Jail {
+	j, err := jail.New(jail.DefaultConfig())
+	if err != nil {
+		panic(err)
+	}
+	return j
+}
+
+// jailWithActivePrisoners returns a jail with n bans that started at banStart.
+func jailWithActivePrisoners(n int, banStart time.Time) *jail.Jail {
+	j := emptyJail()
+	ranges := make([]string, n)
+	for i := range ranges {
+		ranges[i] = fmt.Sprintf("172.%d.%d.0/24", i/256, i%256)
+	}
+	if _, err := j.UpdateCIDRs(banStart, ranges); err != nil {
+		panic(err)
 	}
 	return j
 }
@@ -38,7 +48,7 @@ func TestBuildSnapshot_ActiveBansCappedAt500(t *testing.T) {
 	st := newLiveStatsState(cfg, nil, nil)
 	j := jailWithActivePrisoners(600, time.Now())
 
-	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, 5*time.Millisecond, 0, false)
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, j, 5*time.Millisecond, 0, false)
 
 	if snap.Jail.TotalActive != 600 {
 		t.Errorf("jail.total_active = %d, want 600 (always the full count)", snap.Jail.TotalActive)
@@ -59,9 +69,9 @@ func TestBuildSnapshot_ListCIDRsCappedAt1000(t *testing.T) {
 	wl := cidrList(1500)
 	bl := cidrList(3)
 	st := newLiveStatsState(cfg, wl, bl)
-	j := jail.NewJail()
+	j := emptyJail()
 
-	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, time.Millisecond, 0, false)
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, j, time.Millisecond, 0, false)
 
 	if snap.Lists.Whitelist.Entries != 1500 {
 		t.Errorf("whitelist.entries = %d, want 1500 (exact count)", snap.Lists.Whitelist.Entries)
@@ -78,7 +88,7 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{})
 	cfg.Live.TopTalkers = 1
 	st := newLiveStatsState(cfg, nil, nil)
-	j := jail.NewJail()
+	j := emptyJail()
 
 	w := sliding.NewSlidingWindowTrie(24*time.Hour, 1000)
 	now := time.Now()
@@ -86,7 +96,7 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 	windows := []slidingWindowInstance{{name: "w", window: w, config: &config.SlidingTrieConfig{}}}
 
 	// Iteration 1 computes top talkers.
-	snap := buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0, false)
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, j, time.Millisecond, 0, false)
 	if snap.Loop.Iterations != 1 {
 		t.Errorf("iterations = %d, want 1", snap.Loop.Iterations)
 	}
@@ -97,12 +107,12 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 
 	// Iterations 2..5 serve the cached slice; iteration 6 recomputes.
 	for i := 2; i <= 5; i++ {
-		snap = buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0, false)
+		snap = buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, j, time.Millisecond, 0, false)
 		if got := snap.Windows[0].TopTalkers; len(got) != 1 || &got[0] != &first[0] {
 			t.Errorf("iteration %d: top talkers recomputed, want cached slice reused", i)
 		}
 	}
-	snap = buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, &j, time.Millisecond, 0, false)
+	snap = buildSnapshot(st, &fakeIngestor{}, cfg, windows, nil, j, time.Millisecond, 0, false)
 	if got := snap.Windows[0].TopTalkers; len(got) != 1 || &got[0] == &first[0] {
 		t.Error("iteration 6: top talkers not recomputed, want fresh slice")
 	}
@@ -118,10 +128,10 @@ func TestBuildSnapshot_IterationsAndTopTalkerCadence(t *testing.T) {
 func TestBuildSnapshot_HeartbeatCarriesLastIterationDuration(t *testing.T) {
 	cfg := newLiveConfig(t, map[string]*config.SlidingTrieConfig{})
 	st := newLiveStatsState(cfg, nil, nil)
-	j := jail.NewJail()
+	j := emptyJail()
 
 	// Real iteration with a 250ms loop duration.
-	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, 250*time.Millisecond, 0, false)
+	snap := buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, j, 250*time.Millisecond, 0, false)
 	if snap.Loop.LastDurationMS != 250 {
 		t.Fatalf("after real iteration LastDurationMS = %d, want 250", snap.Loop.LastDurationMS)
 	}
@@ -133,7 +143,7 @@ func TestBuildSnapshot_HeartbeatCarriesLastIterationDuration(t *testing.T) {
 	}
 
 	// Heartbeat with a tiny 1ms duration must NOT overwrite LastDurationMS.
-	snap = buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, time.Millisecond, 0, true)
+	snap = buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, j, time.Millisecond, 0, true)
 	if snap.Loop.LastDurationMS != 250 {
 		t.Errorf("after heartbeat LastDurationMS = %d, want 250 (carried, not overwritten)", snap.Loop.LastDurationMS)
 	}
@@ -145,7 +155,7 @@ func TestBuildSnapshot_HeartbeatCarriesLastIterationDuration(t *testing.T) {
 	}
 
 	// A new real iteration updates LastDurationMS to the new real value.
-	snap = buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, &j, 300*time.Millisecond, 0, false)
+	snap = buildSnapshot(st, &fakeIngestor{}, cfg, nil, nil, j, 300*time.Millisecond, 0, false)
 	if snap.Loop.LastDurationMS != 300 {
 		t.Errorf("after second real iteration LastDurationMS = %d, want 300", snap.Loop.LastDurationMS)
 	}
@@ -204,6 +214,6 @@ func BenchmarkBuildSnapshot(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		srv.publish(buildSnapshot(st, ing, cfg, windows, winClusterStats, &j, time.Millisecond, 1, false))
+		srv.publish(buildSnapshot(st, ing, cfg, windows, winClusterStats, j, time.Millisecond, 1, false))
 	}
 }
