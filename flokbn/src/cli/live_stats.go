@@ -326,23 +326,20 @@ func buildSnapshot(
 		snap.Windows[i] = ws
 	}
 
-	bans := j.ListActiveBansWithMeta()
+	// total_active counts the jail's records with a running ban; nested ones
+	// count each, so it can exceed the number of lines in the ban file, which
+	// joins them.
+	bans := j.Active(now)
+	counts := j.StageCounts(now)
 	js := jailStats{
 		TotalActive: len(bans),
-		Stages:      make([]jailStage, len(j.Cells)),
+		Stages:      make([]jailStage, len(counts)),
 	}
-	for i := range j.Cells {
-		cell := &j.Cells[i]
-		active := 0
-		for k := range cell.Prisoners {
-			if cell.Prisoners[k].BanActive {
-				active++
-			}
-		}
+	for i, c := range counts {
 		js.Stages[i] = jailStage{
-			Stage:       cell.ID,
-			BanDuration: cell.BanDuration.String(),
-			Active:      active,
+			Stage:       c.Stage,
+			BanDuration: c.Duration.String(),
+			Active:      c.Active,
 		}
 	}
 	if len(bans) > maxActiveBansInSnapshot {
@@ -352,10 +349,10 @@ func buildSnapshot(
 	js.ActiveBans = make([]activeBanJSON, len(bans))
 	for i, b := range bans {
 		js.ActiveBans[i] = activeBanJSON{
-			CIDR:      b.CIDR,
+			CIDR:      b.CIDR.String(),
 			Stage:     b.Stage,
-			BanStart:  b.BanStart,
-			ExpiresAt: b.ExpiresAt,
+			BanStart:  b.Start,
+			ExpiresAt: b.End,
 		}
 	}
 	snap.Jail = js

@@ -97,12 +97,6 @@ type TCPIngestor struct {
 	lastBatchUnixNs atomic.Int64
 }
 
-// NewTCPIngestor listens on addr with default limits and the default live log
-// format.
-func NewTCPIngestor(addr string, readTimeout time.Duration) (*TCPIngestor, error) {
-	return NewTCPIngestorWithOptions(addr, Options{ReadTimeout: readTimeout})
-}
-
 // NewTCPIngestorWithOptions listens on addr. Clients are not served until
 // Accept is called. An invalid opts.LogFormat is reported before the address
 // is bound.

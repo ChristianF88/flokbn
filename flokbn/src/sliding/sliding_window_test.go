@@ -785,8 +785,11 @@ func TestSlidingWindow_ClusterDetection(t *testing.T) {
 		t.Fatalf("Expected 5000 IPs in trie, got %d", s.Trie.CountAll())
 	}
 
-	// CollectCIDRs should detect a cluster in the 10.20.x.x range
-	cidrs := s.Trie.CollectCIDRs(1000, 16, 24, 0.2)
+	// Clustering should detect a cluster in the 10.20.x.x range
+	var cidrs []string
+	for _, nc := range s.Trie.CollectCIDRsNumeric(1000, 16, 24, 0.2) {
+		cidrs = append(cidrs, nc.String())
+	}
 	if len(cidrs) == 0 {
 		t.Fatal("Expected at least one detected cluster")
 	}

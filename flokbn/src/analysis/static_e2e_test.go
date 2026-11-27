@@ -294,7 +294,7 @@ func TestStaticPipeline_UniqueIPsCountsDistinct(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.trie.CompileRegex(); err != nil {
+			if err := compileRegex(&tc.trie.TrieCommon); err != nil {
 				t.Fatal(err)
 			}
 			cfg := &config.Config{

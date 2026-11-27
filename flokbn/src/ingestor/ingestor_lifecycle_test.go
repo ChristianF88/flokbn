@@ -23,7 +23,7 @@ func lumberEvent(ip string, ts time.Time, uri string) interface{} {
 // mechanism, only a guard against dead connections.
 func newTestIngestor(t *testing.T) *TCPIngestor {
 	t.Helper()
-	ing, err := NewTCPIngestor("127.0.0.1:0", time.Second)
+	ing, err := NewTCPIngestorWithOptions("127.0.0.1:0", Options{ReadTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("NewTCPIngestor: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestTCPIngestor_IsClosedBeforeAccept(t *testing.T) {
 }
 
 func TestTCPIngestor_NewBadAddrFails(t *testing.T) {
-	ing, err := NewTCPIngestor("127.0.0.1:1:bogus", time.Second)
+	ing, err := NewTCPIngestorWithOptions("127.0.0.1:1:bogus", Options{ReadTimeout: time.Second})
 	if err == nil {
 		ing.Close()
 		t.Fatal("NewTCPIngestor with malformed address succeeded, want error")

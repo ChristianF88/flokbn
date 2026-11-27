@@ -9,11 +9,11 @@ import (
 )
 
 // These tests pin the pre-work-barrier wiring for the jail file: Validate must
-// surface an unloadable (zero-cell/corrupt) jail as a diagnostic so the barrier
-// aborts before any analysis or ban-file write - instead of the static path
-// silently swallowing it and exiting 0 with no bans. The FileToJail unit tests
-// (jail/io_test.go) cover the loader itself; these cover that Validate is wired
-// to it, which is where the silent-swallow regression lived.
+// surface an unloadable jail (not a jail file, or damaged) as a diagnostic so
+// the barrier aborts before any analysis or ban-file write - instead of the
+// static path silently swallowing it and exiting 0 with no bans. The tests of
+// jail.Decode cover the loader itself; these cover that Validate is wired to
+// it, which is where the silent-swallow regression lived.
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
@@ -25,7 +25,7 @@ func writeFile(t *testing.T, path, content string) {
 const jailTestLogLine = "1.2.3.4 - - [01/Feb/2025:00:00:00 +0000] \"GET / HTTP/1.1\" 200 1 \"-\" \"x\"\n"
 
 // Static mode validates the jail only when it will be loaded (jailFile AND
-// banFile set); a zero-cell jail must then produce the diagnostic.
+// banFile set); a file that is not a jail must then produce the diagnostic.
 func TestValidateJailFile_StaticZeroCellFailsLoud(t *testing.T) {
 	dir := t.TempDir()
 	jailFile := filepath.Join(dir, "jail.json")
@@ -48,13 +48,13 @@ useForJail = [true]
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	report := cfg.Validate(StaticMode).Report()
-	if !strings.Contains(report, "parsed to zero cells") {
-		t.Fatalf("expected a zero-cell jail diagnostic, got:\n%s", report)
+	if !strings.Contains(report, "not a jail file") || !strings.Contains(report, jailFile) {
+		t.Fatalf("expected a diagnostic naming the jail file, got:\n%s", report)
 	}
 }
 
-// A missing jail file is the canonical fresh start (FileToJail returns a new
-// jail), so it must NOT produce any diagnostic.
+// A missing jail file is the canonical fresh start (an empty jail), so it must
+// NOT produce any diagnostic.
 func TestValidateJailFile_StaticMissingIsFresh(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "access.log")
@@ -79,8 +79,8 @@ useForJail = [true]
 	}
 }
 
-// Live mode loads the jail unconditionally, so a zero-cell jail must be caught
-// even with no banFile configured.
+// Live mode loads the jail unconditionally, so a file that is not a jail must
+// be caught there too.
 func TestValidateJailFile_LiveZeroCellFailsLoud(t *testing.T) {
 	dir := t.TempDir()
 	jailFile := filepath.Join(dir, "jail.json")
@@ -103,7 +103,7 @@ useForJail = [true]
 		t.Fatalf("LoadConfig: %v", err)
 	}
 	report := cfg.Validate(LiveMode).Report()
-	if !strings.Contains(report, "parsed to zero cells") {
+	if !strings.Contains(report, "not a jail file") || !strings.Contains(report, jailFile) {
 		t.Fatalf("live mode must validate the jail; got:\n%s", report)
 	}
 }

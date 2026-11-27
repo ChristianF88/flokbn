@@ -35,7 +35,7 @@ func benchFilteredConfig(b *testing.B) *config.Config {
 		"api":           {TrieCommon: config.TrieCommon{EndpointRegex: "^/api/", ClusterArgSets: clusterSets}},
 	}
 	for name, tc := range tries {
-		if err := tc.CompileRegex(); err != nil {
+		if err := compileRegex(&tc.TrieCommon); err != nil {
 			b.Fatalf("CompileRegex(%q): %v", name, err)
 		}
 	}

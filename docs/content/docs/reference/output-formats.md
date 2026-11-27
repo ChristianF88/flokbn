@@ -109,7 +109,7 @@ The top level contains `metadata`, `general`, one entry per trie under `tries`, 
 }
 ```
 
-`tries[].data` holds one entry per cluster arg set. `detected_ranges` are the raw per-set detections; `merged_ranges` are the same detections after overlapping/adjacent CIDRs are merged - the merged list is what feeds the jail. Empty/optional fields are omitted (`omitempty`).
+`tries[].data` holds one entry per cluster arg set. `detected_ranges` are the raw per-set detections; `merged_ranges` are the same detections after overlapping/adjacent CIDRs are merged - the merged list of each set is what feeds the jail, set by set, so the jail keeps a record for every tier's ranges. Empty/optional fields are omitted (`omitempty`).
 
 `global_filters` is **always present**, with zero counts when no whitelist is configured. It carries only the number of entries in the IP whitelist and in the User-Agent whitelist, not the entries. Only the User-Agent whitelist removes requests from the tries (the per-trie effect is `stats.ua_whitelist_excluded`); the IP whitelist acts in the jail/ban pipeline alone, so whitelisted traffic is still counted in every statistic.
 
@@ -312,7 +312,7 @@ fi
 Live mode produces **no stdout report** - `--plain`, `--compact`, and `--tui` are static-only flags, and the live command rejects them with an error. Its output consists of:
 
 1. **The jail and ban files** (formats [below](#ban-file-format)). Each is written only when its content changed: an iteration that re-detects ranges which are already banned writes nothing.
-2. **Leveled log lines on stderr** - one summary line per iteration (window size, batch size, detected/merged/jailed counts, timings) plus connection events, warnings and errors (see [Log Lines](#log-lines)). Configured via the `[log]` section or `--logLevel`.
+2. **Leveled log lines on stderr** - one summary line per iteration (window size, batch size, detected/jailed counts, timings) plus connection events, warnings and errors (see [Log Lines](#log-lines)). Configured via the `[log]` section or `--logLevel`.
 3. **HTTP endpoints**, when `statsListen` is set in the `[live]` config section (config file only - there is no CLI flag for it).
 
 ### Log Lines
@@ -324,10 +324,9 @@ Every iteration that processed a batch logs one `iteration` line at level `info`
 | `window` | Requests currently held, summed over all windows |
 | `batch` | Requests read in this iteration (without those dropped by the User-Agent whitelist) |
 | `detected` | Ranges detected by all cluster arg sets of all windows |
-| `merged` | Jail-eligible ranges after merging |
-| `jailed` | Ranges handed to the jail (after dropping fully whitelisted ones, plus User-Agent-blacklisted `/32`s) |
-| `pruned` | Long-expired entries removed from the jail |
-| `active_bans` | Jail bans published to the ban file (after the whitelist) |
+| `jailed` | Ranges handed to the jail as each window and cluster set found them (after dropping fully whitelisted ones, plus User-Agent-blacklisted `/32`s). The same range from two sets counts twice here and is one record in the jail. |
+| `pruned` | Records the jail forgot, 180 days after their ban ended |
+| `active_bans` | Lines of jail bans published to the ban file (nested and neighbouring ranges joined, after the whitelist) |
 | `ban_file_written` | `true` when the ban file was rewritten in this iteration: the published list changed, or it is the first write since startup |
 | `jail_file_written` | `true` when the jail file was rewritten in this iteration: the jail content changed, or it is the first write since startup |
 | `loop_ms`, `cluster_ms` | Duration of the iteration and of its clustering part |
@@ -380,8 +379,8 @@ All three return `503` with a `Retry-After` header until the loop has published 
 | `windows[].accepted_total`, `windows[].rejected_by_filter_total` | Requests accepted into, or rejected by the regex filters of, the window since startup |
 | `windows[].cluster_sets[]` | Per cluster arg set: `params`, `use_for_jail`, `last_duration_us`, `detected_now` (ranges with request counts) |
 | `windows[].top_talkers` | Top-N IPs, only with `topTalkers > 0` |
-| `jail.total_active`, `jail.stages[]` | Active bans in total and per stage. This is the jail before the whitelist is applied. |
-| `jail.active_bans[]`, `jail.active_bans_truncated` | Up to 500 active bans (`cidr`, `stage`, `ban_start`, `expires_at`); `active_bans_truncated` is `true` when there are more. `total_active` is always exact. |
+| `jail.total_active`, `jail.stages[]` | Jail records with a running ban, in total and per stage. A range nested in another banned range counts on its own, so this can exceed the number of lines in the ban file. This is the jail before the whitelist is applied. |
+| `jail.active_bans[]`, `jail.active_bans_truncated` | Up to 500 active bans in address order (`cidr`, `stage`, `ban_start`, `expires_at`); `active_bans_truncated` is `true` when there are more. `total_active` is always exact. |
 | `lists.whitelist`, `lists.blacklist` | `path`, `entries`, and up to 1000 `cidrs` |
 | `lists.user_agent_lists` | Hit counters and currently tracked IPs of the User-Agent lists |
 | `lists.ban_file` | `path`, `entries`, and `last_written`: the time the ban file was last rewritten, which is the last time the published list **changed** (not the last iteration) |
@@ -448,4 +447,6 @@ In live mode the same content is served over HTTP as `GET /bans`, which avoids f
 
 ## Jail File Format
 
-The jail file (`--jailFile`) persists detection state as JSON. In static mode it is only created once at least one range has actually been jailed - a run with no detections leaves no jail file behind (the ban file, in contrast, is always written, header-only if nothing is banned). Live mode writes it in the first iteration that processes a batch and afterwards only when the jail content changed (a new or escalated ban, an expiry, a pruned entry) or the file has gone missing. See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the full jail structure.
+The jail file (`--jailFile`) persists the jail as JSON: one record per banned range with its stage and the start of its last ban. In static mode it is only created once at least one range has actually been jailed - a run with no detections leaves no jail file behind (the ban file, in contrast, is always written, header-only if nothing is banned). Live mode writes it in the first iteration that processes a batch and afterwards only when a record changed (a new or repeated ban, a forgotten record) or the file has gone missing. A ban that runs out changes the ban file only.
+
+The ban file is generated from the jail: the ranges whose ban is running, with nested and neighbouring ranges joined and the whitelist subtracted. See [Internals]({{< relref "/docs/architecture/internals/" >}}) for the rules and the file format.

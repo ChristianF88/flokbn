@@ -67,7 +67,7 @@ func LargestCIDRSize(start, maxSize uint32) uint8 {
 
 // appendOptimalNumeric appends the minimal set of CIDRs covering [start, end] to
 // dst and returns the extended slice. It is the allocation-free core used by the
-// hot RemoveWhitelisted loop so a single scratch buffer can be reused across all
+// hot removeWhitelisted loop so a single scratch buffer can be reused across all
 // blacklist CIDRs instead of allocating a fresh slice per range gap.
 func appendOptimalNumeric(dst []NumericCIDR, start, end uint32) []NumericCIDR {
 	if start > end {
@@ -154,25 +154,15 @@ func subtractRanges(dst []NumericCIDR, blackStart, blackEnd uint32, whiteRanges 
 	return dst
 }
 
-// RemoveWhitelisted removes any CIDRs from the blacklist that are covered by whitelist entries
-// and performs CIDR subtraction when whitelist entries are contained within blacklist entries.
-//
-// The whitelist is parsed exactly once (ParseIntervalSet) and reused for
-// every blacklist CIDR, giving O(B + W) parsing instead of the O(B*W)
-// net.ParseCIDR allocation storm of the previous per-candidate re-parsing.
+// removeWhitelisted removes from blacklist every address covered by the
+// parsed whitelist: a CIDR covered by the union of whitelist entries is
+// dropped, a partial overlap is carved into the remaining ranges. The caller
+// parses the whitelist once (ParseIntervalSet), so ComposeBanLists parses it
+// once for both of its lists: O(B + W) instead of O(B*W).
 //
 // The result is read-only: on a no-op whitelist (empty, or only invalid/non-IPv4
 // entries) it returns the input slice unchanged rather than a fresh copy, so
 // callers must not append to or mutate it.
-func RemoveWhitelisted(blacklist []string, whitelist []string) []string {
-	if len(whitelist) == 0 {
-		return blacklist
-	}
-	return removeWhitelisted(blacklist, ParseIntervalSet(whitelist))
-}
-
-// removeWhitelisted is RemoveWhitelisted for a whitelist that is already
-// parsed, so ComposeBanLists parses it once for both of its lists.
 func removeWhitelisted(blacklist []string, whiteRanges IntervalSet) []string {
 	if len(whiteRanges) == 0 {
 		// Whitelist had only invalid entries - nothing to subtract or remove.
@@ -233,7 +223,7 @@ func removeWhitelisted(blacklist []string, whiteRanges IntervalSet) []string {
 // several entries does not drop a CIDR (deliberate, see the jail invariant
 // tests), which is why this scans the entries instead of using an IntervalSet.
 //
-// Unlike RemoveWhitelisted it never SPLITS a partially-overlapping CIDR into
+// Unlike removeWhitelisted it never SPLITS a partially-overlapping CIDR into
 // the gaps around whitelisted holes. That fragmentation is catastrophic when
 // the whitelist holds many scattered /32s (e.g. User-Agent-whitelisted bot
 // IPs): a single jailed /16 with thousands of interior /32 holes explodes into
@@ -279,7 +269,7 @@ candidates:
 // ComposeBanLists applies the whitelist to both the active jail bans and the
 // manual blacklist as the final step before a ban file is written. Whitelists
 // always win: fully covered entries are dropped and partial overlaps are
-// subtracted (see RemoveWhitelisted). Both static and live mode must publish
+// subtracted (see removeWhitelisted). Both static and live mode must publish
 // through this function so the invariant holds in one place.
 //
 // The whitelist is parsed once for both lists.

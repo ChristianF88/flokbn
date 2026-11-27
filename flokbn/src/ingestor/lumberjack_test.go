@@ -776,3 +776,10 @@ func FuzzLJReader(f *testing.F) {
 		}
 	})
 }
+
+// inUse returns the bytes currently reserved from the budget.
+func (b *byteBudget) inUse() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used
+}

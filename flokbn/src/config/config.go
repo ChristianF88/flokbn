@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -465,14 +464,15 @@ func (c *Config) validateListFiles(diags *ConfigDiagnostics) {
 	}
 }
 
-// validateJailFile surfaces an unloadable jail (unreadable / invalid-JSON /
-// zero-cell) at the barrier via the SAME loader the run uses, so it aborts
+// validateJailFile surfaces an unloadable jail (unreadable, invalid JSON, or
+// anything else jail.Decode rejects) at the barrier via the SAME loader the
+// run uses, so it aborts
 // before any work instead of the static path silently swallowing it. A
 // missing/empty jail is a valid fresh start and records nothing. It is a load
 // error to surface (operator-visible on-disk state), not a panic; the loader
 // error already names the path.
 func (c *Config) validateJailFile(diags *ConfigDiagnostics) {
-	if _, err := jail.FileToJail(c.GetJailFile()); err != nil {
+	if _, err := jail.Load(c.GetJailFile(), jail.DefaultConfig()); err != nil {
 		diags.AddRaw(err.Error())
 	}
 }
@@ -1345,29 +1345,12 @@ func (c *Config) GetReadTimeout() time.Duration {
 	return DefaultLiveReadTimeout
 }
 
-// ValidateLive is a thin shim over validateLiveInto retained for direct callers
-// (the live-validation unit tests) that assert the error channel and the "live
-// config" terminology. It runs validateLiveInto on a temp accumulator and
-// returns the FIRST emitted message as an error; validateLiveInto's emission
-// order is deterministic (scalar/live-section checks before the per-window map
-// range) so "first" is stable. validateLiveInto is THE single implementation -
-// Validate(LiveMode) delegates to it too, so the message grammar never drifts.
-func (c *Config) ValidateLive() error {
-	d := &ConfigDiagnostics{}
-	c.validateLiveInto(d)
-	if len(d.msgs) > 0 {
-		return fmt.Errorf("%s", d.msgs[0])
-	}
-	return nil
-}
-
 // validateLiveInto records every live-mode required-field / cross-field problem
 // into diags and CONTINUES (collect-all). NIL-SAFETY (security): a nil c.Live /
 // nil c.Global is REPORTED (required-section diagnostic) and every dependent
 // deref is then GUARDED - never deref a nil after reporting. EMISSION ORDER is
 // FIXED and deterministic: live-section scalar checks first, global checks next,
-// then the per-window map range LAST, so the shim's "first message" stays
-// stable. After LoadConfig c.Live/c.Global are non-nil empty structs; a
+// then the per-window map range LAST, so the first message is stable. After LoadConfig c.Live/c.Global are non-nil empty structs; a
 // hand-built Config may pass nil and is handled here.
 func (c *Config) validateLiveInto(diags *ConfigDiagnostics) {
 	if c.Live == nil {
@@ -1555,16 +1538,6 @@ func (t *TrieCommon) compileRegexFields() (uaErr, epErr error) {
 	t.userAgentRegexCompiled, t.userAgentPrefilter, uaErr = compileFilterRegex("useragentRegex", t.UserAgentRegex)
 	t.endpointRegexCompiled, t.endpointPrefilter, epErr = compileFilterRegex("endpointRegex", t.EndpointRegex)
 	return uaErr, epErr
-}
-
-// CompileRegex compiles the regex patterns of a trie or window and returns the
-// compile errors of both fields (joined; nil when both compile). It is a PUBLIC
-// thin wrapper retained for direct callers (config_test.go TestCompileRegex,
-// prefilter_wiring_test.go, cli/live_loop_test.go) that assert the error
-// channel; do NOT remove it. Flags/parse paths use CompileRegexInto to route
-// the same failures into a diagnostics accumulator.
-func (t *TrieCommon) CompileRegex() error {
-	return errors.Join(t.compileRegexFields())
 }
 
 // CompileRegexInto compiles the regex patterns and records every failure into

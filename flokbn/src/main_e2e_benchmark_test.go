@@ -6,16 +6,17 @@ import (
 
 	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/iputils"
+	"github.com/ChristianF88/flokbn/testutil"
 	"github.com/ChristianF88/flokbn/trie"
 )
 
-// BenchmarkEndToEndOptimization compares old vs new data flow
+// BenchmarkEndToEndOptimization measures insert + cluster + string output
 func BenchmarkEndToEndOptimization(b *testing.B) {
 	sizes := []int{1000, 10000, 100000}
 
 	for _, size := range sizes {
 		// Generate test IPs
-		ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", size)
+		ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", size)
 		if err != nil {
 			b.Fatalf("Failed to generate IPs: %v", err)
 		}
@@ -26,23 +27,11 @@ func BenchmarkEndToEndOptimization(b *testing.B) {
 			uint32IPs[i] = iputils.IPToUint32(ip)
 		}
 
-		b.Run(fmt.Sprintf("OldPath_%d_IPs", size), func(b *testing.B) {
+		b.Run(fmt.Sprintf("Numeric_%d_IPs", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				// Old path: net.IP -> Trie -> string CIDRs
-				tr := trie.NewTrie()
-				for _, ip := range ips {
-					tr.Insert(ip) // This does net.IP -> uint32 conversion every time
-				}
-				_ = tr.CollectCIDRs(10, 8, 24, 0.5) // This does uint32 -> string conversion
-			}
-		})
-
-		b.Run(fmt.Sprintf("NewPath_%d_IPs", size), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				// New path: uint32 -> Trie -> numeric CIDRs -> strings only at end
-				tr := trie.NewTrie()
+				// uint32 -> Trie -> numeric CIDRs -> strings only at end
+				tr := trie.NewTrieSeq()
 				for _, v := range uint32IPs { // Direct uint32 insertion
 					tr.InsertUint32(v)
 				}
@@ -57,34 +46,13 @@ func BenchmarkEndToEndOptimization(b *testing.B) {
 			}
 		})
 
-		b.Run(fmt.Sprintf("NumericRequest_%d_IPs", size), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				// Simulate parsing log entries directly into the trie via
-				// uint32 IPs (no intermediate request type, no conversions).
-				tr := trie.NewTrie()
-				for _, ip := range uint32IPs {
-					tr.InsertUint32(ip) // Direct uint32 insertion
-				}
-
-				// Collect numeric CIDRs
-				numericCIDRs := tr.CollectCIDRsNumeric(10, 8, 24, 0.5)
-
-				// Convert to strings only for final output
-				result := make([]string, len(numericCIDRs))
-				for j, nc := range numericCIDRs {
-					result[j] = nc.String()
-				}
-				_ = result
-			}
-		})
 	}
 }
 
-// BenchmarkIPConversionElimination tests pure IP conversion overhead
+// BenchmarkIPConversionElimination measures uint32 insertion and numeric clustering
 func BenchmarkIPConversionElimination(b *testing.B) {
 	// Generate test data
-	ips, err := iputils.RandomIPsFromRange("192.168.0.0/16", 10000)
+	ips, err := testutil.RandomIPsFromRange("192.168.0.0/16", 10000)
 	if err != nil {
 		b.Fatalf("Failed to generate IPs: %v", err)
 	}
@@ -94,41 +62,18 @@ func BenchmarkIPConversionElimination(b *testing.B) {
 		uint32IPs[i] = iputils.IPToUint32(ip)
 	}
 
-	b.Run("OldTrieInsert", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			tr := trie.NewTrie()
-			for _, ip := range ips {
-				tr.Insert(ip) // net.IP -> uint32 conversion on every insert
-			}
-		}
-	})
-
 	b.Run("NewTrieInsertUint32", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			tr := trie.NewTrie()
+			tr := trie.NewTrieSeq()
 			for _, v := range uint32IPs { // Direct uint32 insertion
 				tr.InsertUint32(v)
 			}
 		}
 	})
 
-	b.Run("OldCIDRCollection", func(b *testing.B) {
-		tr := trie.NewTrie()
-		for _, v := range uint32IPs {
-			tr.InsertUint32(v)
-		}
-
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			_ = tr.CollectCIDRs(10, 8, 24, 0.5) // String-based collection
-		}
-	})
-
 	b.Run("NewCIDRCollection", func(b *testing.B) {
-		tr := trie.NewTrie()
+		tr := trie.NewTrieSeq()
 		for _, v := range uint32IPs {
 			tr.InsertUint32(v)
 		}
@@ -180,7 +125,7 @@ func BenchmarkSliceTrieComparison(b *testing.B) {
 	b.Run("OriginalTrie", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			tr := trie.NewTrie()
+			tr := trie.NewTrieSeq()
 			for _, v := range uint32IPs {
 				tr.InsertUint32(v)
 			}
@@ -191,7 +136,7 @@ func BenchmarkSliceTrieComparison(b *testing.B) {
 
 // Helper function to generate uint32 IPs
 func generateUint32IPs(count int) ([]uint32, error) {
-	ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", count)
+	ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", count)
 	if err != nil {
 		return nil, err
 	}

@@ -64,7 +64,7 @@ func BenchmarkBuildSorted(b *testing.B) {
 			b.Run(fmt.Sprintf("Old_Batch/%s/%d", dist.name, size), func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					t := NewTrie()
+					t := NewTrieSeq()
 					t.InsertSorted(data)
 				}
 			})

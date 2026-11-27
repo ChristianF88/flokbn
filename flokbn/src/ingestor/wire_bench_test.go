@@ -27,7 +27,7 @@ func BenchmarkIngestWire(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			wire := benchWindow(b, events, compressed)
 
-			ing, err := NewTCPIngestor("127.0.0.1:0", 10*time.Second)
+			ing, err := NewTCPIngestorWithOptions("127.0.0.1:0", Options{ReadTimeout: 10 * time.Second})
 			if err != nil {
 				b.Fatalf("NewTCPIngestor: %v", err)
 			}

@@ -281,7 +281,7 @@ func handleLiveConfigMode(c *cli.Context, configPath string) error {
 		return fmt.Errorf("cannot load config %q: %w", configPath, err)
 	}
 
-	// CFG-02: the live required-field checks (ValidateLive) and the [log]
+	// CFG-02: the live required-field checks (validateLiveInto) and the [log]
 	// level/format enum are folded into config.Validate(LiveMode) / parseLogConfig,
 	// so they enumerate at the barrier (first statement of executeLiveAnalysis)
 	// before any port/stats bind. The logger install below binds nothing and stays

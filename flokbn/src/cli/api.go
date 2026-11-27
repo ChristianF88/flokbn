@@ -183,9 +183,9 @@ func LiveFromConfig(cfg *config.Config) error {
 // executeLiveAnalysis runs live mode analysis - works for both CLI and config file inputs
 func executeLiveAnalysis(cfg *config.Config) error {
 	// THE pre-work barrier (CFG-01/CFG-02), first statement so it precedes BOTH
-	// the ingest bind (NewTCPIngestor below) AND the stats bind (newStatsServer):
+	// the ingest bind (NewTCPIngestorWithOptions below) AND the stats bind (newStatsServer):
 	// no path reaches either listener when config diagnostics are non-empty.
-	// CFG-02 folded the ValidateLive required-field checks AND the list-file /
+	// CFG-02 folded the live required-field checks (validateLiveInto) AND the list-file /
 	// regex / cidrRanges / IPv6 checks into cfg.Validate(LiveMode), so an
 	// unreadable whitelist or an IPv6 cidrRanges now fails BEFORE bind. Only
 	// logging.Setup runs before this in the handler (the logger must exist so the

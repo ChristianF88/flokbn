@@ -118,7 +118,7 @@ func (nc NumericCIDR) Interval() Interval {
 // NewIntervalSet or ParseIntervalSet. The zero value is the empty set.
 //
 // It is the one numeric form of "a list of CIDRs as address ranges" outside the
-// jail: the whitelist of RemoveWhitelisted and the detected ranges behind the
+// jail: the whitelist of removeWhitelisted and the detected ranges behind the
 // TUI's cluster overlay both use it.
 type IntervalSet []Interval
 

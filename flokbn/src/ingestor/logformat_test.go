@@ -14,7 +14,7 @@ import (
 // An ingestor built without a log format reads the client IP from the first
 // field, as live mode always did.
 func TestTCPIngestor_DefaultLogFormat(t *testing.T) {
-	ing, err := NewTCPIngestor("127.0.0.1:0", time.Second)
+	ing, err := NewTCPIngestorWithOptions("127.0.0.1:0", Options{ReadTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("NewTCPIngestor: %v", err)
 	}

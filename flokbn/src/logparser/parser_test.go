@@ -1140,7 +1140,7 @@ func parseEventStaticMock(evt map[string]interface{}, out *accesslog.Request) er
 		requestLine := quoted[1]
 		parts := strings.Fields(requestLine)
 		if len(parts) >= 2 {
-			out.Method = accesslog.ParseMethod(parts[0])
+			out.Method = testutil.ParseMethod(parts[0])
 			out.URI = parts[1]
 		}
 

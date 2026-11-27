@@ -46,7 +46,7 @@ func noiseLogEvents(ts time.Time) []interface{} {
 // client between dial and send on a loaded machine.
 func newE2EIngestor(t *testing.T) *ingestor.TCPIngestor {
 	t.Helper()
-	ing, err := ingestor.NewTCPIngestor("127.0.0.1:0", 5*time.Second)
+	ing, err := ingestor.NewTCPIngestorWithOptions("127.0.0.1:0", ingestor.Options{ReadTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatalf("NewTCPIngestor: %v", err)
 	}

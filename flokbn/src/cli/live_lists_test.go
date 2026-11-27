@@ -11,7 +11,7 @@ import (
 
 	"github.com/ChristianF88/flokbn/accesslog"
 	"github.com/ChristianF88/flokbn/config"
-	"github.com/ChristianF88/flokbn/jail"
+	"github.com/ChristianF88/flokbn/testutil"
 )
 
 // Log messages the live loop emits for list handling; the tests below assert
@@ -200,16 +200,7 @@ func TestRunLiveLoop_PreexistingWhitelistedBanExcludedFromBanFile(t *testing.T) 
 
 	// Pre-seed the jail: 192.168.0.0/24 is an active prisoner whose ban just
 	// started, so it stays active throughout the run.
-	seeded := jail.NewJail()
-	seeded.Cells[0].Prisoners = append(seeded.Cells[0].Prisoners, jail.Prisoner{
-		CIDR:      "192.168.0.0/24",
-		BanStart:  now,
-		BanActive: true,
-	})
-	seeded.AllCIDRs = append(seeded.AllCIDRs, "192.168.0.0/24")
-	if err := jail.JailToFile(seeded, cfg.GetJailFile()); err != nil {
-		t.Fatalf("seeding jail file: %v", err)
-	}
+	testutil.WriteJailFile(t, cfg.GetJailFile(), testutil.JailRecord{CIDR: "192.168.0.0/24", Stage: 1, BanStart: now})
 
 	h := startLoop(t, fake, cfg)
 	if err := h.wait(5 * time.Second); err != nil {
@@ -520,16 +511,7 @@ func TestRunLiveLoop_IdleHeartbeatExpiresUAWhitelist(t *testing.T) {
 	}, nil, nil, []string{"GoodBot/1.0"}, nil)
 
 	// Seed the jail with the active /32 ban.
-	seeded := jail.NewJail()
-	seeded.Cells[0].Prisoners = append(seeded.Cells[0].Prisoners, jail.Prisoner{
-		CIDR:      targetCIDR,
-		BanStart:  now,
-		BanActive: true,
-	})
-	seeded.AllCIDRs = append(seeded.AllCIDRs, targetCIDR)
-	if err := jail.JailToFile(seeded, cfg.GetJailFile()); err != nil {
-		t.Fatalf("seeding jail file: %v", err)
-	}
+	testutil.WriteJailFile(t, cfg.GetJailFile(), testutil.JailRecord{CIDR: targetCIDR, Stage: 1, BanStart: now})
 
 	h := startLoop(t, fake, cfg)
 

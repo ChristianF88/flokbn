@@ -10,7 +10,7 @@ import (
 
 // buildOld builds a trie via the existing mutex-allocator sorted batch path.
 func buildOld(sortedIPs []uint32) *Trie {
-	t := NewTrie()
+	t := NewTrieSeq()
 	t.InsertSorted(sortedIPs)
 	return t
 }

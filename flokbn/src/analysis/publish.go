@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
@@ -12,10 +13,15 @@ import (
 // BanInput is one round of input for UpdateBans. All entries are IPv4 CIDR
 // strings; the slices are read, never modified.
 type BanInput struct {
-	// Detected holds the merged ranges found by the cluster sets that feed the
-	// jail. A range fully covered by a single Whitelist entry is dropped; any
-	// other range enters the jail whole, even when it overlaps the whitelist
-	// (see cidr.DropFullyWhitelisted for why it is not carved up here).
+	// Now is the time of the round: bans start at it and are active or ended
+	// by it.
+	Now time.Time
+	// Detected holds the ranges found by the cluster sets that feed the jail,
+	// as each set found them: not merged across sets, so a hot host and the
+	// subnet around it both arrive and the jail keeps a record for each. A
+	// range fully covered by a single Whitelist entry is dropped; any other
+	// range enters the jail whole, even when it overlaps the whitelist (see
+	// cidr.DropFullyWhitelisted for why it is not carved up here).
 	Detected []string
 	// ForceBan holds ranges that enter the jail without that whitelist check:
 	// the IPs seen with a blacklisted User-Agent, as /32. The whitelist still
@@ -32,8 +38,9 @@ type BanInput struct {
 // BanUpdate is the outcome of UpdateBans.
 type BanUpdate struct {
 	// Bans and Blacklist are the two lists to publish (ban file sections):
-	// the jail's active bans and the manual blacklist, each with the whitelist
-	// subtracted exactly (cidr.ComposeBanLists).
+	// the jail's active bans, with nested and neighbouring ranges joined
+	// (jail.Jail.BanList), and the manual blacklist, each with the
+	// whitelist subtracted exactly (cidr.ComposeBanLists).
 	Bans      []string
 	Blacklist []string
 	// WhitelistDropped is the number of Detected ranges the whitelist kept out
@@ -42,25 +49,29 @@ type BanUpdate struct {
 	// Jailed is the number of ranges handed to the jail (Detected minus the
 	// dropped ones, plus ForceBan).
 	Jailed int
-	// Expired is the number of bans that ran out in this round.
+	// Expired is the number of bans that ran out since the previous round on
+	// this jail. It changes the published lists, not the jail's records.
 	Expired int
-	// JailChanged reports that the jail needs persisting: ranges were handed to
-	// it or bans ran out. It can be true for a round that re-detected only
-	// ranges that are already banned.
+	// Pruned is the number of records the jail forgot after their retention.
+	Pruned int
+	// JailChanged reports that the jail's records changed and need
+	// persisting: a ban was started or repeated, or a record was forgotten.
+	// A round that only re-detected ranges that are banned already, and a
+	// ban that merely ran out, change nothing.
 	JailChanged bool
-	// UpdateErr is set when the jail rejected some of the ranges. The others
-	// were still applied, and Bans/Blacklist are valid.
+	// UpdateErr is set when some of the ranges were not IPv4 CIDRs. The
+	// others were still applied, and Bans/Blacklist are valid.
 	UpdateErr error
 }
 
 // UpdateBans runs one round of the ban pipeline on an in-memory jail:
 //
 //  1. drop detected ranges that are fully whitelisted,
-//  2. expire bans that ran out (also when nothing was detected - the active
-//     flags persisted with the jail are otherwise trusted forever),
-//  3. hand the remaining ranges to the jail, which starts or escalates bans,
-//  4. compose the lists to publish, where the whitelist wins over both the
-//     active bans and the manual blacklist.
+//  2. hand the remaining ranges to the jail, which forgets the records past
+//     their retention and starts or repeats bans (also called with nothing
+//     detected, when it only forgets),
+//  3. compose the lists to publish from the bans active at in.Now, where the
+//     whitelist wins over both the active bans and the manual blacklist.
 //
 // It does no I/O: loading and saving the jail and writing the ban file belong
 // to the caller (publishStatic below for static mode, liveLoop.publishBans in
@@ -76,44 +87,22 @@ func UpdateBans(j *jail.Jail, in BanInput) BanUpdate {
 		toJail = append(toJail[:len(toJail):len(toJail)], in.ForceBan...)
 	}
 
-	// Expiry only flips bans from active to inactive, so a change in the
-	// number of active bans is an exact signal.
-	activeBefore := activeBanCount(j)
-	j.UpdateBanActiveStatus()
-	expired := activeBefore - activeBanCount(j)
-
-	var updateErr error
-	if len(toJail) > 0 {
-		updateErr = j.Update(toJail)
-	}
+	out, updateErr := j.UpdateCIDRs(in.Now, toJail)
 
 	// ComposeBanLists is the publish choke point: whitelists win over active
 	// bans AND the manual blacklist.
-	bans, blacklist := cidr.ComposeBanLists(j.ListActiveBans(), in.Blacklist, in.Whitelist)
+	bans, blacklist := cidr.ComposeBanLists(j.BanList(in.Now), in.Blacklist, in.Whitelist)
 
 	return BanUpdate{
 		Bans:             bans,
 		Blacklist:        blacklist,
 		WhitelistDropped: dropped,
 		Jailed:           len(toJail),
-		Expired:          expired,
-		JailChanged:      len(toJail) > 0 || expired > 0,
+		Expired:          out.Ended,
+		Pruned:           out.Pruned,
+		JailChanged:      out.Changed(),
 		UpdateErr:        updateErr,
 	}
-}
-
-// activeBanCount counts the running bans without building their list.
-func activeBanCount(j *jail.Jail) int {
-	n := 0
-	for ci := range j.Cells {
-		prisoners := j.Cells[ci].Prisoners
-		for pi := range prisoners {
-			if prisoners[pi].BanActive {
-				n++
-			}
-		}
-	}
-	return n
 }
 
 // publishJailAndBans runs the jail update and ban-file publish step when both a
@@ -155,6 +144,7 @@ func publishStatic(cfg *config.Config, lists *globalLists, jsonOutput *output.JS
 	}
 
 	in := BanInput{
+		Now:      time.Now(),
 		Detected: jailCandidates(jsonOutput.Tries),
 		ForceBan: hostCIDRs(nil, jsonOutput.UserAgentBlacklistIPs),
 		// Every whitelist source must win everywhere: before the jail and at
@@ -163,13 +153,13 @@ func publishStatic(cfg *config.Config, lists *globalLists, jsonOutput *output.JS
 		Blacklist: blacklistCIDRs,
 	}
 
-	jailInstance, err := jail.FileToJail(cfg.GetJailFile())
+	jailInstance, err := jail.Load(cfg.GetJailFile(), jail.DefaultConfig())
 	if err != nil {
 		jsonOutput.AddError("jail_load", fmt.Sprintf("Failed to load jail %q: %v", cfg.GetJailFile(), err), 1)
 		return err
 	}
 
-	update := UpdateBans(&jailInstance, in)
+	update := UpdateBans(jailInstance, in)
 
 	if len(in.Whitelist) > 0 && update.WhitelistDropped > 0 {
 		jsonOutput.AddWarning("whitelist_applied", fmt.Sprintf("Whitelist filtering prevented %d CIDRs from being added to jail", update.WhitelistDropped), 0)
@@ -178,16 +168,17 @@ func publishStatic(cfg *config.Config, lists *globalLists, jsonOutput *output.JS
 		jsonOutput.AddWarning("jail_update", fmt.Sprintf("Some CIDRs failed during jail update: %v", update.UpdateErr), 1)
 	}
 
-	// Persist when the jail changed: new detections, or bans that just expired.
+	// Persist when the jail's records changed: a ban started or repeated, or
+	// a record forgotten.
 	if update.JailChanged {
-		if err := jail.JailToFile(jailInstance, cfg.GetJailFile()); err != nil {
+		if err := jailInstance.Save(cfg.GetJailFile()); err != nil {
 			jsonOutput.AddError("jail_save", fmt.Sprintf("Failed to save jail %q: %v", cfg.GetJailFile(), err), 1)
 			return err
 		}
 	}
 
 	// The ban file is rewritten on every run.
-	if err := jail.WriteBanFileWithBlacklist(cfg.GetBanFile(), update.Bans, update.Blacklist); err != nil {
+	if err := jail.WriteBanFile(cfg.GetBanFile(), update.Bans, update.Blacklist); err != nil {
 		jsonOutput.AddError("banfile_write", fmt.Sprintf("Failed to write ban file %q: %v", cfg.GetBanFile(), err), 1)
 		return err
 	}
@@ -200,7 +191,8 @@ func publishStatic(cfg *config.Config, lists *globalLists, jsonOutput *output.JS
 }
 
 // jailCandidates collects the merged ranges of every cluster set flagged
-// useForJail, in trie order then cluster-set order. Data[i] pairs with
+// useForJail, in trie order then cluster-set order: merged within a set, not
+// across sets, so the jail sees each tier's ranges. Data[i] pairs with
 // UseForJail[i] by position (processClustering keeps them aligned).
 func jailCandidates(tries []output.TrieResult) []string {
 	var cidrs []string

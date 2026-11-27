@@ -70,7 +70,7 @@ func (d *ConfigDiagnostics) Add(section, key, value, want string, cause error) {
 // template cannot express: the unknown-key "(want: ...)" line, the
 // clusterArgSets "row N ..." lines, the cidrRanges "IPv6 not supported
 // (IPv4-only tool) in cidrRanges[i]: ..." line, the useForJail alignment line,
-// the list-file "cannot open"/path:line errors, and the ValidateLive lines.
+// the list-file "cannot open"/path:line errors, and the live-mode required-field lines (validateLiveInto).
 //
 // SANITATION CONTRACT (CFG-02, HARD): callers MUST pre-format every UNTRUSTED
 // substring (unknown-key NAME, offending CIDR string, offending raw values)
@@ -139,9 +139,6 @@ func (d *ConfigDiagnostics) AddRange(section, endRaw, startRaw string) {
 
 // HasErrors reports whether any diagnostic was recorded.
 func (d *ConfigDiagnostics) HasErrors() bool { return len(d.msgs) > 0 }
-
-// Len returns the number of recorded diagnostics (for content/collect-all tests).
-func (d *ConfigDiagnostics) Len() int { return len(d.msgs) }
 
 // Report renders the diagnostics as a deterministic enumerated block: a
 // "configuration errors (N):" header followed by N sorted, numbered lines. The

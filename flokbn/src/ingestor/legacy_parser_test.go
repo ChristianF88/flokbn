@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ChristianF88/flokbn/accesslog"
+	"github.com/ChristianF88/flokbn/testutil"
 )
 
 // The hardcoded live parser that TCPIngestor used before it switched to the
@@ -75,7 +76,7 @@ func legacyParseLine(msg string, out *accesslog.Request) (malformed int, err err
 	requestLine := msg[start:end]
 	parts := strings.Fields(requestLine)
 	if len(parts) >= 2 {
-		out.Method = accesslog.ParseMethod(parts[0])
+		out.Method = testutil.ParseMethod(parts[0])
 		out.URI = parts[1]
 	}
 
