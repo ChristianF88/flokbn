@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"github.com/ChristianF88/flokbn/iputils"
+	"github.com/ChristianF88/flokbn/testutil"
 )
 
 // BenchmarkSlidingWindowUpdate benchmarks the performance of SlidingWindowTrie
 // under a high load of IP insertions and updates.
 // Run with: go test -bench=BenchmarkSlidingWindowUpdate -benchmem
 func BenchmarkSlidingWindowUpdate(b *testing.B) {
-	Ips, err := iputils.RandomIPsFromRange("192.168.0.0/16", 100000)
+	Ips, err := testutil.RandomIPsFromRange("192.168.0.0/16", 100000)
 	if err != nil {
 		b.Fatalf("Failed to generate random IPs: %v", err)
 	}

@@ -107,7 +107,7 @@ func TestConcurrentSequentialParity_Corpus(t *testing.T) {
 			for matcherName, m := range matchers {
 				t.Run(fmt.Sprintf("%d/%s/%s", n, cfgName, matcherName), func(t *testing.T) {
 					tc := build()
-					if err := tc.CompileRegex(); err != nil {
+					if err := compileRegex(&tc.TrieCommon); err != nil {
 						t.Fatal(err)
 					}
 					seq := runFilter(t, false, reqs, tc, m)

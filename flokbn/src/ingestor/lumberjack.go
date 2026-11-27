@@ -411,12 +411,6 @@ func (b *byteBudget) release(n int64) {
 	b.mu.Unlock()
 }
 
-func (b *byteBudget) inUse() int64 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.used
-}
-
 // connCounters are the connection-level counters surfaced by Stats.
 type connCounters struct {
 	open           atomic.Int64

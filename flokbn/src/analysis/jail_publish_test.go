@@ -89,8 +89,8 @@ func assertExpiredBanDropped(t *testing.T, cfg *config.Config) {
 	}
 	now := time.Now()
 	present := map[string]bool{}
-	for _, r := range j.Records() {
-		present[r.CIDR().String()] = true
+	for _, r := range testutil.JailRecords(t, j.Encode()) {
+		present[r.CIDR] = true
 	}
 	active := map[string]bool{}
 	for _, b := range j.Active(now) {
@@ -245,7 +245,7 @@ func TestStaticBanFileListsRunningBansMerged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j.Len() != 8 {
-		t.Errorf("%d records in the jail file, want all 8", j.Len())
+	if n := len(testutil.JailRecords(t, j.Encode())); n != 8 {
+		t.Errorf("%d records in the jail file, want all 8", n)
 	}
 }

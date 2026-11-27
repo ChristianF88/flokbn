@@ -477,8 +477,7 @@ func processTrie(trieName string, trieConfig *config.TrieConfig, parsed *parsedL
 	}
 
 	// The trie is built by this goroutine alone, from ascending input, so the
-	// lock-free sequential allocator and the prefix-stack build apply
-	// (bit-identical to InsertSorted, ~2x faster).
+	// lock-free sequential allocator and the prefix-stack build apply.
 	trieInstance := trie.NewTrieSeq()
 	trieInstance.BuildSorted(ips)
 

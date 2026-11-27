@@ -44,8 +44,8 @@ func BenchmarkFullPipelineProfile(b *testing.B) {
 		iputils.RadixSortUint32(ipUints)
 
 		// Phase 4: Trie insertion
-		tr := trie.NewTrie()
-		tr.InsertSorted(ipUints)
+		tr := trie.NewTrieSeq()
+		tr.BuildSorted(ipUints)
 
 		// Phase 5: Clustering
 		_ = tr.CollectCIDRsNumeric(1000, 16, 24, 0.1)
@@ -129,8 +129,8 @@ func BenchmarkTrieInsertionOnly(b *testing.B) {
 		b.Run(fmt.Sprintf("BatchSorted_%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				tr := trie.NewTrie()
-				tr.InsertSorted(ipUints)
+				tr := trie.NewTrieSeq()
+				tr.BuildSorted(ipUints)
 			}
 		})
 
@@ -145,7 +145,7 @@ func BenchmarkTrieInsertionOnly(b *testing.B) {
 
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				tr := trie.NewTrie()
+				tr := trie.NewTrieSeq()
 				for _, v := range unsorted {
 					tr.InsertUint32(v)
 				}

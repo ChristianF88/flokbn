@@ -27,7 +27,7 @@ func writeTestFile(t *testing.T, dir, name, content string) string {
 func compileTries(t *testing.T, tries map[string]*config.TrieConfig) map[string]*config.TrieConfig {
 	t.Helper()
 	for name, tc := range tries {
-		if err := tc.CompileRegex(); err != nil {
+		if err := compileRegex(&tc.TrieCommon); err != nil {
 			t.Fatalf("CompileRegex(%q): %v", name, err)
 		}
 	}

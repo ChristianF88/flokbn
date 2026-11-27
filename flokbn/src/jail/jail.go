@@ -229,13 +229,6 @@ func New(cfg Config) (*Jail, error) {
 	return j, nil
 }
 
-// Len returns the number of records.
-func (j *Jail) Len() int { return len(j.records) }
-
-// Records returns the records in address order, a range before everything
-// inside it. The slice is the jail's own: read it, do not keep or change it.
-func (j *Jail) Records() []Record { return j.records }
-
 // at returns the time a call at now works with, in Unix nanoseconds: now, or
 // the latest time an Update has seen if that is later.
 func (j *Jail) at(now time.Time) int64 {

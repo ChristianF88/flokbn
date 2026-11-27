@@ -67,8 +67,7 @@ func (s *SlidingWindow) LastArrival() ArrivalStats {
 func NewSlidingWindowTrie(window time.Duration, maxEntries int) *SlidingWindow {
 	return &SlidingWindow{
 		// Seq-backed (lock-free) trie: the live loop and all trie access run
-		// on a single goroutine, so the never-contended NodeAllocator mutex is
-		// dropped from the live path. RSS is bounded by periodically rebuilding
+		// on a single goroutine. RSS is bounded by periodically rebuilding
 		// the trie from the surviving IPQueue in DropOld (the old allocator's
 		// chunks then become unreferenced and GC reclaims the whole generation).
 		Trie:       trie.NewTrieSeq(),

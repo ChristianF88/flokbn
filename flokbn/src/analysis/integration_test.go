@@ -251,7 +251,7 @@ func buildCLIConfig(t *testing.T, logFile string) *config.Config {
 
 	// CLI path must explicitly compile regex (as handleStaticFlagsMode does)
 	for name, tc := range cfg.StaticTries {
-		if err := tc.CompileRegex(); err != nil {
+		if err := compileRegex(&tc.TrieCommon); err != nil {
 			t.Fatalf("CompileRegex failed for trie %q: %v", name, err)
 		}
 	}
@@ -651,7 +651,7 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 	}
 	tomlReport := cfg.Validate(config.StaticMode).Report()
 
-	// CLI path: invalid regex causes CompileRegex to fail (error channel preserved)
+	// CLI path: an invalid regex fails CompileRegexInto, as in handleStaticFlagsMode
 	cliTrie := &config.TrieConfig{
 		TrieCommon: config.TrieCommon{
 			UserAgentRegex: "[invalid regex",
@@ -660,9 +660,9 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 			},
 		},
 	}
-	cliErr := cliTrie.CompileRegex()
+	cliErr := compileRegex(&cliTrie.TrieCommon)
 	if cliErr == nil {
-		t.Fatal("Expected CLI CompileRegex to fail for invalid regex")
+		t.Fatal("Expected CLI regex compile to fail for invalid regex")
 	}
 
 	// Both should carry the same MSG-02 prefix (one via report, one via error).
@@ -710,9 +710,9 @@ clusterArgSets = [[100, 24, 32, 0.1]]
 			EndpointRegex: "*invalid",
 		},
 	}
-	cliErr := cliTrie.CompileRegex()
+	cliErr := compileRegex(&cliTrie.TrieCommon)
 	if cliErr == nil {
-		t.Fatal("Expected CLI CompileRegex to fail for invalid endpoint regex")
+		t.Fatal("Expected CLI regex compile to fail for invalid endpoint regex")
 	}
 
 	if !strings.Contains(tomlReport, "invalid endpointRegex pattern") {

@@ -123,18 +123,17 @@ func TestSlidingWindow_Uint32Parity(t *testing.T) {
 		return true
 	})
 
-	// --- Oracle 2: reference trie built the OLD way (Insert(net.IP)). ---
-	// Reconstruct a trie from the surviving IPQueue using the net.IP entry point
-	// (which internally does IPToUint32), exactly as the pre-AUDIT-05 window
-	// would have, and assert its clusters are identical to the live window trie
-	// (which used InsertUint32 / DeleteUint32 + the rebuild fast path).
+	// --- Oracle 2: reference trie built from scratch. ---
+	// Insert the surviving IPQueue into a fresh trie and assert its clusters
+	// are identical to the live window trie, which got there incrementally
+	// (InsertUint32 / DeleteUint32 + the periodic rebuild).
 	ref := trie.NewTrieSeq()
 	for i := range s.IPQueue {
 		v := s.IPQueue[i].IP
 		if v == 0 {
 			continue
 		}
-		ref.Insert(iputils.Uint32ToIP(v)) // OLD net.IP path
+		ref.InsertUint32(v)
 	}
 
 	// Total counts must match.
@@ -162,84 +161,6 @@ func TestSlidingWindow_Uint32Parity(t *testing.T) {
 		for i := range gotN {
 			if gotN[i] != wantN[i] {
 				t.Errorf("tier %+v: cluster[%d] window=%s reference=%s", tt, i, gotN[i].String(), wantN[i].String())
-			}
-		}
-		// String form parity too (CollectCIDRs is the string wrapper).
-		gotS := s.Trie.CollectCIDRs(tt.minSize, tt.minDepth, tt.maxDepth, tt.threshold)
-		wantS := ref.CollectCIDRs(tt.minSize, tt.minDepth, tt.maxDepth, tt.threshold)
-		if len(gotS) != len(wantS) {
-			t.Fatalf("tier %+v: string cluster count mismatch window=%d reference=%d", tt, len(gotS), len(wantS))
-		}
-		for i := range gotS {
-			if gotS[i] != wantS[i] {
-				t.Errorf("tier %+v: string cluster[%d] window=%s reference=%s", tt, i, gotS[i], wantS[i])
-			}
-		}
-	}
-}
-
-// TestTrie_DeleteUint32_ParityWithDelete proves the new Trie.DeleteUint32 entry
-// point is byte-identical to Delete(net.IP) for IPv4: it deletes the same nodes,
-// applies the same underflow guard, and prunes the same subtrees. Two tries are
-// driven through an identical insert/delete script - one via the net.IP API, one
-// via the uint32 API - and must end in identical CountAll and identical clusters
-// across several tiers, including over-delete (underflow) and prune-from-deepest
-// cases.
-func TestTrie_DeleteUint32_ParityWithDelete(t *testing.T) {
-	ips := []uint32{
-		iputils.IPToUint32(net.IPv4(10, 0, 0, 1)),
-		iputils.IPToUint32(net.IPv4(10, 0, 0, 1)), // dup -> count 2
-		iputils.IPToUint32(net.IPv4(10, 0, 0, 2)),
-		iputils.IPToUint32(net.IPv4(10, 0, 1, 1)),
-		iputils.IPToUint32(net.IPv4(10, 128, 0, 1)),
-		iputils.IPToUint32(net.IPv4(192, 168, 5, 5)),
-	}
-
-	netT := trie.NewTrieSeq()
-	u32T := trie.NewTrieSeq()
-	for _, v := range ips {
-		netT.Insert(iputils.Uint32ToIP(v))
-		u32T.InsertUint32(v)
-	}
-
-	// Delete script: a present dup (leaves count 1, no prune), a full delete
-	// (prunes the leaf path), an absent IP (no-op), and an over-delete of an
-	// already-removed IP (underflow guard must bail without wrapping).
-	gone := iputils.IPToUint32(net.IPv4(192, 168, 5, 5))
-	absent := iputils.IPToUint32(net.IPv4(8, 8, 8, 8))
-	script := []uint32{
-		iputils.IPToUint32(net.IPv4(10, 0, 0, 1)), // dup -> count 1
-		gone,   // full delete -> prune
-		gone,   // over-delete (underflow guard)
-		absent, // absent (no-op)
-		iputils.IPToUint32(net.IPv4(10, 128, 0, 1)),
-	}
-	for _, v := range script {
-		netT.Delete(iputils.Uint32ToIP(v))
-		u32T.DeleteUint32(v)
-	}
-
-	if got, want := u32T.CountAll(), netT.CountAll(); got != want {
-		t.Fatalf("CountAll after deletes: DeleteUint32=%d Delete=%d", got, want)
-	}
-
-	tiers := []struct {
-		minSize, minDepth, maxDepth uint32
-		threshold                   float64
-	}{
-		{1, 0, 32, 0.0},
-		{1, 0, 32, 1.0},
-		{1, 8, 24, 0.5},
-	}
-	for _, tt := range tiers {
-		got := u32T.CollectCIDRsNumeric(tt.minSize, tt.minDepth, tt.maxDepth, tt.threshold)
-		want := netT.CollectCIDRsNumeric(tt.minSize, tt.minDepth, tt.maxDepth, tt.threshold)
-		if len(got) != len(want) {
-			t.Fatalf("tier %+v: cluster count DeleteUint32=%d Delete=%d", tt, len(got), len(want))
-		}
-		for i := range got {
-			if got[i] != want[i] {
-				t.Errorf("tier %+v: cluster[%d] DeleteUint32=%s Delete=%s", tt, i, got[i].String(), want[i].String())
 			}
 		}
 	}

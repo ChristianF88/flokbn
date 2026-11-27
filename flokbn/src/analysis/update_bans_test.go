@@ -83,8 +83,8 @@ func TestUpdateBansRound(t *testing.T) {
 	if got := activeBans(j, now); !reflect.DeepEqual(got, sortedSet(wantJail)) {
 		t.Errorf("active bans in jail = %v, want %v", got, sortedSet(wantJail))
 	}
-	if j.Len() != len(wantJail)+1 {
-		t.Errorf("%d records in the jail, want the %d active ones and the ended %s", j.Len(), len(wantJail), publishExpiredCIDR)
+	if len(testutil.JailRecords(t, j.Encode())) != len(wantJail)+1 {
+		t.Errorf("%d records in the jail, want the %d active ones and the ended %s", len(testutil.JailRecords(t, j.Encode())), len(wantJail), publishExpiredCIDR)
 	}
 
 	// Published: nested bans are listed once and the whitelist is subtracted
@@ -127,8 +127,8 @@ func TestUpdateBansNestedAndNeighbouringRanges(t *testing.T) {
 		"10.0.0.7/32",                  // a host inside the first half
 		"192.0.2.0/24", "192.0.2.0/24", // the same range from two cluster sets
 	}})
-	if j.Len() != 4 {
-		t.Errorf("%d records in the jail, want 4 (one per distinct range)", j.Len())
+	if len(testutil.JailRecords(t, j.Encode())) != 4 {
+		t.Errorf("%d records in the jail, want 4 (one per distinct range)", len(testutil.JailRecords(t, j.Encode())))
 	}
 	if want := []string{"10.0.0.0/24", "192.0.2.0/24"}; !reflect.DeepEqual(got.Bans, want) {
 		t.Errorf("published bans = %v, want %v", got.Bans, want)
@@ -179,8 +179,8 @@ func TestUpdateBansQuietRound(t *testing.T) {
 	if len(second.Bans) != 0 || len(second.Blacklist) != 0 {
 		t.Errorf("round after the ban ran out publishes %v and %v, want nothing", second.Bans, second.Blacklist)
 	}
-	if j.Len() != 2 {
-		t.Errorf("%d records left, want both: an ended ban is remembered", j.Len())
+	if len(testutil.JailRecords(t, j.Encode())) != 2 {
+		t.Errorf("%d records left, want both: an ended ban is remembered", len(testutil.JailRecords(t, j.Encode())))
 	}
 
 	third := UpdateBans(j, BanInput{Now: now.Add(12 * time.Minute)})
@@ -190,7 +190,7 @@ func TestUpdateBansQuietRound(t *testing.T) {
 
 	// Past the retention the records are forgotten, and that is a change.
 	last := UpdateBans(j, BanInput{Now: now.Add(181 * 24 * time.Hour)})
-	if !last.JailChanged || last.Pruned != 2 || j.Len() != 0 {
-		t.Errorf("round after the retention: JailChanged=%v Pruned=%d, %d records; want true/2/0", last.JailChanged, last.Pruned, j.Len())
+	if !last.JailChanged || last.Pruned != 2 || len(testutil.JailRecords(t, j.Encode())) != 0 {
+		t.Errorf("round after the retention: JailChanged=%v Pruned=%d, %d records; want true/2/0", last.JailChanged, last.Pruned, len(testutil.JailRecords(t, j.Encode())))
 	}
 }

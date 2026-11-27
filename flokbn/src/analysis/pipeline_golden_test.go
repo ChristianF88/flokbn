@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristianF88/flokbn/cidr"
 	"github.com/ChristianF88/flokbn/config"
 	"github.com/ChristianF88/flokbn/jail"
 	"github.com/ChristianF88/flokbn/output"
+	"github.com/ChristianF88/flokbn/testutil"
 )
 
 // Characterization tests for the static pipeline. Each scenario runs both
@@ -334,12 +334,12 @@ func snapshotRun(t *testing.T, cfg *config.Config, out *output.JSONOutput, dir s
 	if err != nil {
 		t.Fatalf("reading jail: %v", err)
 	}
-	active := map[cidr.NumericCIDR]bool{}
+	active := map[string]bool{}
 	for _, b := range j.Active(time.Now()) {
-		active[b.CIDR] = true
+		active[b.CIDR.String()] = true
 	}
-	for _, r := range j.Records() {
-		snap.Jail = append(snap.Jail, fmt.Sprintf("stage %d: %s active=%v", r.Stage, r.CIDR(), active[r.CIDR()]))
+	for _, r := range testutil.JailRecords(t, j.Encode()) {
+		snap.Jail = append(snap.Jail, fmt.Sprintf("stage %d: %s active=%v", r.Stage, r.CIDR, active[r.CIDR]))
 	}
 	return snap
 }

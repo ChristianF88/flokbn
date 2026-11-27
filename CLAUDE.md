@@ -24,7 +24,7 @@ flokbn/src/          # THE GO MODULE lives here, not at repo root
   logparser/         # format-string compiler; Parser (files, multi-worker) and LineParser (single lines, live mode)
   ingestor/          # TCPIngestor + own size-limited Lumberjack v2 reader (lumberjack.go); parses with logparser.LineParser
   trie/              # binary trie, CollectCIDRsNumeric clustering walk, CountInCIDR
-  cidr/              # NumericCIDR, Parse, IntervalSet, MergeCIDRs, whitelist subtraction (RemoveWhitelisted), UserAgentMatcher
+  cidr/              # NumericCIDR, Parse, IntervalSet, MergeCIDRs, whitelist subtraction (ComposeBanLists), UserAgentMatcher
   analysis/          # Static() / StaticWithRequests(): one pipeline (runStatic) parse→filter→trie→cluster→publish; UpdateBans
   sliding/           # time+size bounded window for live mode
   jail/              # the jail: records and rules (jail.go), jail file (file.go), ban file and atomic writes (banfile.go)
@@ -107,7 +107,7 @@ holds a write token, and tests run in the CI job it requires.
   4-byte mask (canonical spelling without allocating, anything else via
   `net.ParseCIDR`; `FuzzParse` holds it to that). `cidr.IntervalSet` is the one
   sorted, merged `[start,end]` form of a CIDR list: the whitelist in
-  `RemoveWhitelisted` and the TUI cluster overlay (`tui/cluster_membership.go`) use
+  `removeWhitelisted` and the TUI cluster overlay (`tui/cluster_membership.go`) use
   it. The `*net.IPNet` merge the numeric one replaced (`MergeIPNets`) lives on as
   test oracle in `cidr/merge_ref_test.go`.
 - **Jail** (`jail/`): the persistent record of banned ranges, used by both modes.
@@ -144,13 +144,14 @@ holds a write token, and tests run in the CI job it requires.
   **fully covered by a single whitelist entry**; coverage by the union of several
   entries does NOT drop it and partial overlaps are kept whole (deliberate: carving
   around many /32 holes would explode the jail into fragments).
-  *At publish* (`cidr.ComposeBanLists` -> `RemoveWhitelisted`): the whitelist is
+  *At publish* (`cidr.ComposeBanLists` -> `removeWhitelisted`): the whitelist is
   subtracted exactly from active bans AND the manual blacklist, so anything covered by
   the union of entries is removed and partial overlaps are carved. This is the choke
   point that guarantees a whitelisted address is never published (see
-  `analysis/whitelist_invariant_test.go`). `RemoveWhitelisted` parses the whitelist once
-  (O(B+W), not O(B*W); `ComposeBanLists` once for both lists) and is byte-identical
-  to the old path for IPv4 (proven by differential fuzz).
+  `analysis/whitelist_invariant_test.go`). `ComposeBanLists` parses the whitelist once
+  for both lists (O(B+W), not O(B*W)); `removeWhitelisted` is byte-identical to the
+  old path for IPv4 (proven by differential fuzz through the test-only wrapper
+  `RemoveWhitelisted`).
   `analysis.UpdateBans(*jail.Jail, BanInput)` runs both points and the jail update
   on an in-memory jail at `BanInput.Now`, without I/O (invariant:
   `analysis/whitelist_invariant_test.go`). Every mode publishes through it:
@@ -238,3 +239,8 @@ holds a write token, and tests run in the CI job it requires.
 - When editing CIDR/jail/whitelist logic, the invariant and differential-fuzz tests
   are the safety net - run `cd flokbn/src && go test ./cidr ./jail ./analysis`
   after changes.
+- No test-only code in core packages: a function that only tests call is either
+  test support (a `_test.go` file of its package, or `testutil` when tests of
+  several packages need it) or it goes, together with the tests that only test
+  it. Check: `cd flokbn/src && deadcode ./...` (golang.org/x/tools/cmd/deadcode)
+  lists only `testutil`.

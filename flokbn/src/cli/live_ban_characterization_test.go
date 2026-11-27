@@ -58,16 +58,16 @@ func jailDump(t *testing.T, path string, since time.Time) []string {
 		active[b.CIDR.String()] = true
 	}
 	var lines []string
-	for _, r := range j.Records() {
+	for _, r := range testutil.JailRecords(t, j.Encode()) {
 		state := "expired"
-		if active[r.CIDR().String()] {
+		if active[r.CIDR] {
 			state = "active"
 		}
 		start := "new"
-		if time.Unix(0, r.BanStart).Before(since) {
+		if r.BanStart.Before(since) {
 			start = "old"
 		}
-		lines = append(lines, fmt.Sprintf("stage %d %s %s start=%s", r.Stage, r.CIDR(), state, start))
+		lines = append(lines, fmt.Sprintf("stage %d %s %s start=%s", r.Stage, r.CIDR, state, start))
 	}
 	sort.Strings(lines)
 	return lines

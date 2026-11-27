@@ -23,27 +23,6 @@ const (
 	UNKNOWN
 )
 
-func ParseMethod(m string) HTTPMethod {
-	switch m {
-	case "GET":
-		return GET
-	case "POST":
-		return POST
-	case "PUT":
-		return PUT
-	case "DELETE":
-		return DELETE
-	case "HEAD":
-		return HEAD
-	case "OPTIONS":
-		return OPTIONS
-	case "PATCH":
-		return PATCH
-	default:
-		return UNKNOWN
-	}
-}
-
 type Request struct {
 	// Hot fields - first cache line (accessed by trie insertion, filtering, clustering)
 	IPUint32  uint32     // Primary IP storage - eliminates net.IP allocation in parser

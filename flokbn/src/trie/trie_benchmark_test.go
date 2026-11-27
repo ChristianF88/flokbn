@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ChristianF88/flokbn/iputils"
+	"github.com/ChristianF88/flokbn/testutil"
 )
 
 // ============================================================================
@@ -18,7 +19,7 @@ func BenchmarkInsertPerformance(b *testing.B) {
 
 	for _, size := range sizes {
 		// Pre-generate IPs to avoid IP generation overhead in benchmark
-		ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", size)
+		ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", size)
 		if err != nil {
 			b.Fatalf("Failed to generate IPs: %v", err)
 		}
@@ -26,7 +27,7 @@ func BenchmarkInsertPerformance(b *testing.B) {
 		b.Run(fmt.Sprintf("Insert_%d_IPs", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				trie := NewTrie()
+				trie := NewTrieSeq()
 				for _, ip := range ips {
 					trie.Insert(ip)
 				}
@@ -40,12 +41,12 @@ func BenchmarkTrieVsSlice(b *testing.B) {
 	sizes := []int{1000, 10000, 100000}
 
 	for _, size := range sizes {
-		ips, _ := iputils.RandomIPsFromRange("192.168.1.0/24", size)
+		ips, _ := testutil.RandomIPsFromRange("192.168.1.0/24", size)
 
 		b.Run(fmt.Sprintf("Trie_%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				trie := NewTrie()
+				trie := NewTrieSeq()
 				for _, ip := range ips {
 					trie.Insert(ip)
 				}
@@ -99,7 +100,7 @@ func BenchmarkInsertWithPreconvertedIPs(b *testing.B) {
 	sizes := []int{1000, 10000, 100000}
 
 	for _, size := range sizes {
-		ips, _ := iputils.RandomIPsFromRange("10.0.0.0/8", size)
+		ips, _ := testutil.RandomIPsFromRange("10.0.0.0/8", size)
 
 		// Pre-convert IPs to uint32
 		uint32IPs := make([]uint32, len(ips))
@@ -110,7 +111,7 @@ func BenchmarkInsertWithPreconvertedIPs(b *testing.B) {
 		b.Run(fmt.Sprintf("PreconvertedInsert_%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				trie := NewTrie()
+				trie := NewTrieSeq()
 				for _, ip := range ips { // Still use net.IP for Insert interface
 					trie.Insert(ip)
 				}
@@ -120,7 +121,7 @@ func BenchmarkInsertWithPreconvertedIPs(b *testing.B) {
 		b.Run(fmt.Sprintf("StandardInsert_%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				trie := NewTrie()
+				trie := NewTrieSeq()
 				for _, ip := range ips {
 					trie.Insert(ip)
 				}
@@ -169,8 +170,8 @@ func BenchmarkCollectCIDRs(b *testing.B) {
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
 			// Create a trie with random IPs
-			trie := NewTrie()
-			ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", size)
+			trie := NewTrieSeq()
+			ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", size)
 			if err != nil {
 				b.Fatalf("Failed to generate IPs: %v", err)
 			}
@@ -195,8 +196,8 @@ func BenchmarkCollectCIDRsSequential(b *testing.B) {
 
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
-			trie := NewTrie()
-			ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", size)
+			trie := NewTrieSeq()
+			ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", size)
 			if err != nil {
 				b.Fatalf("Failed to generate IPs: %v", err)
 			}
@@ -221,8 +222,8 @@ func BenchmarkCollectCIDRsStringVsNumeric(b *testing.B) {
 
 	for _, size := range sizes {
 		// Create test trie
-		trie := NewTrie()
-		ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", size)
+		trie := NewTrieSeq()
+		ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", size)
 		if err != nil {
 			b.Fatalf("Failed to generate IPs: %v", err)
 		}
@@ -254,8 +255,8 @@ func BenchmarkCollectCIDRsStringVsNumeric(b *testing.B) {
 // non-/0 path by comparing the /0 fast path against a representative /24 query
 // on a pre-built trie of realistic size.
 func BenchmarkCountInRange(b *testing.B) {
-	trie := NewTrie()
-	ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", 100000)
+	trie := NewTrieSeq()
+	ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", 100000)
 	if err != nil {
 		b.Fatalf("Failed to generate IPs: %v", err)
 	}
@@ -291,7 +292,7 @@ func BenchmarkSortedInsertion(b *testing.B) {
 
 	for _, size := range sizes {
 		// Generate IPs
-		ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", size)
+		ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", size)
 		if err != nil {
 			b.Fatalf("Failed to generate IPs: %v", err)
 		}
@@ -318,7 +319,7 @@ func BenchmarkSortedInsertion(b *testing.B) {
 		b.Run(fmt.Sprintf("Random_%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				trie := NewTrie()
+				trie := NewTrieSeq()
 				for _, ip := range ips { // Original random order
 					trie.Insert(ip)
 				}
@@ -328,7 +329,7 @@ func BenchmarkSortedInsertion(b *testing.B) {
 		b.Run(fmt.Sprintf("Sorted_%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				trie := NewTrie()
+				trie := NewTrieSeq()
 				for _, ip := range sortedIPs { // Sorted order
 					trie.Insert(ip)
 				}

@@ -47,7 +47,7 @@ func TestTrieGetCount(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Initialize a new Trie
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			// Insert IPs into the Trie
 			for _, ipStr := range tt.insertIPs {
@@ -109,7 +109,7 @@ func TestTrieGetCountAll(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Initialize a new Trie
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			// Insert IPs into the Trie
 			for _, ipStr := range tt.insertIPs {
@@ -156,7 +156,7 @@ func TestTrieInsert(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			// Insert all IPs into the Trie
 			for _, ipStr := range tt.ips {
@@ -192,7 +192,7 @@ func TestTrieInsertLargeScale(t *testing.T) {
 		{
 			name: "Insert large number of IPs",
 			ips: func() []string {
-				ips, err := iputils.RandomIPsFromRange("192.12.1.0/24", 1000000)
+				ips, err := testutil.RandomIPsFromRange("192.12.1.0/24", 1000000)
 				if err != nil {
 					t.Fatalf("Failed to generate random IPs: %v", err)
 				}
@@ -207,7 +207,7 @@ func TestTrieInsertLargeScale(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			// Insert all IPs into the Trie
 			for _, ipStr := range tt.ips {
@@ -268,7 +268,7 @@ func TestTrieDelete(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Initialize a new Trie
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			// Insert IPs into the Trie
 			for _, ipStr := range tt.insertIPs {
@@ -309,7 +309,7 @@ func TestTrieDeleteLargeScale(t *testing.T) {
 		{
 			name: "Delete large number of IPs",
 			ips: func() []string {
-				ips, err := iputils.RandomIPsFromRange("192.12.1.0/24", 100000)
+				ips, err := testutil.RandomIPsFromRange("192.12.1.0/24", 100000)
 				if err != nil {
 					t.Fatalf("Failed to generate random IPs: %v", err)
 				}
@@ -325,7 +325,7 @@ func TestTrieDeleteLargeScale(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Initialize a new Trie
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			// Insert IPs into the Trie
 			for _, ipStr := range tt.ips {
@@ -414,7 +414,7 @@ func TestTrieCollectCIDRs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Initialize a new Trie
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			// Insert IPs into the Trie
 			for _, ipStr := range tt.insertIPs {
@@ -452,7 +452,7 @@ func TestTrieCollectCIDRsLargeScale(t *testing.T) {
 	// Generate a realistic set of IPs using helper functions
 	ips := append(
 		func() []string {
-			ips, err := iputils.RandomIPsFromRange("12.10.30.0/24", 40000)
+			ips, err := testutil.RandomIPsFromRange("12.10.30.0/24", 40000)
 			if err != nil {
 				t.Fatalf("Failed to generate random IPs: %v", err)
 			}
@@ -463,7 +463,7 @@ func TestTrieCollectCIDRsLargeScale(t *testing.T) {
 			return ipStrings
 		}(), // Cluster /30
 		func() []string {
-			ips, err := iputils.RandomIPsFromRange("192.168.1.0/24", 10000) // Cluster /29
+			ips, err := testutil.RandomIPsFromRange("192.168.1.0/24", 10000) // Cluster /29
 			if err != nil {
 				t.Fatalf("Failed to generate random IPs: %v", err)
 			}
@@ -483,7 +483,7 @@ func TestTrieCollectCIDRsLargeScale(t *testing.T) {
 		"192.168.1.0/24",
 	}
 
-	trie := NewTrie()
+	trie := NewTrieSeq()
 
 	// Insert IPs into the Trie
 	for _, ipStr := range ips {
@@ -573,7 +573,7 @@ func TestCollectCIDRs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			for _, ipStr := range tt.insertIPs {
 				ip := net.ParseIP(ipStr)
@@ -702,7 +702,7 @@ func TestCollectCIDRsThresholdBoundaries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			for ipStr, n := range tt.insertIPs {
 				ip := net.ParseIP(ipStr)
@@ -756,15 +756,15 @@ func TestCollectCIDRsThresholdBoundaries(t *testing.T) {
 // Counts are set directly on freshly allocated nodes (package-internal test)
 // to avoid inserting millions of IPs.
 func TestCollectCIDRsBalanceOverflow(t *testing.T) {
-	tr := NewTrie()
+	tr := NewTrieSeq()
 
 	// 0.0.0.0/1 node (depth 1) under the Root's bit-0 child.
-	slash1 := tr.allocator.GetNode()
+	slash1 := tr.seqAlloc.GetNode()
 	tr.Root.Children[0] = slash1
 
 	// Its two depth-2 children form the imbalanced split.
-	c0 := tr.allocator.GetNode()
-	c1 := tr.allocator.GetNode()
+	c0 := tr.seqAlloc.GetNode()
+	c1 := tr.seqAlloc.GetNode()
 	c0.Count = 2_147_485 // diff = 2,147,484 -> 2000*diff wraps in uint32
 	c1.Count = 1
 	slash1.Children[0] = c0
@@ -789,14 +789,14 @@ func TestCollectCIDRsBalanceOverflow(t *testing.T) {
 // It must now return an empty result. A non-empty single-IP control confirms
 // normal emission is unaffected.
 func TestCollectCIDRsEmptyTrie(t *testing.T) {
-	empty := NewTrie()
+	empty := NewTrieSeq()
 	results := empty.CollectCIDRs(0, 0, 32, 0.0)
 	if len(results) != 0 {
 		t.Errorf("empty trie should emit no clusters, got %v", results)
 	}
 
 	// Non-empty control: a single IP still emits its /32 leaf as before.
-	nonEmpty := NewTrie()
+	nonEmpty := NewTrieSeq()
 	nonEmpty.Insert(net.ParseIP("192.168.1.1"))
 	ctrl := nonEmpty.CollectCIDRs(1, 32, 32, 0.0)
 	if len(ctrl) != 1 || ctrl[0] != "192.168.1.1/32" {
@@ -962,7 +962,7 @@ func TestTrieCountInRangeCIDR(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trie := NewTrie()
+			trie := NewTrieSeq()
 			for _, ipStr := range tt.insertIPs {
 				ip := net.ParseIP(ipStr)
 				if ip == nil {
@@ -1167,7 +1167,7 @@ func TestCountInRangeExtensive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trie := NewTrie()
+			trie := NewTrieSeq()
 
 			// Insert all IPs
 			for _, ipStr := range tt.setupIPs() {
@@ -1218,7 +1218,7 @@ func bruteForceCountInRange(trie *Trie, cidr string) uint32 {
 // TestCountInRangeConsistency compares optimized vs brute force for various ranges
 func TestCountInRangeConsistency(t *testing.T) {
 	// Create a trie with diverse data
-	trie := NewTrie()
+	trie := NewTrieSeq()
 	testIPs := []string{
 		"192.168.1.1", "192.168.1.2", "192.168.1.10", "192.168.1.255",
 		"192.168.2.1", "192.168.2.50",
@@ -1281,13 +1281,13 @@ func TestTrieAllocatorCorrectness(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Generate test IPs
-			ips, err := iputils.RandomIPsFromRange(tt.cidr, tt.size)
+			ips, err := testutil.RandomIPsFromRange(tt.cidr, tt.size)
 			if err != nil {
 				t.Fatalf("Failed to generate IPs: %v", err)
 			}
 
 			// Test with pooled implementation
-			pooledTrie := NewTrie()
+			pooledTrie := NewTrieSeq()
 			for _, ip := range ips {
 				pooledTrie.Insert(ip)
 			}
@@ -1329,11 +1329,11 @@ func TestTrieAllocatorCorrectness(t *testing.T) {
 
 // TestTrieAllocatorStress performs stress testing with many operations
 func TestTrieAllocatorStress(t *testing.T) {
-	pooledTrie := NewTrie()
+	pooledTrie := NewTrieSeq()
 	classicTrie := NewTrieClassic()
 
 	// Generate test data
-	ips, err := iputils.RandomIPsFromRange("10.0.0.0/8", 10000)
+	ips, err := testutil.RandomIPsFromRange("10.0.0.0/8", 10000)
 	if err != nil {
 		t.Fatalf("Failed to generate IPs: %v", err)
 	}
@@ -1401,7 +1401,7 @@ func TestCountInRangeIPNet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trie := NewTrie()
+			trie := NewTrieSeq()
 			for _, ipStr := range tt.insertIPs {
 				ip := net.ParseIP(ipStr)
 				if ip == nil {
@@ -1439,7 +1439,7 @@ func TestCountInRangeIPNet(t *testing.T) {
 // It also checks the non-/0 boundary cases remain unchanged by the guard.
 func TestCountInRangeSlashZero(t *testing.T) {
 	t.Run("Slash zero returns full count for two IPs", func(t *testing.T) {
-		trie := NewTrie()
+		trie := NewTrieSeq()
 		for _, ipStr := range []string{"192.168.1.1", "10.0.0.1"} {
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
@@ -1461,7 +1461,7 @@ func TestCountInRangeSlashZero(t *testing.T) {
 	})
 
 	t.Run("Slash zero across multiple slash 8s equals total inserted", func(t *testing.T) {
-		trie := NewTrie()
+		trie := NewTrieSeq()
 		insertIPs := []string{
 			"1.2.3.4",
 			"10.0.0.1",
@@ -1491,7 +1491,7 @@ func TestCountInRangeSlashZero(t *testing.T) {
 	})
 
 	t.Run("Slash zero on empty trie returns 0", func(t *testing.T) {
-		trie := NewTrie()
+		trie := NewTrieSeq()
 		got, err := trie.CountInRange("0.0.0.0/0")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
@@ -1505,7 +1505,7 @@ func TestCountInRangeSlashZero(t *testing.T) {
 		// A trie holding exactly one IP - including the very first and very
 		// last address of the space - must report 1 for the full range.
 		for _, ipStr := range []string{"0.0.0.0", "203.0.113.7", "255.255.255.255"} {
-			trie := NewTrie()
+			trie := NewTrieSeq()
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
 				t.Fatalf("Failed to parse IP: %s", ipStr)
@@ -1577,7 +1577,7 @@ func TestCountInRangeSlashZero(t *testing.T) {
 
 		for _, bt := range boundaryTests {
 			t.Run(bt.name, func(t *testing.T) {
-				trie := NewTrie()
+				trie := NewTrieSeq()
 				for _, ipStr := range bt.insertIPs {
 					ip := net.ParseIP(ipStr)
 					if ip == nil {
@@ -1600,8 +1600,8 @@ func TestCountInRangeSlashZero(t *testing.T) {
 // BenchmarkCountInRangeComparison compares string vs IPNet performance
 func BenchmarkCountInRangeComparison(b *testing.B) {
 	// Setup trie with test data
-	trie := NewTrie()
-	ips, _ := iputils.RandomIPsFromRange("10.0.0.0/8", 10000)
+	trie := NewTrieSeq()
+	ips, _ := testutil.RandomIPsFromRange("10.0.0.0/8", 10000)
 	for _, ip := range ips {
 		trie.Insert(ip)
 	}
@@ -1690,7 +1690,7 @@ func TestAnalyzeDuplicates(t *testing.T) {
 }
 
 func TestTrie_AllSameIP(t *testing.T) {
-	trie := NewTrie()
+	trie := NewTrieSeq()
 	ip := net.ParseIP("192.168.1.1")
 	if ip == nil {
 		t.Fatal("Failed to parse IP")
@@ -1733,7 +1733,7 @@ func TestTrie_AllSameIP(t *testing.T) {
 }
 
 func TestTrie_DeleteNonexistent(t *testing.T) {
-	trie := NewTrie()
+	trie := NewTrieSeq()
 	ip := net.ParseIP("10.0.0.1")
 	if ip == nil {
 		t.Fatal("Failed to parse IP")
@@ -1771,7 +1771,7 @@ func TestTrieDeletePrunesNodes(t *testing.T) {
 	}
 
 	t.Run("delete-all leaves the root a leaf and CollectCIDRs empty", func(t *testing.T) {
-		tr := NewTrie()
+		tr := NewTrieSeq()
 		ips := []string{"192.168.1.1", "10.0.0.5", "172.16.3.9"}
 		for _, s := range ips {
 			tr.Insert(mustIP(s))
@@ -1798,7 +1798,7 @@ func TestTrieDeletePrunesNodes(t *testing.T) {
 	})
 
 	t.Run("deleting one of two prefix-sharing IPs keeps the survivor's ancestors", func(t *testing.T) {
-		tr := NewTrie()
+		tr := NewTrieSeq()
 		// These two share a long common prefix (differ only in the last octet),
 		// so they share all ancestor nodes down to depth 31.
 		keep := mustIP("192.168.1.10")
@@ -1831,7 +1831,7 @@ func TestTrieDeletePrunesNodes(t *testing.T) {
 	})
 
 	t.Run("repeated delete of the same IP does not underflow", func(t *testing.T) {
-		tr := NewTrie()
+		tr := NewTrieSeq()
 		ip := mustIP("8.8.8.8")
 		tr.Insert(ip)
 		tr.Delete(ip)

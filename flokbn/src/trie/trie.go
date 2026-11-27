@@ -16,49 +16,25 @@ import (
 type TrieNode = pools.TrieNode
 
 type Trie struct {
-	Root      *TrieNode
-	allocator *pools.NodeAllocator
-	seqAlloc  *pools.SeqNodeAllocator
-}
-
-// NewTrie creates a new binary trie optimized for IP address storage
-// Tuning via https://medium.com/@piyanin/boost-performance-binary-trees-of-a-benchmark-game-more-than-3x-times-for-go-language-ccafe813278c
-func NewTrie() *Trie {
-	allocator := pools.NewNodeAllocator()
-	return &Trie{
-		Root:      allocator.GetNode(),
-		allocator: allocator,
-	}
+	Root     *TrieNode
+	seqAlloc *pools.SeqNodeAllocator
 }
 
 // NewTrieSeq creates a binary trie backed by a lock-free sequential bump
-// allocator (single-thread use only). Intended to be paired with
-// BuildSorted for the fastest possible sorted build, but also supports the
-// incremental Insert/Delete API used by the single-goroutine sliding window.
+// allocator (single-thread use only). The static pipeline builds it in one
+// pass with BuildSorted; the single-goroutine sliding window keeps it current
+// with InsertUint32 and DeleteUint32.
 func NewTrieSeq() *Trie {
 	a := pools.NewSeqNodeAllocator()
 	return &Trie{Root: a.GetNode(), seqAlloc: a}
-}
-
-// newNode returns a fresh zeroed node from whichever allocator backs this
-// trie. A Seq-backed trie (NewTrieSeq) uses the lock-free sequential
-// allocator; a NodeAllocator-backed trie (NewTrie) uses the mutex-guarded
-// one. This lets Insert/InsertUint32/insertUint32WithCount work on either
-// backing, so the live sliding window can be Seq-backed yet still use the
-// incremental Insert/Delete API.
-func (t *Trie) newNode() *TrieNode {
-	if t.seqAlloc != nil {
-		return t.seqAlloc.GetNode()
-	}
-	return t.allocator.GetNode()
 }
 
 // BuildSorted builds the trie from an ASCENDING-sorted slice of uint32
 // IPs using a deferred-count prefix-stack algorithm. It REQUIRES a trie created
 // by NewTrieSeq (t.seqAlloc != nil) and ascending-sorted input.
 //
-// The produced trie is bit-identical to InsertSorted (same node
-// structure, same per-node Count, Root.Count left at 0) but avoids
+// The produced trie is bit-identical to inserting every IP one by one (same
+// node structure, same per-node Count, Root.Count left at 0) but avoids
 // re-descending shared prefixes and writes each node's Count exactly once.
 //
 // path[d] is the node reached after matching d bits (depths 1..32 are real
@@ -84,9 +60,6 @@ func (t *Trie) BuildSorted(ips []uint32) {
 			bit := (v >> i) & 1
 			child := node.Children[bit]
 			if child == nil {
-				// BuildSorted requires a Seq-backed trie (t.seqAlloc != nil),
-				// so call the allocator directly here - this is the hottest
-				// allocation loop and must avoid the newNode() branch.
 				child = t.seqAlloc.GetNode()
 				node.Children[bit] = child
 			}
@@ -139,98 +112,31 @@ func (t *Trie) BuildSorted(ips []uint32) {
 	}
 }
 
-// Insert adds an IP address to the Trie and increments counts along the path
-func (t *Trie) Insert(ip net.IP) {
-	val := iputils.IPToUint32(ip)
-	t.InsertUint32(val)
-}
-
-// InsertUint32 adds a uint32 IP directly - ELIMINATES net.IP conversion overhead
+// InsertUint32 adds one IP and increments the counts along its path.
 func (t *Trie) InsertUint32(val uint32) {
 	node := t.Root
 	for i := 31; i >= 0; i-- {
 		bit := (val >> i) & 1
 		if node.Children[bit] == nil {
-			node.Children[bit] = t.newNode()
+			node.Children[bit] = t.seqAlloc.GetNode()
 		}
 		node = node.Children[bit]
 		node.Count++
 	}
 }
 
-// InsertSorted efficiently inserts sorted uint32 IPs with optimized traversal
-// This method takes advantage of:
-// 1. Batching identical IPs (only one traversal, but increment count by batch size)
-// 2. Reusing common prefixes between consecutive IPs
-// 3. Caching traversal state to avoid re-traversing from root
+// DeleteUint32 removes one occurrence of an IP. It decrements the counts along
+// the IP's path. After a successful decrement it prunes: any node whose Count
+// reaches zero AND that has no surviving children is detached from its parent
+// (parent.Children[bit] = nil). Pruning walks the path from the deepest node
+// upward and stops at the first node that still has a non-zero count or a
+// surviving child, so a deeper still-present IP keeps all of its shared
+// ancestors. The Root is never pruned.
 //
-// Kept as the structural test oracle for the production BuildSorted:
-// build_sorted_test.go asserts both produce bit-identical tries.
-func (t *Trie) InsertSorted(ips []uint32) {
-	if len(ips) == 0 {
-		return
-	}
-
-	i := 0
-	for i < len(ips) {
-		currentIP := ips[i]
-
-		// Count consecutive identical IPs
-		count := 1
-		for i+count < len(ips) && ips[i+count] == currentIP {
-			count++
-		}
-
-		// Insert this IP with the batch count
-		t.insertUint32WithCount(currentIP, uint32(count))
-
-		i += count
-	}
-}
-
-// insertUint32WithCount adds a uint32 IP with a specific count increment
-func (t *Trie) insertUint32WithCount(val uint32, count uint32) {
-	node := t.Root
-	for i := 31; i >= 0; i-- {
-		bit := (val >> i) & 1
-		if node.Children[bit] == nil {
-			node.Children[bit] = t.newNode()
-		}
-		node = node.Children[bit]
-		node.Count += count // Increment by the batch count instead of just 1
-	}
-}
-
-// Delete removes an IP address from the Trie. It traverses the Trie based on
-// the binary representation of the IP address and decrements the count of
-// nodes along the path. After a successful decrement it prunes: any node whose
-// Count reaches zero AND that has no surviving children is detached from its
-// parent (parent.Children[bit] = nil) so the subtree can be garbage collected.
-// Pruning walks the path from the deepest node upward and stops at the first
-// node that still has a non-zero count or a surviving child, so a deeper
-// still-present IP keeps all of its shared ancestors. The Root is never pruned.
-//
-// Parameters:
-//   - ip: The IP address to be removed, represented as a net.IP.
-//
-// Note:
-//   - If the IP address does not exist in the Trie, the function exits without
-//     making any changes.
-//   - Detaching the child reference lets the GC reclaim the node only when the
-//     trie is backed by individually-allocated/GC-able nodes. With a bump
-//     allocator (NodeAllocator / SeqNodeAllocator) the backing chunk stays
-//     resident for the allocator's lifetime; the sliding window therefore also
-//     periodically rebuilds its trie from a fresh allocator to bound RSS.
-func (t *Trie) Delete(ip net.IP) {
-	t.DeleteUint32(iputils.IPToUint32(ip))
-}
-
-// DeleteUint32 removes a uint32 IP directly, eliminating the net.IP -> uint32
-// conversion. It is the implementation behind Delete(net.IP) (which simply
-// converts then delegates here), so the bit walk, underflow guard, and
-// deepest-first pruning are byte-identical for the net.IP and uint32 entry
-// points. The single-goroutine sliding window calls this directly to avoid the
-// per-evict round-trip; the TCP/static paths keep using Delete(net.IP).
+// An IP that is not in the trie leaves it unchanged. The bump allocator keeps
+// a detached node's chunk resident for the allocator's lifetime; the sliding
+// window therefore also periodically rebuilds its trie from a fresh allocator
+// to bound RSS.
 func (t *Trie) DeleteUint32(val uint32) {
 	node := t.Root
 
@@ -277,21 +183,6 @@ func (t *Trie) DeleteUint32(val uint32) {
 		}
 		parent.Children[bitAt[k]] = nil
 	}
-}
-
-// Count returns the count of a specific IP address in the Trie.
-// Kept as a test verification primitive (per-IP count assertions).
-func (t *Trie) Count(ip net.IP) uint32 {
-	node := t.Root
-	val := iputils.IPToUint32(ip)
-	for i := 31; i >= 0; i-- {
-		bit := (val >> i) & 1
-		if node.Children[bit] == nil {
-			return 0
-		}
-		node = node.Children[bit]
-	}
-	return node.Count
 }
 
 // CountAll returns the total count of all IPs in the Trie
@@ -577,7 +468,7 @@ func prefixToNumericCIDR(prefix uint32, depth uint32) cidr.NumericCIDR {
 // defense, this is the last):
 //   - minClusterSize 0 is treated as 1. Every node below the Root has
 //     Count >= 1, so the two differ only at the Root, whose Count is never
-//     incremented (Insert/InsertSorted/BuildSorted leave it at 0 by design). A
+//     incremented (InsertUint32 and BuildSorted leave it at 0 by design). A
 //     minimum of 0 would let that Root pass the size gate and emit 0.0.0.0/0.
 //     With the clamp 0.0.0.0/0 is never emitted, for any input.
 //   - meanSubnetDifference is clamped to [0, 2] (NaN -> 0), see balanceThreshold.
@@ -599,18 +490,4 @@ func (t *Trie) CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth uint32, me
 	results := make([]cidr.NumericCIDR, 0, estimatedCapacity)
 	t.collectCIDRsNode(t.Root, 0, 0, &results, minClusterSize, minDepth, maxDepth, threshold)
 	return results
-}
-
-// CollectCIDRs runs sequential CIDR clustering and returns the results as
-// strings. String-returning wrapper around CollectCIDRsNumeric for tests and
-// tools; the static and live pipelines call CollectCIDRsNumeric and keep the
-// ranges numeric through counting and merging.
-func (t *Trie) CollectCIDRs(minClusterSize, minDepth, maxDepth uint32, meanSubnetDifference float64) []string {
-	// Use the numeric version and convert to strings only at the end
-	numericResults := t.CollectCIDRsNumeric(minClusterSize, minDepth, maxDepth, meanSubnetDifference)
-	result := make([]string, len(numericResults))
-	for i, nc := range numericResults {
-		result[i] = nc.String()
-	}
-	return result
 }

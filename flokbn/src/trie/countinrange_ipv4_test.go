@@ -16,7 +16,7 @@ import (
 // CountInRangeIPNet must return 0 and not panic for IPv6 ranges, regardless of
 // prefix length (>32 was the historical panic, <=32 the silent mis-count).
 func TestCountInRangeIPNet_RejectsIPv6NoPanic(t *testing.T) {
-	tr := NewTrie()
+	tr := NewTrieSeq()
 	// Populate with a handful of IPv4 IPs so the trie is non-empty.
 	for _, s := range []string{"192.168.1.1", "10.0.0.1", "2.3.4.5"} {
 		ip := net.ParseIP(s)
@@ -57,7 +57,7 @@ func TestCountInRangeIPNet_RejectsIPv6NoPanic(t *testing.T) {
 // IPv4 ranges must still count correctly - the guard must not change any
 // legitimate IPv4 result.
 func TestCountInRangeIPNet_IPv4Unchanged(t *testing.T) {
-	tr := NewTrie()
+	tr := NewTrieSeq()
 	for _, s := range []string{"192.168.1.1", "192.168.1.2", "192.168.1.3", "10.0.0.1"} {
 		ip := net.ParseIP(s)
 		if ip == nil {

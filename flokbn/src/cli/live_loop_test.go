@@ -164,8 +164,10 @@ func newWindowConfigSized(t *testing.T, endpointRegex string, useForJail bool, m
 		SlidingWindowMaxSize:   maxSize,
 		SleepBetweenIterations: 0, // keep the loop fast in tests
 	}
-	if err := stc.CompileRegex(); err != nil {
-		t.Fatalf("CompileRegex: %v", err)
+	var diags config.ConfigDiagnostics
+	stc.CompileRegexInto("live.test", &diags)
+	if diags.HasErrors() {
+		t.Fatalf("CompileRegexInto: %s", diags.Report())
 	}
 	return stc
 }
@@ -523,9 +525,9 @@ func findPrisoner(t *testing.T, jailFile, cidr string) (stage int, active bool, 
 			return b.Stage, true, true
 		}
 	}
-	for _, r := range j.Records() {
-		if r.CIDR().String() == cidr {
-			return int(r.Stage), false, true
+	for _, r := range testutil.JailRecords(t, j.Encode()) {
+		if r.CIDR == cidr {
+			return r.Stage, false, true
 		}
 	}
 	return 0, false, false
