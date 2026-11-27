@@ -229,13 +229,6 @@ func New(cfg Config) (*Jail, error) {
 	return j, nil
 }
 
-// Config returns the settings of the jail.
-func (j *Jail) Config() Config {
-	cfg := j.cfg
-	cfg.Stages = slices.Clone(cfg.Stages)
-	return cfg
-}
-
 // Len returns the number of records.
 func (j *Jail) Len() int { return len(j.records) }
 
